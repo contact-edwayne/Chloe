@@ -1,0 +1,2596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<!--
+  Chloe — mobile PWA client.
+
+  Single-file client that pairs with the existing jarvis.py WebSocket backend
+  on the home PC. Works on iOS Safari (add to Home Screen), Android Chrome,
+  and desktop browsers.
+
+  Reaching the backend:
+    - Backend binds 0.0.0.0:6789 (CHLOE_WS_HOST=0.0.0.0; default since the
+      mobile PR).
+    - Phone reaches the PC over Tailscale by Tailscale IP or MagicDNS name.
+    - Page must be served over HTTPS for getUserMedia to work on Safari.
+      (`tailscale serve --bg --https=443 ...` or self-signed + accept.)
+
+  Wire protocol (matches jarvis.py exactly — see hud.html for the desktop
+  equivalent):
+    HUD → backend  : {type:"chat",      messages, system, max_tokens}
+                     {type:"ptt_audio", wav_b64}      ← mobile-only
+    backend → HUD  : {type:"start"}, {type:"delta", text}, {type:"done"}
+                     {type:"error", text}
+                     {type:"voice_exchange", user, assistant}
+                     plain string state: idle | listening | thinking | speaking
+
+  Mic path (PTT only — no wake word on mobile by design):
+    AudioWorklet captures Float32 frames at the AudioContext rate (typically
+    44.1k or 48k on iOS), we resample to 16kHz, encode mono int16 WAV in JS,
+    base64, send. Server-side `wave` decodes and runs the existing
+    Whisper → Groq → TTS pipeline.
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chloe">
+<meta name="theme-color" content="#000810">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="chloe_icon.png">
+<title>Chloe</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@500;700&display=swap" rel="stylesheet">
+<!-- Three.js import map for the 3D galaxy orb (matches desktop hud.html so
+     the same shaders / scene / animation code works unchanged). -->
+<script type="importmap">
+{
+  "imports": {
+    "three":         "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --cyan:    #00f7ff;
+    --cyan-d:  #00f7ff44;
+    --green:   #00ff88;
+    --amber:   #ffaa00;
+    --red:     #ff3355;
+    --bg:      #000810;
+    --panel:   #000d1a;
+    --border:  #00f7ff2a;
+    --border2: #00f7ff55;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--cyan);
+    font-family: 'Share Tech Mono', monospace;
+    /* dvh = dynamic viewport height. On iOS this shrinks when the keyboard
+       slides up so the controls don't get hidden behind it. Falls back to
+       100% on older browsers (which is the static viewport). */
+    height: 100dvh;
+    min-height: 100%;
+    overflow: hidden;
+    /* Honor iOS safe areas (notch / home indicator) */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* Subtle backdrop matching the desktop HUD aesthetic */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 20%, #00f7ff10 0%, transparent 60%),
+      linear-gradient(rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 32px 32px,
+      var(--bg);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column;
+    height: 100%;
+    max-width: 720px; margin: 0 auto;
+  }
+
+  /* ── HEADER ─────────────────────────────────────────────────────────── */
+  header {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    font-family: 'Orbitron', monospace;
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: 4px;
+    color: var(--cyan);
+    text-shadow: 0 0 8px var(--cyan-d);
+  }
+  .logo .sub {
+    font-family: 'Share Tech Mono', monospace;
+    font-weight: 400;
+    font-size: 10px;
+    letter-spacing: 2px;
+    opacity: 0.6;
+    margin-left: 6px;
+  }
+  .conn {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px; letter-spacing: 1px;
+    opacity: 0.85;
+  }
+  .conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--red);
+    box-shadow: 0 0 8px var(--red);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  .conn.up   .conn-dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .conn.wait .conn-dot { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+  /* ── ORB ────────────────────────────────────────────────────────────── */
+  /* The scene container hosts a Three.js canvas — full WebGL galaxy orb
+     ported from the desktop HUD. Wrapped by .orb-frame which carries the
+     decorative concentric rings (cockpit chrome). */
+  .orb-wrap {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 6px 0 2px;
+  }
+  /* The frame holds room for the outer rings without affecting the
+     canvas itself (canvas size is driven by .scene only). */
+  .orb-frame {
+    position: relative;
+    width: 200px; height: 200px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* Inner disc that crops the WebGL canvas to a circle and carries the
+     cyan border + glow. Sized smaller than the frame so the rings sit
+     around it. */
+  .scene {
+    width: 168px; height: 168px;
+    position: relative;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 2px solid var(--border2);
+    background: radial-gradient(circle at 50% 50%,
+      rgba(0, 247, 255, 0.06) 0%,
+      transparent 60%);
+    box-shadow:
+      0 0 28px var(--cyan-d),
+      inset 0 0 22px rgba(0, 247, 255, 0.12);
+    z-index: 2;
+  }
+  .scene canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+  /* Outer concentric rings, layered around the disc to give the orb a
+     "HUD instrument" feel. Each one rotates independently. */
+  .ring {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    box-sizing: border-box;
+  }
+  /* Ring 1: thin dashed circle just outside the disc (radar sweep). */
+  .ring-1 {
+    inset: 8px;
+    border: 1px dashed rgba(0, 247, 255, 0.30);
+    animation: ring-spin-cw 16s linear infinite;
+  }
+  /* Ring 2: solid faint circle slightly further out, with tick marks
+     drawn via conic-gradient. */
+  .ring-2 {
+    inset: 0;
+    border: 1px solid rgba(0, 247, 255, 0.20);
+    background:
+      conic-gradient(
+        from 0deg,
+        transparent 0deg,        rgba(0, 247, 255, 0.55) 1deg,
+        transparent 2deg,        transparent 30deg,
+        rgba(0, 247, 255, 0.35) 31deg, transparent 32deg,
+        transparent 60deg,       rgba(0, 247, 255, 0.55) 61deg,
+        transparent 62deg,       transparent 90deg,
+        rgba(0, 247, 255, 0.35) 91deg, transparent 92deg,
+        transparent 120deg,      rgba(0, 247, 255, 0.55) 121deg,
+        transparent 122deg,      transparent 150deg,
+        rgba(0, 247, 255, 0.35) 151deg, transparent 152deg,
+        transparent 180deg,      rgba(0, 247, 255, 0.55) 181deg,
+        transparent 182deg,      transparent 210deg,
+        rgba(0, 247, 255, 0.35) 211deg, transparent 212deg,
+        transparent 240deg,      rgba(0, 247, 255, 0.55) 241deg,
+        transparent 242deg,      transparent 270deg,
+        rgba(0, 247, 255, 0.35) 271deg, transparent 272deg,
+        transparent 300deg,      rgba(0, 247, 255, 0.55) 301deg,
+        transparent 302deg,      transparent 330deg,
+        rgba(0, 247, 255, 0.35) 331deg, transparent 332deg,
+        transparent 360deg);
+    /* Mask the conic-gradient to a thin annular ring so it only paints
+       at the outer edge (the tick marks). */
+    -webkit-mask: radial-gradient(circle, transparent 56%, black 58%, black 62%, transparent 64%);
+            mask: radial-gradient(circle, transparent 56%, black 58%, black 62%, transparent 64%);
+    animation: ring-spin-ccw 32s linear infinite;
+  }
+  /* Ring 3: outermost faint dotted circle, slow rotation opposite Ring 1. */
+  .ring-3 {
+    inset: -8px;
+    border: 1px dotted rgba(0, 247, 255, 0.22);
+    animation: ring-spin-ccw 48s linear infinite;
+  }
+  /* Sweep light — a single bright dot orbiting the disc. */
+  .sweep {
+    position: absolute;
+    inset: 8px;
+    border-radius: 50%;
+    pointer-events: none;
+    animation: ring-spin-cw 6s linear infinite;
+  }
+  .sweep::after {
+    content: '';
+    position: absolute;
+    top: -3px; left: 50%;
+    width: 6px; height: 6px;
+    margin-left: -3px;
+    border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 10px var(--cyan), 0 0 20px var(--cyan-d);
+  }
+  /* Ambient glow halo behind the whole frame — pulses subtly with breathing. */
+  .orb-frame::before {
+    content: '';
+    position: absolute;
+    inset: -18px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      rgba(0, 247, 255, 0.10) 0%,
+      transparent 70%);
+    pointer-events: none;
+    animation: orb-breathe 6s ease-in-out infinite;
+  }
+  @keyframes ring-spin-cw  { from { transform: rotate(0deg);   } to { transform: rotate(360deg);  } }
+  @keyframes ring-spin-ccw { from { transform: rotate(360deg); } to { transform: rotate(0deg);    } }
+  @keyframes orb-breathe   {
+    0%, 100% { opacity: 0.7; transform: scale(1);    }
+    50%      { opacity: 1.0; transform: scale(1.06); }
+  }
+  /* While Three.js initializes (loading shaders / first frame), show a
+     tiny pulsing dot so the area doesn't look broken. */
+  .orb-loader {
+    position: absolute; inset: 50%;
+    width: 12px; height: 12px;
+    margin: -6px 0 0 -6px;
+    border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 12px var(--cyan);
+    animation: orb-loader-pulse 1.2s ease-in-out infinite;
+    transition: opacity 0.5s;
+  }
+  .orb-loader.hidden { opacity: 0; pointer-events: none; }
+  @keyframes orb-loader-pulse {
+    0%, 100% { transform: scale(1);   opacity: 0.7; }
+    50%      { transform: scale(1.6); opacity: 0.2; }
+  }
+
+  .state-label {
+    margin-top: 6px;
+    font-size: 11px; letter-spacing: 3px;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  /* ── CHAT LOG ───────────────────────────────────────────────────────── */
+  .chatlog {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 14px 14px 18px;
+    -webkit-overflow-scrolling: touch;
+    /* Subtle top divider to separate orb area from chat — the orb sits
+       on a different visual plane than the conversation. */
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+    /* Minimum visible chat area so the most recent reply isn't clipped
+       behind the controls when only one or two messages are visible. */
+    min-height: 140px;
+  }
+  .msg {
+    display: flex; gap: 8px;
+    margin-bottom: 10px;
+  }
+  .msg.me      { flex-direction: row-reverse; }
+  .msg-avatar {
+    flex: 0 0 26px;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 1px solid var(--border2);
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Orbitron', monospace;
+    font-size: 11px; font-weight: 700;
+    background: var(--panel);
+  }
+  .msg.me .msg-avatar    { color: var(--green);  border-color: #00ff8855; }
+  .msg.chloe .msg-avatar { color: var(--cyan);   border-color: var(--border2); }
+  .msg-bubble {
+    max-width: 78%;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    font-size: 14px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .msg.me .msg-bubble    { border-color: #00ff8833; background: #001a14; color: #d8ffe8; }
+  .msg.chloe .msg-bubble { color: #d8f6ff; }
+  .msg-bubble.error      { color: var(--red); border-color: #ff335555; }
+
+  /* ── CONTROLS ───────────────────────────────────────────────────────── */
+  /* Sits at the bottom; padding tuned to keep PTT visible above the home
+     indicator on iPhone. Tighter than before so the button isn't pushed
+     past the bottom safe area. The body already applies
+     env(safe-area-inset-bottom) so we don't need to double-up here. */
+  .controls {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--border);
+    padding: 10px 14px 12px;
+    display: flex; flex-direction: column; gap: 10px;
+    background: linear-gradient(180deg, transparent 0%, #00050c 50%);
+  }
+  .text-row {
+    display: flex; gap: 8px;
+  }
+  .text-row input {
+    flex: 1; min-width: 0;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    color: var(--cyan);
+    font-family: inherit; font-size: 14px;
+    padding: 10px 12px;
+    outline: none;
+  }
+  .text-row input:focus { border-color: var(--cyan); }
+  .text-row button {
+    flex: 0 0 auto;
+    background: var(--cyan); color: #001520;
+    border: none; border-radius: 8px;
+    font-family: 'Orbitron', monospace;
+    font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    padding: 0 14px;
+    cursor: pointer;
+  }
+  .text-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .ptt-btn {
+    width: 100%;
+    height: 72px;
+    background: linear-gradient(180deg, #001a26 0%, #000d14 100%);
+    border: 2px solid var(--border2);
+    border-radius: 12px;
+    color: var(--cyan);
+    font-family: 'Orbitron', monospace;
+    font-size: 16px; font-weight: 700; letter-spacing: 4px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: all 0.1s;
+    /* iOS: prevent the long-press magnifier and callout */
+    -webkit-touch-callout: none;
+  }
+  .ptt-btn:active,
+  .ptt-btn.holding {
+    background: linear-gradient(180deg, #00ff88 0%, #00aa55 100%);
+    color: #000810;
+    border-color: var(--green);
+    box-shadow: 0 0 20px var(--green);
+    transform: scale(0.98);
+  }
+  .ptt-hint {
+    text-align: center;
+    font-size: 10px;
+    opacity: 0.5;
+    letter-spacing: 1px;
+  }
+
+  /* ── EMPTY STATE ────────────────────────────────────────────────────── */
+  .empty {
+    text-align: center;
+    padding: 30px 20px;
+    opacity: 0.5;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* ── SPLASH SCREEN ──────────────────────────────────────────────────── */
+  /* Ported from the desktop HUD. Sized down for phone viewport. iOS won't
+     autoplay audio, so the splash is tap-to-enter on first launch — same
+     ceremonial feel as the desktop boot, just user-initiated. The loading
+     bar fills in lockstep with the boot.mp3 duration, then the hologram
+     shutdown exit animation runs and reveals the app. */
+  .splash {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: radial-gradient(circle at center,
+                  #001020 0%, #000408 70%, #000000 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Tappable initially — iOS audio gating means the user starts the boot. */
+    pointer-events: auto;
+    transition: opacity 0.7s ease-out;
+    opacity: 1;
+    overflow: hidden;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .splash.hidden { opacity: 0; pointer-events: none; }
+  /* Subtle moving scanline texture */
+  .splash::before {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      repeating-linear-gradient(0deg,
+        transparent 0,
+        transparent 3px,
+        rgba(0, 247, 255, 0.04) 3px,
+        rgba(0, 247, 255, 0.04) 4px);
+    pointer-events: none;
+    animation: splash-scan 12s linear infinite;
+  }
+  /* Outer glow ring at the center */
+  .splash::after {
+    content: '';
+    position: absolute;
+    width: 380px; height: 380px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+                  rgba(0, 247, 255, 0.10) 0%,
+                  rgba(0, 247, 255, 0.04) 40%,
+                  transparent 70%);
+    animation: splash-glow 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+  .splash-content {
+    position: relative;
+    text-align: center;
+    font-family: 'Orbitron', sans-serif;
+    z-index: 1;
+    padding: 0 16px;
+  }
+  .splash-title {
+    font-size: 52px;
+    font-weight: 800;
+    letter-spacing: 14px;
+    color: var(--cyan);
+    margin: 0 0 10px 14px;
+    text-shadow:
+      0 0 16px var(--cyan),
+      0 0 36px var(--cyan),
+      0 0 60px rgba(0, 247, 255, 0.5);
+    animation: splash-title-pulse 2.4s ease-in-out infinite;
+  }
+  .splash-subtitle {
+    font-size: 11px;
+    letter-spacing: 7px;
+    color: var(--green);
+    margin: 0 0 28px 7px;
+    opacity: 0.85;
+    text-shadow: 0 0 8px var(--green);
+  }
+  .splash-loading {
+    width: 240px;
+    height: 3px;
+    background: rgba(0, 247, 255, 0.12);
+    border-radius: 2px;
+    margin: 0 auto;
+    overflow: hidden;
+    box-shadow:
+      0 0 8px rgba(0, 247, 255, 0.3),
+      inset 0 0 4px rgba(0, 0, 0, 0.6);
+  }
+  .splash-loading-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, var(--cyan), var(--green));
+    box-shadow: 0 0 12px var(--cyan);
+    transition: width 4500ms linear;
+  }
+  .splash-status {
+    margin-top: 18px;
+    font-size: 10px;
+    letter-spacing: 4px;
+    color: rgba(0, 247, 255, 0.55);
+    min-height: 14px;
+    /* Slow blink so "TAP TO BEGIN" feels alive and inviting */
+    animation: splash-status-blink 1.8s ease-in-out infinite;
+  }
+  /* Stop the blink once boot is in progress (set by JS via class) */
+  .splash-status.booting { animation: none; }
+
+  @keyframes splash-title-pulse {
+    0%, 100% {
+      text-shadow:
+        0 0 16px var(--cyan),
+        0 0 36px var(--cyan),
+        0 0 60px rgba(0, 247, 255, 0.5);
+    }
+    50% {
+      text-shadow:
+        0 0 24px var(--cyan),
+        0 0 50px var(--cyan),
+        0 0 90px rgba(0, 247, 255, 0.7);
+    }
+  }
+  @keyframes splash-scan {
+    0%   { transform: translateY(0); }
+    100% { transform: translateY(100px); }
+  }
+  @keyframes splash-glow {
+    0%, 100% { transform: scale(0.9); opacity: 0.7; }
+    50%      { transform: scale(1.1); opacity: 1.0; }
+  }
+  @keyframes splash-status-blink {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1.0; }
+  }
+
+  /* ─── Splash EXIT — "Hologram shutdown" — ported from desktop verbatim.
+     Lock-in flash → vertical compress → glitch jitter → horizontal stretch
+     → fade. Synced to the boot-sound duration so the visual finishes with
+     the audio. */
+  .splash.exiting {
+    pointer-events: none;
+    animation: splash-exit-bg 1100ms cubic-bezier(0.55, 0, 0.4, 1) forwards;
+  }
+  .splash.exiting .splash-content {
+    animation: splash-exit-shutdown 1000ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+    transform-origin: center center;
+    will-change: transform, opacity, filter;
+  }
+  .splash.exiting::before {
+    animation: splash-exit-scanflare 1100ms ease-out forwards;
+  }
+  .splash.exiting::after {
+    animation: splash-exit-ringfade 1100ms cubic-bezier(0.55, 0, 0.2, 1) forwards;
+  }
+  @keyframes splash-exit-bg {
+    0%   { opacity: 1; }
+    11%  { opacity: 1; filter: brightness(1.25); }
+    25%  { opacity: 1; filter: brightness(1); }
+    70%  { opacity: 0.55; }
+    100% { opacity: 0; }
+  }
+  @keyframes splash-exit-shutdown {
+    0%   { transform: scaleY(1) scaleX(1) translateX(0); opacity: 1; filter: brightness(1) saturate(1); }
+    12%  { transform: scaleY(1.04) scaleX(1.03);         opacity: 1; filter: brightness(2.3) saturate(1.3); }
+    30%  { transform: scaleY(0.06) scaleX(1.08);         opacity: 1; filter: brightness(1.9) saturate(1.1); }
+    42%  { transform: scaleY(0.06) scaleX(1.08) translateX(11px);  filter: brightness(2.0) hue-rotate(8deg);  }
+    48%  { transform: scaleY(0.06) scaleX(1.08) translateX(-15px); filter: brightness(1.6) hue-rotate(-10deg); }
+    55%  { transform: scaleY(0.06) scaleX(1.08) translateX(0);     filter: brightness(1.8) hue-rotate(0); }
+    78%  { transform: scaleY(0.04) scaleX(1.55);         opacity: 0.55; filter: brightness(1.2); }
+    100% { transform: scaleY(0)    scaleX(1.8);          opacity: 0;    filter: brightness(0.4); }
+  }
+  @keyframes splash-exit-scanflare {
+    0%   { opacity: 1; filter: brightness(1); }
+    11%  { opacity: 1; filter: brightness(3); }
+    35%  { opacity: 1; filter: brightness(1.4); }
+    100% { opacity: 0; }
+  }
+  @keyframes splash-exit-ringfade {
+    0%   { transform: scale(1);   opacity: 1; }
+    50%  { transform: scale(0.7); opacity: 0.5; }
+    100% { transform: scale(0.4); opacity: 0; }
+  }
+
+  /* ── WALLET ─────────────────────────────────────────────────────────── */
+  .wallet-btn {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--amber);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .wallet-btn:hover, .wallet-btn:active {
+    background: rgba(255, 170, 0, 0.08);
+    border-color: var(--amber);
+  }
+  .wallet-sheet {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .wallet-sheet.active { display: flex; }
+  .wallet-header {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .wallet-title {
+    font-family: 'Orbitron', monospace;
+    font-weight: 700;
+    color: var(--amber);
+    letter-spacing: 3px;
+  }
+  .wallet-close {
+    background: transparent; border: none;
+    color: var(--cyan); font-size: 22px;
+    cursor: pointer; padding: 4px 12px;
+  }
+  .wallet-body {
+    flex: 1; overflow-y: auto;
+    padding: 18px 16px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .balance-card {
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 22px 18px;
+    text-align: center;
+    background: linear-gradient(180deg, rgba(255,170,0,0.06), transparent);
+  }
+  .balance-label {
+    font-size: 11px; letter-spacing: 2px; opacity: 0.7;
+    margin-bottom: 6px;
+  }
+  .balance-value {
+    font-family: 'Orbitron', monospace;
+    font-size: 36px; font-weight: 700;
+    color: var(--amber);
+    word-break: break-all;
+  }
+  .balance-unit { font-size: 14px; opacity: 0.7; margin-left: 6px; }
+  .balance-pending {
+    margin-top: 8px;
+    font-size: 11px; opacity: 0.6;
+  }
+  .balance-refresh {
+    margin-top: 10px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--cyan); padding: 4px 12px; font-size: 10px;
+    letter-spacing: 1.5px; cursor: pointer; border-radius: 3px;
+  }
+  .wallet-actions {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+  }
+  .wallet-action {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 2px; font-size: 14px;
+    padding: 18px 8px;
+    border-radius: 4px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .wallet-action:active { background: rgba(0, 247, 255, 0.1); }
+  .wallet-action.send { color: var(--red); border-color: rgba(255, 51, 85, 0.4); }
+  .wallet-action.send:active { background: rgba(255, 51, 85, 0.08); }
+  .wallet-history {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  .wallet-history-title {
+    font-size: 11px; letter-spacing: 2px; opacity: 0.7;
+    margin-bottom: 8px;
+  }
+  .history-row {
+    display: flex; justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .history-empty { opacity: 0.5; font-style: italic; padding: 8px 0; }
+  .history-amt.in  { color: var(--green); }
+  .history-amt.out { color: var(--red); }
+  .history-meta { opacity: 0.6; font-size: 10px; }
+
+  /* Modals (Receive / Send / Result) */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 8, 16, 0.92);
+    z-index: 60;
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal {
+    width: 100%; max-width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 20px;
+  }
+  .modal-title {
+    font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 2px; color: var(--cyan);
+    margin-bottom: 14px;
+  }
+  .modal label {
+    display: block;
+    font-size: 11px; letter-spacing: 1.5px;
+    opacity: 0.7; margin-bottom: 4px; margin-top: 12px;
+  }
+  .modal input, .modal textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--cyan);
+    font-family: 'Share Tech Mono', monospace;
+    padding: 10px 12px;
+    font-size: 14px;
+    border-radius: 3px;
+    outline: none;
+  }
+  .modal input:focus, .modal textarea:focus {
+    border-color: var(--cyan); box-shadow: 0 0 0 1px var(--border2);
+  }
+  .modal textarea { resize: none; min-height: 80px; word-break: break-all; }
+  .modal-buttons {
+    display: flex; gap: 8px; margin-top: 16px;
+  }
+  .modal-btn {
+    flex: 1;
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 1.5px; padding: 10px;
+    cursor: pointer; border-radius: 3px;
+  }
+  .modal-btn.primary { background: rgba(0, 247, 255, 0.1); }
+  .modal-btn.danger {
+    color: var(--red); border-color: rgba(255, 51, 85, 0.4);
+    background: rgba(255, 51, 85, 0.08);
+  }
+  .modal-btn:active { transform: scale(0.97); }
+  .modal-status {
+    margin-top: 10px; font-size: 12px; opacity: 0.85;
+  }
+  .modal-status.error { color: var(--red); }
+  .modal-status.ok    { color: var(--green); }
+  .qr-wrap {
+    background: white; padding: 12px; border-radius: 4px;
+    margin: 12px auto; width: fit-content;
+  }
+  .qr-wrap svg { display: block; }
+  .invoice-preview {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 8px;
+    border-radius: 3px;
+    word-break: break-all;
+    max-height: 80px; overflow-y: auto;
+    margin-top: 6px;
+  }
+</style>
+</head>
+<body>
+<!-- Startup splash. Tap-to-enter on iOS (audio gating). On tap we play
+     boot.mp3 from the static server, fill the loading bar over the
+     audio's actual duration, then run the hologram-shutdown exit. -->
+<div id="splash-screen" class="splash">
+  <div class="splash-content">
+    <div class="splash-title">CHLOE</div>
+    <div class="splash-subtitle">SYSTEMS INITIALIZING</div>
+    <div class="splash-loading">
+      <div class="splash-loading-bar" id="splash-bar"></div>
+    </div>
+    <div class="splash-status" id="splash-status">TAP TO BEGIN</div>
+  </div>
+</div>
+
+<div class="app">
+  <header>
+    <div class="logo">CHLOE<span class="sub">// MOBILE</span></div>
+    <button class="wallet-btn" id="wallet-open-btn" title="Open wallet">₿ WALLET</button>
+    <div class="conn" id="conn"><span class="conn-dot"></span><span id="conn-text">CONNECTING</span></div>
+  </header>
+
+  <div class="orb-wrap">
+    <div class="orb-frame">
+      <div class="ring ring-3"></div>
+      <div class="ring ring-2"></div>
+      <div class="ring ring-1"></div>
+      <div class="sweep"></div>
+      <div id="scene" class="scene">
+        <div id="orb-loader" class="orb-loader"></div>
+      </div>
+    </div>
+    <div class="state-label" id="state-label">IDLE</div>
+  </div>
+
+  <div class="chatlog" id="chatlog">
+    <div class="empty" id="empty">
+      Hold the button below to talk.<br>
+      Or type a message and tap SEND.
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="text-row">
+      <input id="chat-input" type="text" placeholder="Message Chloe…" autocomplete="off" autocapitalize="sentences">
+      <button id="send-btn">SEND</button>
+    </div>
+    <button class="ptt-btn" id="ptt-btn">HOLD TO TALK</button>
+    <div class="ptt-hint" id="ptt-hint">tap once to grant mic access</div>
+  </div>
+</div>
+
+<!-- ── WALLET SHEET ─────────────────────────────────────────────────────── -->
+<div class="wallet-sheet" id="wallet-sheet">
+  <div class="wallet-header">
+    <div class="wallet-title">₿ WALLET</div>
+    <button class="wallet-close" id="wallet-close-btn" title="Close">×</button>
+  </div>
+  <div class="wallet-body">
+    <div class="balance-card">
+      <div class="balance-label">BALANCE</div>
+      <div class="balance-value">
+        <span id="wallet-balance-value">—</span><span class="balance-unit">sat</span>
+      </div>
+      <div class="balance-pending" id="wallet-pending"></div>
+      <button class="balance-refresh" id="wallet-refresh-btn">REFRESH</button>
+    </div>
+    <div class="wallet-actions">
+      <button class="wallet-action receive" id="wallet-receive-btn">RECEIVE</button>
+      <button class="wallet-action send"    id="wallet-send-btn">SEND</button>
+    </div>
+    <div class="wallet-history">
+      <div class="wallet-history-title">RECENT</div>
+      <div id="wallet-history-list">
+        <div class="history-empty">no payments yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Receive modal -->
+<div class="modal-backdrop" id="receive-modal">
+  <div class="modal">
+    <div class="modal-title">RECEIVE</div>
+    <div id="receive-step-amount">
+      <label for="receive-amount">AMOUNT (SAT)</label>
+      <input id="receive-amount" type="number" inputmode="numeric" min="1" placeholder="1000">
+      <label for="receive-memo">MEMO (OPTIONAL)</label>
+      <input id="receive-memo" type="text" placeholder="what's this for?">
+      <div class="modal-status" id="receive-status"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn"          id="receive-cancel-btn">CANCEL</button>
+        <button class="modal-btn primary"  id="receive-generate-btn">GENERATE</button>
+      </div>
+    </div>
+    <div id="receive-step-result" style="display:none;">
+      <div id="receive-qr" class="qr-wrap"></div>
+      <label>BOLT11</label>
+      <div class="invoice-preview" id="receive-bolt11"></div>
+      <div class="modal-status" id="receive-result-status"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn"          id="receive-new-btn">NEW</button>
+        <button class="modal-btn"          id="receive-copy-btn">COPY</button>
+        <button class="modal-btn primary"  id="receive-done-btn">DONE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Send modal -->
+<div class="modal-backdrop" id="send-modal">
+  <div class="modal">
+    <div class="modal-title">SEND</div>
+    <label for="send-destination">INVOICE OR LIGHTNING ADDRESS</label>
+    <textarea id="send-destination" placeholder="lnbc1… or alice@getalby.com"></textarea>
+    <label for="send-amount">AMOUNT (SAT) — leave blank if invoice has one</label>
+    <input id="send-amount" type="number" inputmode="numeric" min="1" placeholder="(optional)">
+    <label for="send-pin">PIN</label>
+    <input id="send-pin" type="password" inputmode="text" placeholder="••••" autocomplete="off">
+    <div class="modal-status" id="send-status"></div>
+    <div class="modal-buttons">
+      <button class="modal-btn"        id="send-cancel-btn">CANCEL</button>
+      <button class="modal-btn danger" id="send-confirm-btn">SEND</button>
+    </div>
+  </div>
+</div>
+
+<!-- QR generator (small, no deps, generates SVG/table — we use SVG via cellsize) -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLASH SCREEN — ported from desktop HUD with iOS-friendly tap-to-enter.
+// ─────────────────────────────────────────────────────────────────────────────
+// iOS Safari blocks autoplay until a user gesture. Rather than try and fail,
+// we present a "TAP TO BEGIN" splash. On tap (which IS a gesture) we play
+// boot.mp3 and run the loading bar + hologram-shutdown exit synced to the
+// audio's actual duration. Fallback: if audio fails for any reason, splash
+// still exits after a fixed timeout so the user isn't stuck.
+const splash = {
+  el:     () => document.getElementById('splash-screen'),
+  bar:    () => document.getElementById('splash-bar'),
+  status: () => document.getElementById('splash-status'),
+  audio:  null,
+  _hidden: false,
+  _started: false,
+
+  init() {
+    // Pre-load the boot audio so its `duration` is known by the time the
+    // user taps. Safari may not actually fetch until play() but preload='auto'
+    // is the right hint.
+    this.audio = new Audio('sounds/boot.mp3');
+    this.audio.preload = 'auto';
+    // First tap anywhere on the splash starts the sequence.
+    const start = () => this.start();
+    const e = this.el();
+    e.addEventListener('click',    start, { once: true });
+    e.addEventListener('touchend', start, { once: true });
+  },
+
+  start() {
+    if (this._started) return;
+    this._started = true;
+    this.setStatus('BOOTING');
+    const statusEl = this.status();
+    if (statusEl) statusEl.classList.add('booting');
+
+    // Play the audio. play() is allowed here because we're in a click/touch
+    // gesture handler. On rejection (rare — usually a missing/blocked file)
+    // we still run the visual sequence so the splash doesn't strand.
+    let durationS = 4;  // sensible default if audio metadata isn't loaded yet
+    const a = this.audio;
+    if (a) {
+      try {
+        const playPromise = a.play();
+        if (playPromise && playPromise.catch) {
+          playPromise.catch((e) => console.warn('[splash] audio play rejected', e));
+        }
+      } catch (e) {
+        console.warn('[splash] audio play threw', e);
+      }
+      // If metadata's loaded we have a real duration; otherwise the default
+      // is fine (boot.mp3 is ~4.5s per the handoff).
+      if (!isNaN(a.duration) && a.duration > 0) durationS = a.duration;
+    }
+
+    // Sync the loading bar with the audio
+    const ms  = Math.max(500, Math.round(durationS * 1000));
+    const bar = this.bar();
+    if (bar) {
+      bar.style.transition = 'none';
+      bar.style.width = '0%';
+      void bar.offsetWidth;  // force layout so the next style change animates
+      bar.style.transition = `width ${ms}ms linear`;
+      bar.style.width = '100%';
+    }
+
+    // Schedule the hide just after audio finishes (200ms cushion so the
+    // ceremonial exit lines up with the last sound frame).
+    setTimeout(() => this.hide(), ms + 200);
+
+    // We're in a user gesture — pre-unlock the reply audio element so the
+    // first TTS reply plays through cleanly without iOS autoplay friction.
+    // (unlockReplyAudio is defined further down in this script.)
+    try {
+      if (typeof unlockReplyAudio === 'function') unlockReplyAudio();
+    } catch (e) {
+      console.warn('[splash] reply audio unlock failed', e);
+    }
+  },
+
+  setStatus(text) {
+    const s = this.status();
+    if (s) s.textContent = text;
+  },
+
+  hide() {
+    if (this._hidden) return;
+    this._hidden = true;
+    const e = this.el();
+    if (!e) return;
+    // Stage 1: hologram-shutdown animation (1100ms)
+    e.classList.add('exiting');
+    // Stage 2: remove from layout so it can't intercept clicks afterwards
+    setTimeout(() => {
+      e.classList.add('hidden');
+      e.style.display = 'none';
+    }, 1100);
+  },
+};
+splash.init();
+// Safety: if user walks away and never taps, fade after 60s rather than
+// keeping the splash up forever.
+setTimeout(() => { if (!splash._started) splash.hide(); }, 60000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+// WebSocket URL resolution:
+//   - Override via ?ws=ws://hostname:port in the URL (handy for dev).
+//   - If the page is loaded over HTTPS (the production iPhone path), we use
+//     wss:// on the same origin at path /chloe-ws — the browser's mixed-
+//     content rules block plain ws:// from an HTTPS page, so the WS HAS to
+//     be reverse-proxied through HTTPS too. See MOBILE_SETUP.md for the
+//     `tailscale serve` recipe that does this.
+//   - On plain HTTP (desktop dev test on localhost) we hit port 6789 directly.
+const WS_URL = (() => {
+  const u = new URLSearchParams(location.search).get('ws');
+  if (u) return u;
+  if (location.protocol === 'https:') {
+    return `wss://${location.host}/chloe-ws`;
+  }
+  return `ws://${location.hostname || 'localhost'}:6789`;
+})();
+
+const TARGET_SR = 16000;  // backend SAMPLE_RATE — Whisper happy here
+
+const CHAT_SYSTEM = (
+  "You are Chloe, a personal home assistant. " +
+  "Reply in plain spoken sentences only — no markdown, no lists, no headers. " +
+  "Keep replies short, friendly, and conversational — usually one or two sentences."
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DOM
+// ─────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const stateLabel  = $('state-label');
+const chatlog     = $('chatlog');
+const emptyEl     = $('empty');
+const connEl      = $('conn');
+const connText    = $('conn-text');
+const inputEl     = $('chat-input');
+const sendBtn     = $('send-btn');
+const pttBtn      = $('ptt-btn');
+const pttHint     = $('ptt-hint');
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────────────────────────
+let ws = null;
+let wsReady = false;
+let chatHistory = [];          // [{role, content}]
+const HISTORY_MAX = 16;
+let currentReplyEl = null;
+let currentReplyText = '';
+let busy = false;
+
+let micGranted = false;
+let audioCtx = null;
+let workletNode = null;
+let micStream = null;
+let pcmBuffer = [];            // Array<Float32Array> at audioCtx.sampleRate
+let recording = false;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function setState(s) {
+  stateLabel.textContent = s.toUpperCase();
+  // The Three.js orb (loaded as a separate module below) reads
+  // window.__jarvisState every frame to decide its animation/turbulence/
+  // spin profile. We mirror to __chloeState so future code can prefer
+  // the namespaced version too.
+  window.__jarvisState = s;
+  window.__chloeState  = s;
+}
+// Expose globally so the orb module can call into the same setState if
+// it wants to (matches the desktop HUD's API surface).
+window.setState = setState;
+
+function setConn(status) {
+  connEl.classList.remove('up', 'wait');
+  if (status === 'up')   { connEl.classList.add('up');   connText.textContent = 'CONNECTED'; }
+  if (status === 'wait') { connEl.classList.add('wait'); connText.textContent = 'CONNECTING'; }
+  if (status === 'down') {                                connText.textContent = 'OFFLINE'; }
+}
+
+function appendMsg(who, text, opts = {}) {
+  if (emptyEl) emptyEl.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + who;
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = who === 'me' ? 'E' : 'C';
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble' + (opts.error ? ' error' : '');
+  bubble.textContent = text;
+  wrap.appendChild(avatar);
+  wrap.appendChild(bubble);
+  chatlog.appendChild(wrap);
+  chatlog.scrollTop = chatlog.scrollHeight;
+  return wrap;
+}
+
+function trimHistory() {
+  if (chatHistory.length > HISTORY_MAX) {
+    chatHistory.splice(0, chatHistory.length - HISTORY_MAX);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEBSOCKET
+// ─────────────────────────────────────────────────────────────────────────────
+function connectWS() {
+  setConn('wait');
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch (e) {
+    console.error('[chloe] WS construct failed', e);
+    scheduleReconnect();
+    return;
+  }
+  ws.onopen = () => {
+    wsReady = true;
+    setConn('up');
+    console.log('[chloe] connected to', WS_URL);
+  };
+  ws.onclose = () => {
+    wsReady = false;
+    setConn('down');
+    console.log('[chloe] WS closed, reconnecting');
+    scheduleReconnect();
+  };
+  ws.onerror = (e) => {
+    console.warn('[chloe] WS error', e);
+  };
+  ws.onmessage = (ev) => {
+    const raw = ev.data;
+    let data = null;
+    try { data = JSON.parse(raw); } catch (_) {}
+    if (data && typeof data === 'object') return handleStructured(data);
+    if (typeof raw === 'string') {
+      const s = raw.trim().toLowerCase();
+      if (['idle','listening','thinking','speaking'].includes(s)) setState(s);
+    }
+  };
+}
+
+let reconnectTimer = null;
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectWS();
+  }, 1500);
+}
+
+function handleStructured(data) {
+  if (data.type === 'tool_start') {
+    if (!currentReplyEl) currentReplyEl = appendMsg('chloe', '');
+    currentReplyEl.querySelector('.msg-bubble').textContent = '🔎 ' + (data.text || 'Searching…');
+  } else if (data.type === 'start') {
+    if (!currentReplyEl) currentReplyEl = appendMsg('chloe', '');
+    currentReplyEl.querySelector('.msg-bubble').textContent = '';
+    currentReplyText = '';
+    setState('thinking');
+  } else if (data.type === 'delta') {
+    currentReplyText += (data.text || '');
+    if (currentReplyEl) {
+      currentReplyEl.querySelector('.msg-bubble').textContent = currentReplyText;
+      chatlog.scrollTop = chatlog.scrollHeight;
+    }
+  } else if (data.type === 'done') {
+    const reply = currentReplyText.trim();
+    if (reply) { chatHistory.push({ role: 'assistant', content: reply }); trimHistory(); }
+    currentReplyEl = null;
+    currentReplyText = '';
+    busy = false;
+    sendBtn.disabled = false;
+  } else if (data.type === 'error') {
+    console.error('[chloe] backend error:', data.text);
+    if (currentReplyEl) {
+      const b = currentReplyEl.querySelector('.msg-bubble');
+      b.textContent = '[error] ' + (data.text || 'unknown');
+      b.classList.add('error');
+    } else {
+      appendMsg('chloe', '[error] ' + (data.text || 'unknown'), { error: true });
+    }
+    currentReplyEl = null;
+    currentReplyText = '';
+    busy = false;
+    sendBtn.disabled = false;
+    setState('idle');
+  } else if (data.type === 'voice_exchange') {
+    // From the backend's voice path (desktop wake-word or another client's PTT)
+    // — show it so all clients stay in sync.
+    if (data.user)      { appendMsg('me',    '🎤 ' + data.user); chatHistory.push({ role: 'user',      content: data.user }); }
+    if (data.assistant) { appendMsg('chloe', data.assistant);    chatHistory.push({ role: 'assistant', content: data.assistant }); }
+    trimHistory();
+  } else if (data.type === 'reply' && data.text) {
+    appendMsg('chloe', data.text);
+    busy = false;
+    sendBtn.disabled = false;
+    setState('idle');
+  } else if (data.type === 'ptt_too_short') {
+    pttHint.textContent = 'too short — try holding longer';
+    setTimeout(() => { pttHint.textContent = 'hold to talk'; }, 2000);
+    setState('idle');
+  } else if (data.type === 'tts_audio') {
+    // Backend synthesized Chloe's reply and is streaming the audio bytes
+    // back so we can play them in the browser — no echo through the PC
+    // speakers. The format is "mp3" (ElevenLabs/edge-tts) or "wav"
+    // (Kokoro). Both are playable directly via a data URL.
+    playReplyAudio(data.audio_b64, data.format || 'mp3');
+  } else if (data.type === 'wallet_balance_result') {
+    onWalletBalanceResult(data);
+  } else if (data.type === 'wallet_invoice_result') {
+    onWalletInvoiceResult(data);
+  } else if (data.type === 'wallet_send_result') {
+    onWalletSendResult(data);
+  } else if (data.type === 'wallet_history_result') {
+    onWalletHistoryResult(data);
+  }
+  // ptt_started / ptt_stopping / ptt_busy / ptt_idle: harmless, ignore on mobile
+}
+
+// One Audio element, reused across replies. iOS is happier this way: the
+// element gets unlocked the first time we play through it (during a user
+// gesture), and subsequent plays don't need a fresh user gesture.
+let replyAudioEl = null;
+
+function playReplyAudio(b64, format) {
+  setState('speaking');
+  if (!replyAudioEl) {
+    replyAudioEl = new Audio();
+    replyAudioEl.preload = 'auto';
+  }
+  // data URL keeps this self-contained — no Blob URLs to revoke.
+  replyAudioEl.src = `data:audio/${format};base64,${b64}`;
+  replyAudioEl.onended = () => setState('idle');
+  replyAudioEl.onerror = (e) => {
+    console.error('[chloe] reply audio error', e);
+    appendMsg('chloe', '[playback error — see console]', { error: true });
+    setState('idle');
+  };
+  // .play() returns a Promise on modern browsers; failures here usually
+  // mean iOS blocked autoplay because we're outside a user gesture.
+  // Since playReplyAudio is called from a WS message (not a user tap),
+  // iOS *can* refuse — but only the first time. After a single PTT round-
+  // trip the audio element is unlocked.
+  replyAudioEl.play().catch((e) => {
+    console.error('[chloe] play() rejected', e);
+    appendMsg('chloe', '[autoplay blocked — tap PTT once and try again]', { error: true });
+    setState('idle');
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CHAT (text)
+// ─────────────────────────────────────────────────────────────────────────────
+function sendChat() {
+  if (busy) return;
+  const text = inputEl.value.trim();
+  if (!text) return;
+  if (!wsReady) {
+    appendMsg('chloe', '[error] not connected — is jarvis.py running?', { error: true });
+    scheduleReconnect();
+    return;
+  }
+  appendMsg('me', text);
+  const userMsg = { role: 'user', content: text };
+  const payload = chatHistory.concat([userMsg]);
+  chatHistory.push(userMsg);
+  trimHistory();
+  inputEl.value = '';
+
+  busy = true;
+  sendBtn.disabled = true;
+  setState('thinking');
+  try {
+    ws.send(JSON.stringify({
+      type: 'chat',
+      messages: payload,
+      system: CHAT_SYSTEM,
+      max_tokens: 1024,
+      // reply_audio: tell the backend to synthesize TTS to bytes and
+      // broadcast `tts_audio` back over the WS. Without this the chat
+      // path falls through to _speak() on PC speakers, which is why
+      // earbud users were hearing replies leak through the desktop.
+      // The PWA's tts_audio handler (above) plays it locally.
+      reply_audio: true,
+    }));
+  } catch (e) {
+    console.error('[chloe] send failed', e);
+    busy = false; sendBtn.disabled = false; setState('idle');
+    appendMsg('chloe', '[error] send failed: ' + (e.message || e), { error: true });
+  }
+}
+sendBtn.addEventListener('click', sendChat);
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PTT — mic capture via AudioWorklet, encode WAV in JS, send over WS
+// ─────────────────────────────────────────────────────────────────────────────
+// Why AudioWorklet (and not MediaRecorder)? iOS Safari's MediaRecorder emits
+// MP4/AAC, which we'd need ffmpeg to decode server-side. With AudioWorklet we
+// pull raw Float32 PCM, convert to mono int16 @ 16kHz here, and ship a WAV
+// the stdlib `wave` module can parse without extra deps.
+
+// Inline AudioWorklet processor as a Blob URL so this stays single-file.
+const WORKLET_SRC = `
+class MicForwarder extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch0 = inputs[0] && inputs[0][0];
+    if (ch0 && ch0.length) {
+      // Copy because the buffer is reused by the audio thread
+      this.port.postMessage(new Float32Array(ch0));
+    }
+    return true;
+  }
+}
+registerProcessor('mic-forwarder', MicForwarder);
+`;
+
+// Tiny silent WAV used to "unlock" the reply Audio element on iOS — must
+// be invoked from a user gesture, after which programmatic .play() calls
+// (i.e. when a tts_audio message arrives over the WS) are allowed.
+const SILENT_WAV_DATA_URL =
+  'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
+function unlockReplyAudio() {
+  if (replyAudioEl && replyAudioEl.dataset && replyAudioEl.dataset.unlocked === '1') return;
+  if (!replyAudioEl) {
+    replyAudioEl = new Audio();
+    replyAudioEl.preload = 'auto';
+  }
+  replyAudioEl.src = SILENT_WAV_DATA_URL;
+  // Mute briefly so the silent play is truly silent even on devices with
+  // odd codec quirks; we'll restore volume before the real play.
+  replyAudioEl.muted = true;
+  const p = replyAudioEl.play();
+  if (p && p.then) {
+    p.then(() => {
+      replyAudioEl.muted = false;
+      replyAudioEl.dataset.unlocked = '1';
+    }).catch(() => {
+      replyAudioEl.muted = false;
+      // No worries — first PTT reply may still play; iOS sometimes lets
+      // through the first programmatic play even without the prime.
+    });
+  }
+}
+
+async function ensureMic() {
+  if (micGranted) return true;
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl:  true,
+      },
+      video: false,
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Some browsers start AudioContext suspended until a user gesture
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    const blob = new Blob([WORKLET_SRC], { type: 'application/javascript' });
+    const url  = URL.createObjectURL(blob);
+    await audioCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+
+    workletNode = new AudioWorkletNode(audioCtx, 'mic-forwarder');
+    workletNode.port.onmessage = (ev) => {
+      if (recording) pcmBuffer.push(ev.data);
+    };
+    const src = audioCtx.createMediaStreamSource(micStream);
+    src.connect(workletNode);
+    // Don't connect to destination — we don't want the mic playing back.
+
+    micGranted = true;
+    pttHint.textContent = 'hold to talk';
+    return true;
+  } catch (e) {
+    console.error('[chloe] mic init failed', e);
+    pttHint.textContent = 'mic blocked — check site settings';
+    appendMsg('chloe', '[error] mic permission denied: ' + (e.message || e), { error: true });
+    return false;
+  }
+}
+
+function downsampleTo16k(float32Frames, srcRate) {
+  // Concatenate all collected frames
+  const total = float32Frames.reduce((s, f) => s + f.length, 0);
+  const flat = new Float32Array(total);
+  let off = 0;
+  for (const f of float32Frames) { flat.set(f, off); off += f.length; }
+
+  if (srcRate === TARGET_SR) return flat;
+  // Linear-interpolation downsample. Speech-quality is fine for Whisper.
+  const ratio = srcRate / TARGET_SR;
+  const outLen = Math.floor(flat.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const idx = i * ratio;
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(i0 + 1, flat.length - 1);
+    const frac = idx - i0;
+    out[i] = flat[i0] * (1 - frac) + flat[i1] * frac;
+  }
+  return out;
+}
+
+function encodeWav16kMono(float32) {
+  // float32 [-1, 1] → int16 PCM → WAV bytes
+  const bytesPerSample = 2;
+  const dataLen = float32.length * bytesPerSample;
+  const buf = new ArrayBuffer(44 + dataLen);
+  const dv  = new DataView(buf);
+
+  // RIFF/WAVE header
+  let p = 0;
+  const w4 = (s) => { for (let i = 0; i < 4; i++) dv.setUint8(p++, s.charCodeAt(i)); };
+  const w32 = (n) => { dv.setUint32(p, n, true); p += 4; };
+  const w16 = (n) => { dv.setUint16(p, n, true); p += 2; };
+
+  w4('RIFF');
+  w32(36 + dataLen);
+  w4('WAVE');
+  w4('fmt ');
+  w32(16);                      // PCM chunk size
+  w16(1);                       // PCM format
+  w16(1);                       // mono
+  w32(TARGET_SR);
+  w32(TARGET_SR * bytesPerSample);
+  w16(bytesPerSample);          // block align
+  w16(16);                      // bits per sample
+  w4('data');
+  w32(dataLen);
+
+  // Samples
+  for (let i = 0; i < float32.length; i++) {
+    let s = Math.max(-1, Math.min(1, float32[i]));
+    dv.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    p += 2;
+  }
+  return new Uint8Array(buf);
+}
+
+function bytesToBase64(u8) {
+  // Chunk to avoid stack overflow from String.fromCharCode(...big array)
+  let s = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+  }
+  return btoa(s);
+}
+
+async function startPtt() {
+  if (recording) return;
+  // Unlock the reply Audio element while we're still inside the user
+  // gesture from pointerdown. Cheap; idempotent after the first hold.
+  unlockReplyAudio();
+  const ok = await ensureMic();
+  if (!ok) return;
+  if (!wsReady) {
+    appendMsg('chloe', '[error] not connected to backend', { error: true });
+    return;
+  }
+  pcmBuffer = [];
+  recording = true;
+  setState('listening');
+  pttBtn.classList.add('holding');
+}
+
+function stopPtt() {
+  if (!recording) return;
+  recording = false;
+  pttBtn.classList.remove('holding');
+  setState('thinking');
+
+  if (pcmBuffer.length === 0) {
+    setState('idle');
+    return;
+  }
+
+  const sr = audioCtx ? audioCtx.sampleRate : TARGET_SR;
+  const float16 = downsampleTo16k(pcmBuffer, sr);
+  pcmBuffer = [];
+
+  // Floor-check: very short captures = accidental tap
+  if (float16.length < TARGET_SR * 0.25) {
+    pttHint.textContent = 'too short — try holding longer';
+    setTimeout(() => { pttHint.textContent = 'hold to talk'; }, 2000);
+    setState('idle');
+    return;
+  }
+
+  const wavBytes = encodeWav16kMono(float16);
+  const b64 = bytesToBase64(wavBytes);
+
+  try {
+    // reply_audio: tell the backend to synthesize TTS and ship the bytes
+    // back to us instead of playing on the PC speakers. The phone plays
+    // the reply locally (earbud-friendly) — see the tts_audio handler.
+    ws.send(JSON.stringify({
+      type: 'ptt_audio',
+      wav_b64: b64,
+      reply_audio: true,
+    }));
+  } catch (e) {
+    console.error('[chloe] ptt_audio send failed', e);
+    appendMsg('chloe', '[error] ptt send failed: ' + (e.message || e), { error: true });
+    setState('idle');
+  }
+}
+
+// Pointer events handle both touch (iOS) and mouse cleanly
+pttBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); startPtt(); });
+pttBtn.addEventListener('pointerup',   (e) => { e.preventDefault(); stopPtt();  });
+// Cancel = finger slid off the button or browser interrupt
+pttBtn.addEventListener('pointercancel', () => stopPtt());
+pttBtn.addEventListener('pointerleave',  () => { if (recording) stopPtt(); });
+
+// Spacebar PTT (desktop test convenience)
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat &&
+      document.activeElement !== inputEl) {
+    e.preventDefault();
+    startPtt();
+  }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' && document.activeElement !== inputEl) {
+    e.preventDefault();
+    stopPtt();
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SERVICE WORKER (offline shell)
+// ─────────────────────────────────────────────────────────────────────────────
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('chloe-sw.js').catch(err => {
+      console.warn('[chloe] sw register failed:', err);
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOT
+// ─────────────────────────────────────────────────────────────────────────────
+setState('idle');
+connectWS();
+</script>
+
+<!-- ─── 3D GALAXY ORB ────────────────────────────────────────────────────
+     Ported from the desktop HUD verbatim — the same shaders, particle
+     buffers, postFX (bloom + chroma-scanline), state-driven amplitude
+     simulation, and animate() loop. Reads window.__jarvisState (set by
+     setState above). Only mobile concession: pauses requestAnimationFrame
+     when the page is hidden (battery), and the renderer canvas is sized
+     to the .scene container which is 220x220 on a phone.
+-->
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }     from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass }     from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass }     from 'three/addons/postprocessing/OutputPass.js';
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSTFX
+// ════════════════════════════════════════════════════════════════════════════
+const ChromaScanlinePass = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime:    { value: 0 },
+    uChroma:  { value: 0.0018 },
+    uScan:    { value: 0.05 },
+    uVignette:{ value: 0.7 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uChroma;
+    uniform float uScan;
+    uniform float uVignette;
+    varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    void main() {
+      vec2 uv = vUv;
+      vec2 dir = (uv - 0.5);
+      float dist = length(dir);
+      float ca = uChroma * (0.5 + dist * 1.5);
+      vec2 dN = normalize(dir + vec2(0.001));
+      float r = texture2D(tDiffuse, uv + dN * ca).r;
+      float g = texture2D(tDiffuse, uv).g;
+      float b = texture2D(tDiffuse, uv - dN * ca).b;
+      vec3 col = vec3(r, g, b);
+      float scan = sin(uv.y * 800.0 + uTime * 0.5) * 0.5 + 0.5;
+      col *= 1.0 - scan * uScan;
+      float noise = hash(vec2(uv.y * 200.0, floor(uTime * 24.0))) * 0.04;
+      col += vec3(noise * 0.3, noise * 0.5, noise) * 0.5;
+      float vig = smoothstep(0.95, 0.4, dist);
+      col *= mix(1.0, vig, uVignette);
+      col = mix(col, col * vec3(0.85, 0.95, 1.1), 0.25);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// GALAXY ORB SHADERS
+// ════════════════════════════════════════════════════════════════════════════
+const orbVertex = `
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  uniform float uDeform;
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(
+      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+  void main() {
+    vec3 p = position;
+    vec3 N = normalize(p);
+    float n = noise(N * 2.5 + uTime * 0.4);
+    float n2 = noise(N * 5.0 - uTime * 0.6);
+    float deform = (n - 0.5) * 0.10 + (n2 - 0.5) * 0.04;
+    p += N * (deform * uDeform + uAmp * 0.06);
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = normalize(normalMatrix * N);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+
+const orbFragment = `
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  uniform float uTurbulence;
+  uniform float uSpiralSpeed;
+  uniform vec3  uCoreColor;
+  uniform vec3  uMidColor;
+  uniform vec3  uEdgeColor;
+  uniform float uOpacity;
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(
+      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 5; i++) { v += a * noise3(p); p *= 2.05; a *= 0.5; }
+    return v;
+  }
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+    vec3 lp = normalize(vLocalPos);
+    float lat = asin(lp.y);
+    float lon = atan(lp.z, lp.x);
+    float spiral = lon + lat * 3.0 + uTime * uSpiralSpeed;
+    vec3 q = vec3(cos(spiral) * 1.6, lat * 1.8, sin(spiral) * 1.6);
+    float galaxy = fbm(q + uTime * 0.15);
+    float fineDetail = fbm(q * 3.5 - uTime * 0.25);
+    float arms = pow(0.5 + 0.5 * sin(spiral * 3.0 + galaxy * 4.0 + uTurbulence * 6.0 * sin(uTime * 0.7)), 2.5);
+    float density = arms * (galaxy * 0.7 + fineDetail * 0.3);
+    density = pow(density, 1.5);
+    density += 0.15 * fineDetail;
+    float starField = pow(noise3(lp * 50.0 + uTime * 0.05), 22.0) * 14.0;
+    vec3 col = mix(uEdgeColor, uMidColor, density);
+    col = mix(col, uCoreColor, pow(density, 2.5));
+    col += uCoreColor * starField;
+    col *= 1.0 + uAmp * 0.7;
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    col += uEdgeColor * fres * 0.9;
+    col += uMidColor  * pow(fres, 6.0) * 1.6;
+    float pulse = sin(length(vLocalPos) * 18.0 - uTime * 6.0) * 0.5 + 0.5;
+    pulse = pow(pulse, 8.0);
+    col += uCoreColor * pulse * uAmp * 0.6;
+    float scan = sin(vWorldPos.y * 240.0 + uTime * 1.5) * 0.5 + 0.5;
+    col += uEdgeColor * pow(scan, 6.0) * 0.04;
+    col = col / (1.0 + col * 0.35);
+    float alpha = clamp(density * 0.85 + fres * 0.6 + 0.22, 0.0, 1.0) * uOpacity;
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const shellVertex = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  void main() {
+    vec3 p = position;
+    vec3 N = normalize(p);
+    p += N * (sin(uTime * 1.2) * 0.015 + uAmp * 0.10);
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vNormal = normalize(normalMatrix * N);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+const shellFragment = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  uniform vec3  uColor;
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(
+      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) { v += a * noise3(p); p *= 2.0; a *= 0.5; }
+    return v;
+  }
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);
+    float wisp = fbm(vLocalPos * 2.5 + uTime * 0.3);
+    wisp = pow(wisp, 1.6);
+    vec3 col = uColor * (wisp * 1.2 + fres * 1.5);
+    col += uColor * pow(fres, 8.0) * 2.0;
+    col *= 1.0 + uAmp * 0.9;
+    float alpha = (fres * 0.7 + wisp * 0.4) * (0.55 + uAmp * 0.4);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const pulseVertex = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uScale;
+  void main() {
+    vec3 p = position * uScale;
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vNormal = normalize(normalMatrix * normalize(position));
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+const pulseFragment = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    fres = pow(fres, 1.5);
+    float alpha = fres * uOpacity;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(uColor * (1.0 + fres * 1.5), alpha);
+  }
+`;
+
+function buildOrb() {
+  const group = new THREE.Group();
+  const coreGeo = new THREE.SphereGeometry(0.78, 96, 96);
+  const coreUniforms = {
+    uTime:         { value: 0 },
+    uAmp:          { value: 0 },
+    uDeform:       { value: 1.0 },
+    uTurbulence:   { value: 0.3 },
+    uSpiralSpeed:  { value: 0.15 },
+    uCoreColor:    { value: new THREE.Color(0xffe8aa) },
+    uMidColor:     { value: new THREE.Color(0x4a9eff) },
+    uEdgeColor:    { value: new THREE.Color(0x1a3a66) },
+    uOpacity:      { value: 1.0 },
+  };
+  const coreMat = new THREE.ShaderMaterial({
+    vertexShader: orbVertex, fragmentShader: orbFragment,
+    transparent: true, side: THREE.FrontSide, depthWrite: false,
+    blending: THREE.AdditiveBlending, uniforms: coreUniforms,
+  });
+  group.add(new THREE.Mesh(coreGeo, coreMat));
+
+  const shellGeo = new THREE.SphereGeometry(0.95, 64, 64);
+  const shellUniforms = {
+    uTime:  { value: 0 }, uAmp: { value: 0 },
+    uColor: { value: new THREE.Color(0x88ccff) },
+  };
+  const shellMat = new THREE.ShaderMaterial({
+    vertexShader: shellVertex, fragmentShader: shellFragment,
+    transparent: true, side: THREE.FrontSide, depthWrite: false,
+    blending: THREE.AdditiveBlending, uniforms: shellUniforms,
+  });
+  group.add(new THREE.Mesh(shellGeo, shellMat));
+
+  const pulses = [];
+  const pulseGeo = new THREE.SphereGeometry(1.0, 48, 48);
+  for (let i = 0; i < 5; i++) {
+    const u = {
+      uScale:   { value: 1.0 },
+      uColor:   { value: new THREE.Color(0xaaddff) },
+      uOpacity: { value: 0.0 },
+    };
+    const m = new THREE.ShaderMaterial({
+      vertexShader: pulseVertex, fragmentShader: pulseFragment,
+      transparent: true, side: THREE.FrontSide, depthWrite: false,
+      blending: THREE.AdditiveBlending, uniforms: u,
+    });
+    const mesh = new THREE.Mesh(pulseGeo, m);
+    mesh.visible = false;
+    group.add(mesh);
+    pulses.push({ mesh, u, age: -1, life: 0 });
+  }
+
+  function makeRing(radius, tubeRadius, color, tilt) {
+    const g = new THREE.TorusGeometry(radius, tubeRadius, 16, 128);
+    const m = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(g, m);
+    mesh.rotation.x = tilt;
+    return mesh;
+  }
+  const ring1 = makeRing(1.10, 0.004, 0x66ccff, Math.PI * 0.42);
+  const ring2 = makeRing(1.22, 0.003, 0x99eeff, Math.PI * 0.55);
+  const ring3 = makeRing(1.35, 0.002, 0x4488cc, Math.PI * 0.48);
+  group.add(ring1); group.add(ring2); group.add(ring3);
+
+  let pulseTimer = 0;
+  let nextPulseSpawn = 0;
+
+  return {
+    group,
+    update({ t, dt, state, amp }) {
+      coreUniforms.uTime.value = t;
+      coreUniforms.uAmp.value = amp;
+      shellUniforms.uTime.value = t;
+      shellUniforms.uAmp.value = amp;
+      let turb = 0.25, spiral = 0.15, deform = 1.0;
+      if (state === 'listening') { turb = 0.15; spiral = 0.08; deform = 0.6; }
+      else if (state === 'thinking') { turb = 0.85; spiral = 0.45; deform = 1.4; }
+      else if (state === 'speaking') { turb = 0.55; spiral = 0.25; deform = 1.1 + amp * 0.6; }
+      coreUniforms.uTurbulence.value += (turb - coreUniforms.uTurbulence.value) * 0.08;
+      coreUniforms.uSpiralSpeed.value += (spiral - coreUniforms.uSpiralSpeed.value) * 0.08;
+      coreUniforms.uDeform.value += (deform - coreUniforms.uDeform.value) * 0.08;
+
+      const spinMul = state === 'thinking' ? 4.0 : state === 'speaking' ? 2.5 : state === 'listening' ? 0.6 : 1.0;
+      ring1.rotation.z += dt * 0.25 * spinMul;
+      ring2.rotation.z -= dt * 0.18 * spinMul;
+      ring3.rotation.z += dt * 0.32 * spinMul;
+      ring1.rotation.y += dt * 0.05 * spinMul;
+      ring2.rotation.x += dt * 0.04 * spinMul;
+
+      pulseTimer += dt;
+      if (state === 'speaking' && amp > 0.55 && pulseTimer > nextPulseSpawn) {
+        for (const p of pulses) {
+          if (p.age < 0) {
+            p.age = 0; p.life = 1.2; p.mesh.visible = true; break;
+          }
+        }
+        nextPulseSpawn = pulseTimer + 0.18 + Math.random() * 0.12;
+      }
+      for (const p of pulses) {
+        if (p.age >= 0) {
+          p.age += dt;
+          const k = Math.min(p.age / p.life, 1);
+          p.u.uScale.value = 0.95 + k * 1.55;
+          p.u.uOpacity.value = (1.0 - k) * 0.7;
+          if (p.age >= p.life) { p.age = -1; p.mesh.visible = false; }
+        }
+      }
+    },
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PARTICLES
+// ════════════════════════════════════════════════════════════════════════════
+function buildParticles() {
+  const group = new THREE.Group();
+
+  const N1 = 120;
+  const inner = new THREE.BufferGeometry();
+  const innerPos = new Float32Array(N1 * 3);
+  const innerData = new Float32Array(N1 * 4);
+  const innerSize = new Float32Array(N1);
+  for (let i = 0; i < N1; i++) {
+    const r = 1.4 + Math.random() * 1.0;
+    const theta0 = Math.random() * Math.PI * 2;
+    const phi0 = (Math.random() - 0.5) * 0.6;
+    const speed = 0.15 + Math.random() * 0.4;
+    innerData.set([r, theta0, phi0, speed], i * 4);
+    innerSize[i] = 0.2 + Math.random() * 0.6;
+  }
+  inner.setAttribute('position', new THREE.BufferAttribute(innerPos, 3));
+  inner.setAttribute('aData',    new THREE.BufferAttribute(innerData, 4));
+  inner.setAttribute('aSize',    new THREE.BufferAttribute(innerSize, 1));
+
+  const innerMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x88ddff) },
+      uPxRatio: { value: window.devicePixelRatio || 1 },
+    },
+    vertexShader: `
+      attribute vec4 aData;
+      attribute float aSize;
+      uniform float uTime;
+      uniform float uPxRatio;
+      varying float vAlpha;
+      void main() {
+        float r = aData.x;
+        float theta = aData.y + uTime * aData.w;
+        float phi = aData.z + sin(uTime * 0.3 + aData.y) * 0.15;
+        vec3 p;
+        p.x = r * cos(theta) * cos(phi);
+        p.y = r * sin(phi);
+        p.z = r * sin(theta) * cos(phi);
+        vAlpha = 0.6 + 0.4 * sin(uTime * 2.0 + aData.y * 5.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = aSize * uPxRatio * (180.0 / -mv.z);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float core = smoothstep(0.5, 0.0, d);
+        float halo = smoothstep(0.5, 0.1, d);
+        vec3 col = uColor * (core * 1.5 + halo * 0.5);
+        gl_FragColor = vec4(col, halo * vAlpha);
+      }
+    `,
+  });
+  group.add(new THREE.Points(inner, innerMat));
+
+  const N2 = 800;
+  const outer = new THREE.BufferGeometry();
+  const outerPos = new Float32Array(N2 * 3);
+  const outerSize = new Float32Array(N2);
+  const outerSeed = new Float32Array(N2);
+  for (let i = 0; i < N2; i++) {
+    const r = 2.0 + Math.random() * 4.0;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = (Math.random() - 0.5) * Math.PI;
+    outerPos[i*3]   = r * Math.cos(theta) * Math.cos(phi);
+    outerPos[i*3+1] = r * Math.sin(phi);
+    outerPos[i*3+2] = r * Math.sin(theta) * Math.cos(phi);
+    outerSize[i] = 0.3 + Math.random() * 0.6;
+    outerSeed[i] = Math.random() * 100;
+  }
+  outer.setAttribute('position', new THREE.BufferAttribute(outerPos, 3));
+  outer.setAttribute('aSize',    new THREE.BufferAttribute(outerSize, 1));
+  outer.setAttribute('aSeed',    new THREE.BufferAttribute(outerSeed, 1));
+
+  const outerMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x4488cc) },
+      uPxRatio: { value: window.devicePixelRatio || 1 },
+    },
+    vertexShader: `
+      attribute float aSize;
+      attribute float aSeed;
+      uniform float uTime;
+      uniform float uPxRatio;
+      varying float vAlpha;
+      void main() {
+        vec3 p = position;
+        p.x += sin(uTime * 0.15 + aSeed) * 0.08;
+        p.y += cos(uTime * 0.12 + aSeed * 1.3) * 0.08;
+        p.z += sin(uTime * 0.10 + aSeed * 2.1) * 0.08;
+        vAlpha = 0.3 + 0.4 * sin(uTime * 0.5 + aSeed * 3.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = aSize * uPxRatio * (160.0 / -mv.z);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float halo = smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(uColor * halo, halo * vAlpha * 0.5);
+      }
+    `,
+  });
+  group.add(new THREE.Points(outer, outerMat));
+
+  const ringGeo = new THREE.RingGeometry(1.55, 1.62, 128);
+  const ringMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x66bbff) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime; uniform vec3 uColor;
+      varying vec2 vUv;
+      void main() {
+        float a = atan(vUv.y - 0.5, vUv.x - 0.5);
+        float dash = step(0.6, sin(a * 60.0 + uTime * 1.5));
+        float pulse = step(0.7, sin(a * 6.0 - uTime * 2.0));
+        float alpha = (dash * 0.4 + pulse * 0.8);
+        gl_FragColor = vec4(uColor * (0.6 + pulse), alpha);
+      }
+    `,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI * 0.42;
+  ring.position.y = -0.05;
+  group.add(ring);
+
+  const ring2 = new THREE.Mesh(
+    new THREE.RingGeometry(1.95, 1.99, 128),
+    ringMat.clone()
+  );
+  ring2.material.uniforms = {
+    uTime: ringMat.uniforms.uTime,
+    uColor: { value: new THREE.Color(0x3388cc) },
+  };
+  ring2.rotation.x = Math.PI * 0.55;
+  ring2.rotation.z = Math.PI * 0.3;
+  group.add(ring2);
+
+  return {
+    group,
+    update({ t }) {
+      innerMat.uniforms.uTime.value = t;
+      outerMat.uniforms.uTime.value = t;
+      ringMat.uniforms.uTime.value = t;
+      ring.rotation.z = t * 0.05;
+      ring2.rotation.y = -t * 0.03;
+    },
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SCENE SETUP
+// ════════════════════════════════════════════════════════════════════════════
+const sceneContainer = document.getElementById('scene');
+function getSize() {
+  const r = sceneContainer.getBoundingClientRect();
+  return { w: r.width || 220, h: r.height || 220 };
+}
+let { w, h } = getSize();
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(w, h);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+sceneContainer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000308, 0.015);
+
+const camera = new THREE.PerspectiveCamera(28, w / h, 0.1, 100);
+camera.position.set(0, 0, 5.4);
+camera.lookAt(0, 0, 0);
+
+const avatar = new THREE.Group();
+scene.add(avatar);
+
+const orb = buildOrb();
+avatar.add(orb.group);
+
+const particles = buildParticles();
+scene.add(particles.group);
+
+// Halo behind the orb
+const haloGeo = new THREE.PlaneGeometry(7, 7);
+const haloMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: {
+    uTime: { value: 0 }, uAmp: { value: 0 },
+    uColor: { value: new THREE.Color(0x3399ff) },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime; uniform vec3 uColor; uniform float uAmp;
+    varying vec2 vUv;
+    void main() {
+      vec2 p = vUv - 0.5;
+      float d = length(p);
+      float glow = smoothstep(0.5, 0.05, d);
+      glow = pow(glow, 2.0);
+      float pulse = 0.7 + 0.3 * sin(uTime * 0.7) + uAmp * 0.6;
+      gl_FragColor = vec4(uColor * glow * pulse * 0.30, glow * 0.30);
+    }
+  `,
+});
+const halo = new THREE.Mesh(haloGeo, haloMat);
+halo.position.z = -1.4;
+scene.add(halo);
+
+// Postprocessing
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.5, 0.55);
+composer.addPass(bloom);
+const chromaScan = new ShaderPass(ChromaScanlinePass);
+composer.addPass(chromaScan);
+composer.addPass(new OutputPass());
+
+// ════════════════════════════════════════════════════════════════════════════
+// AMPLITUDE SIMULATION — drives orb visuals based on current state
+// ════════════════════════════════════════════════════════════════════════════
+function hashN(n) { return Math.abs(Math.sin(n * 12.9898) * 43758.5453) % 1; }
+function pnoise(t) {
+  const i = Math.floor(t), f = t - i;
+  const a = hashN(i), b = hashN(i + 1);
+  const u = f * f * (3 - 2 * f);
+  return a * (1 - u) + b * u;
+}
+let amp = 0;
+let speakSyllable = 0, nextSyllable = 0;
+function updateAmp(t, dt, state) {
+  let target = 0;
+  if (state === 'idle') {
+    target = 0.10 + Math.sin(t * 0.9) * 0.05 + pnoise(t * 0.6) * 0.06;
+  } else if (state === 'listening') {
+    target = 0.20 + pnoise(t * 1.2) * 0.35 + pnoise(t * 3.7) * 0.12;
+  } else if (state === 'thinking') {
+    target = 0.35 + pnoise(t * 2.3) * 0.25 + pnoise(t * 5.1) * 0.10;
+  } else if (state === 'speaking') {
+    speakSyllable -= dt;
+    if (speakSyllable <= 0) {
+      nextSyllable = 0.85 + Math.random() * 0.5;
+      speakSyllable = 0.08 + Math.random() * 0.20;
+    }
+    const env = Math.max(0, Math.sin((1 - speakSyllable / 0.28) * Math.PI));
+    target = 0.20 + env * nextSyllable + pnoise(t * 8) * 0.08;
+  }
+  amp += (target - amp) * 0.18;
+  amp = Math.max(0, Math.min(1, amp));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ANIMATE — paused while the page is hidden (battery on mobile)
+// ════════════════════════════════════════════════════════════════════════════
+const clock = new THREE.Clock();
+let running = true;
+
+function animate() {
+  if (!running) return;
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t  = clock.getElapsedTime();
+  const state = window.__jarvisState || 'idle';
+  updateAmp(t, dt, state);
+
+  const baseSpin = state === 'thinking' ? 0.35 : state === 'speaking' ? 0.15 : 0.08;
+  avatar.rotation.y += dt * baseSpin;
+
+  const breathe = 1.0 + amp * 0.04;
+  avatar.scale.setScalar(breathe);
+
+  orb.update({ t, dt, state, amp });
+  particles.update({ t, dt, state, amp });
+
+  haloMat.uniforms.uTime.value = t;
+  haloMat.uniforms.uAmp.value  = amp;
+  chromaScan.uniforms.uTime.value = t;
+
+  composer.render();
+  requestAnimationFrame(animate);
+}
+
+// Hide the loader on first frame
+requestAnimationFrame(() => {
+  const l = document.getElementById('orb-loader');
+  if (l) {
+    l.classList.add('hidden');
+    setTimeout(() => l.remove(), 600);
+  }
+  animate();
+});
+
+// Resize observer — keep orb sized to the .scene container if it ever
+// changes (e.g. iPhone rotation, dynamic Type changes, etc.)
+const ro = new ResizeObserver(() => {
+  const s = getSize();
+  if (s.w === 0 || s.h === 0) return;
+  renderer.setSize(s.w, s.h);
+  composer.setSize(s.w, s.h);
+  bloom.setSize(s.w, s.h);
+  camera.aspect = s.w / s.h;
+  camera.updateProjectionMatrix();
+});
+ro.observe(sceneContainer);
+
+// Pause the render loop while the tab/PWA is backgrounded — saves a lot
+// of phone battery on a tile that's redrawing 60 times a second.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    running = false;
+  } else if (!running) {
+    running = true;
+    clock.getDelta(); // reset so we don't burn an old long delta
+    requestAnimationFrame(animate);
+  }
+});
+</script>
+
+<!-- Wallet UI must be in a REGULAR (non-module) script so its top-level
+     functions land on the global scope where handleStructured (in the
+     first inline script) can call them via onWalletBalanceResult etc. -->
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// WALLET PANE — opens a full-screen sheet over the chat. All transactions
+// go through the WS to the Python backend, which gates send via PIN+cap
+// in wallet_guard.py. Each receive call generates a fresh BOLT11 — never
+// reuse an invoice, that's the point of regenerating per transaction.
+// ─────────────────────────────────────────────────────────────────────────────
+const walletSheet     = document.getElementById('wallet-sheet');
+const walletOpenBtn   = document.getElementById('wallet-open-btn');
+const walletCloseBtn  = document.getElementById('wallet-close-btn');
+const walletRefreshBtn= document.getElementById('wallet-refresh-btn');
+const walletReceiveBtn= document.getElementById('wallet-receive-btn');
+const walletSendBtn   = document.getElementById('wallet-send-btn');
+const balanceValueEl  = document.getElementById('wallet-balance-value');
+const balancePendEl   = document.getElementById('wallet-pending');
+const historyListEl   = document.getElementById('wallet-history-list');
+
+const receiveModal      = document.getElementById('receive-modal');
+const receiveStepAmount = document.getElementById('receive-step-amount');
+const receiveStepResult = document.getElementById('receive-step-result');
+const receiveAmountEl   = document.getElementById('receive-amount');
+const receiveMemoEl     = document.getElementById('receive-memo');
+const receiveStatusEl   = document.getElementById('receive-status');
+const receiveQrEl       = document.getElementById('receive-qr');
+const receiveBolt11El   = document.getElementById('receive-bolt11');
+const receiveResultStatusEl = document.getElementById('receive-result-status');
+
+const sendModal       = document.getElementById('send-modal');
+const sendDestEl      = document.getElementById('send-destination');
+const sendAmountEl    = document.getElementById('send-amount');
+const sendPinEl       = document.getElementById('send-pin');
+const sendStatusEl    = document.getElementById('send-status');
+
+let lastInvoice = '';
+
+function wsSendObj(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+    return true;
+  }
+  return false;
+}
+
+function openWallet() {
+  walletSheet.classList.add('active');
+  refreshBalance();
+  refreshHistory();
+}
+
+function closeWallet() {
+  walletSheet.classList.remove('active');
+}
+
+function refreshBalance() {
+  balanceValueEl.textContent = '…';
+  balancePendEl.textContent  = '';
+  if (!wsSendObj({ type: 'wallet_balance' })) {
+    balanceValueEl.textContent = '—';
+    balancePendEl.textContent  = 'offline';
+  }
+}
+
+function refreshHistory() {
+  if (!wsSendObj({ type: 'wallet_history', limit: 10 })) return;
+}
+
+function onWalletBalanceResult(data) {
+  if (!data.ok) {
+    balanceValueEl.textContent = '—';
+    balancePendEl.textContent  = data.error || 'error';
+    return;
+  }
+  balanceValueEl.textContent = (data.balance_sat || 0).toLocaleString();
+  const pendIn  = data.pending_receive_sat || 0;
+  const pendOut = data.pending_send_sat || 0;
+  if (pendIn || pendOut) {
+    const parts = [];
+    if (pendIn)  parts.push('+' + pendIn.toLocaleString() + ' incoming');
+    if (pendOut) parts.push('-' + pendOut.toLocaleString() + ' outgoing');
+    balancePendEl.textContent = parts.join(' · ');
+  } else {
+    balancePendEl.textContent = '';
+  }
+}
+
+function onWalletHistoryResult(data) {
+  if (!data.ok) {
+    historyListEl.innerHTML =
+      '<div class="history-empty">' + (data.error || 'history unavailable') + '</div>';
+    return;
+  }
+  const payments = data.payments || [];
+  if (!payments.length) {
+    historyListEl.innerHTML = '<div class="history-empty">no payments yet</div>';
+    return;
+  }
+  historyListEl.innerHTML = payments.map(p => {
+    const dir   = (p.type || '').toLowerCase().includes('receive') ? 'in' : 'out';
+    const sign  = dir === 'in' ? '+' : '-';
+    const sats  = (p.amount_sat || 0).toLocaleString();
+    const desc  = (p.description || '').slice(0, 32) || '(no memo)';
+    const status= p.status ? p.status.toLowerCase() : '';
+    const ts    = p.timestamp ? new Date(p.timestamp * 1000).toLocaleString() : '';
+    return (
+      '<div class="history-row">' +
+        '<div>' +
+          '<div>' + escapeHtml(desc) + '</div>' +
+          '<div class="history-meta">' + escapeHtml(ts) + ' · ' + escapeHtml(status) + '</div>' +
+        '</div>' +
+        '<div class="history-amt ' + dir + '">' + sign + sats + ' sat</div>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+// ── RECEIVE FLOW ────────────────────────────────────────────────────────────
+function openReceive() {
+  receiveStepAmount.style.display = '';
+  receiveStepResult.style.display = 'none';
+  receiveAmountEl.value = '';
+  receiveMemoEl.value   = '';
+  receiveStatusEl.textContent = '';
+  receiveStatusEl.className = 'modal-status';
+  receiveModal.classList.add('active');
+  setTimeout(() => receiveAmountEl.focus(), 50);
+}
+
+function closeReceive() {
+  receiveModal.classList.remove('active');
+}
+
+function generateInvoice() {
+  const amount = parseInt(receiveAmountEl.value, 10);
+  if (!amount || amount < 1) {
+    receiveStatusEl.textContent = 'Enter a positive amount.';
+    receiveStatusEl.className = 'modal-status error';
+    return;
+  }
+  receiveStatusEl.textContent = 'requesting invoice…';
+  receiveStatusEl.className = 'modal-status';
+  if (!wsSendObj({
+    type: 'wallet_create_invoice',
+    amount_sat: amount,
+    memo: receiveMemoEl.value || ''
+  })) {
+    receiveStatusEl.textContent = 'WS offline.';
+    receiveStatusEl.className = 'modal-status error';
+  }
+}
+
+function onWalletInvoiceResult(data) {
+  if (!receiveModal.classList.contains('active')) return; // not us
+  if (!data.ok) {
+    receiveStatusEl.textContent = data.error || 'invoice failed';
+    receiveStatusEl.className = 'modal-status error';
+    return;
+  }
+  lastInvoice = data.bolt11 || '';
+  receiveBolt11El.textContent = lastInvoice;
+  // QR — qrcode-generator picks the smallest fitting type. Type 0 = auto.
+  // ECC level 'L' (low) is fine for short-lived invoices and yields the
+  // densest QR; payment apps decode it readily.
+  // Use positional args (cellSize, margin) — the object-arg form silently
+  // produces a 1x1 QR in qrcode-generator@1.4.x.
+  try {
+    const qr = qrcode(0, 'L');
+    qr.addData(lastInvoice.toUpperCase());  // alphanumeric mode is denser; bolt11 is case-insensitive
+    qr.make();
+    receiveQrEl.innerHTML = qr.createSvgTag(5, 4);
+    // Force the SVG to fill its container nicely on any screen size.
+    const svg = receiveQrEl.querySelector('svg');
+    if (svg) {
+      svg.setAttribute('width',  '240');
+      svg.setAttribute('height', '240');
+      svg.style.display = 'block';
+    }
+  } catch (e) {
+    // Fallback: alphanumeric mode rejects some chars; retry as bytes.
+    try {
+      const qr = qrcode(0, 'L');
+      qr.addData(lastInvoice);
+      qr.make();
+      receiveQrEl.innerHTML = qr.createSvgTag(5, 4);
+      const svg = receiveQrEl.querySelector('svg');
+      if (svg) { svg.setAttribute('width','240'); svg.setAttribute('height','240'); svg.style.display='block'; }
+    } catch (e2) {
+      receiveQrEl.innerHTML = '<div style="color:#000;padding:24px;">' +
+        'QR render failed: ' + e2.message + '</div>';
+    }
+  }
+  receiveResultStatusEl.textContent =
+    'Invoice for ' + (data.amount_sat || 0).toLocaleString() + ' sat ready. ' +
+    'Network fee est. ' + (data.fees_sat || 0).toLocaleString() + ' sat.';
+  receiveResultStatusEl.className = 'modal-status ok';
+  receiveStepAmount.style.display = 'none';
+  receiveStepResult.style.display = '';
+}
+
+async function copyInvoice() {
+  if (!lastInvoice) return;
+  try {
+    await navigator.clipboard.writeText(lastInvoice);
+    receiveResultStatusEl.textContent = 'copied to clipboard';
+    receiveResultStatusEl.className = 'modal-status ok';
+  } catch (e) {
+    receiveResultStatusEl.textContent = 'clipboard blocked: long-press the bolt11 field above to select+copy manually';
+    receiveResultStatusEl.className = 'modal-status error';
+  }
+}
+
+// ── SEND FLOW ───────────────────────────────────────────────────────────────
+function openSend() {
+  sendDestEl.value   = '';
+  sendAmountEl.value = '';
+  sendPinEl.value    = '';
+  sendStatusEl.textContent = '';
+  sendStatusEl.className = 'modal-status';
+  document.getElementById('send-confirm-btn').disabled = false;
+  sendModal.classList.add('active');
+  setTimeout(() => sendDestEl.focus(), 50);
+}
+
+function closeSend() {
+  sendModal.classList.remove('active');
+}
+
+function confirmSend() {
+  const dest   = (sendDestEl.value || '').trim();
+  const amount = parseInt(sendAmountEl.value, 10);
+  const pin    = sendPinEl.value || '';
+  if (!dest) {
+    sendStatusEl.textContent = 'Destination required.';
+    sendStatusEl.className = 'modal-status error';
+    return;
+  }
+  if (!pin) {
+    sendStatusEl.textContent = 'PIN required.';
+    sendStatusEl.className = 'modal-status error';
+    return;
+  }
+  sendStatusEl.textContent = 'sending…';
+  sendStatusEl.className = 'modal-status';
+  document.getElementById('send-confirm-btn').disabled = true;
+  const payload = { type: 'wallet_send', destination: dest, pin };
+  if (Number.isFinite(amount) && amount > 0) payload.amount_sat = amount;
+  if (!wsSendObj(payload)) {
+    sendStatusEl.textContent = 'WS offline.';
+    sendStatusEl.className = 'modal-status error';
+    document.getElementById('send-confirm-btn').disabled = false;
+  }
+  // Wipe the PIN from the DOM the moment we've sent it. The browser-side
+  // value is gone — even if the page hangs, no PIN is sitting in memory.
+  sendPinEl.value = '';
+}
+
+function onWalletSendResult(data) {
+  if (!sendModal.classList.contains('active')) return;
+  document.getElementById('send-confirm-btn').disabled = false;
+  if (!data.ok) {
+    sendStatusEl.textContent = data.error || 'send failed';
+    sendStatusEl.className = 'modal-status error';
+    return;
+  }
+  sendStatusEl.textContent =
+    'Sent ' + (data.amount_sat || 0).toLocaleString() + ' sat ' +
+    '(fee ' + (data.fees_sat || 0).toLocaleString() + '). ' +
+    (data.status || '');
+  sendStatusEl.className = 'modal-status ok';
+  // Refresh balance + history in the background after a successful send.
+  setTimeout(() => { refreshBalance(); refreshHistory(); }, 500);
+}
+
+// ── WIRE UP ─────────────────────────────────────────────────────────────────
+walletOpenBtn.addEventListener('click',    openWallet);
+walletCloseBtn.addEventListener('click',   closeWallet);
+walletRefreshBtn.addEventListener('click', () => { refreshBalance(); refreshHistory(); });
+walletReceiveBtn.addEventListener('click', openReceive);
+walletSendBtn.addEventListener('click',    openSend);
+
+document.getElementById('receive-cancel-btn').addEventListener('click',   closeReceive);
+document.getElementById('receive-done-btn').addEventListener('click',     closeReceive);
+document.getElementById('receive-generate-btn').addEventListener('click', generateInvoice);
+document.getElementById('receive-new-btn').addEventListener('click',      openReceive);
+document.getElementById('receive-copy-btn').addEventListener('click',     copyInvoice);
+
+document.getElementById('send-cancel-btn').addEventListener('click',  closeSend);
+document.getElementById('send-confirm-btn').addEventListener('click', confirmSend);
+
+// Backdrop tap closes (but only on the backdrop, not the modal contents)
+[receiveModal, sendModal].forEach(m => {
+  m.addEventListener('click', (e) => { if (e.target === m) m.classList.remove('active'); });
+});
+</script>
+
+</body>
+</html>

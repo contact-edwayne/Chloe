@@ -1,0 +1,45 @@
+# Chloe — Python dependencies
+# Pinned to the versions tested in the project venv (May 2026).
+# Loosen the pins (~= or >=) if you want more flexibility.
+
+# ─── LLM / STT / Vision ──────────────────────────────────────────────────────
+groq==1.2.0
+faster-whisper==1.2.1            # local STT fallback if Groq is unreachable
+
+# ─── Text-to-speech (3-tier fallback: ElevenLabs > Kokoro > edge-tts) ────────
+elevenlabs==2.45.0               # primary, opt-in via USE_ELEVENLABS=1
+kokoro-onnx==0.4.7               # high-quality local fallback
+edge-tts==7.2.8                  # free always-available default
+
+# ─── Wake word ───────────────────────────────────────────────────────────────
+openwakeword==0.6.0              # default — uses bundled "hey jarvis" model
+pvporcupine==4.0.2               # optional alt wake-word backend
+
+# ─── Audio I/O ───────────────────────────────────────────────────────────────
+sounddevice==0.5.5
+soundfile==0.13.1
+numpy==2.4.4
+scipy==1.17.1
+
+# ─── Real-time bridge ────────────────────────────────────────────────────────
+websockets==16.0
+
+# ─── Desktop window / HUD shell ──────────────────────────────────────────────
+PyQt6==6.11.0
+PyQt6-WebEngine==6.11.0
+
+# ─── Web fetch / parsing ─────────────────────────────────────────────────────
+requests==2.33.1
+beautifulsoup4==4.14.3
+pillow==12.2.0                   # image attachments → vision model
+
+# ─── Bitcoin Lightning (Breez SDK Liquid) ────────────────────────────────────
+breez-sdk-liquid>=0.6            # may need to be installed from Breez's index
+bip-utils>=2.9                   # BIP-39 mnemonic generation
+argon2-cffi>=23.1                # PIN hashing for wallet guard
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+python-dotenv==1.2.2
+
+# ─── Build ───────────────────────────────────────────────────────────────────
+pyinstaller==6.20.0

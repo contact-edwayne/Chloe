@@ -1,0 +1,19 @@
+{
+  "name": "Chloe",
+  "short_name": "Chloe",
+  "description": "Personal home assistant",
+  "start_url": "chloe-mobile.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000810",
+  "theme_color": "#000810",
+  "icons": [
+    {
+      "src": "chloe_icon.png",
+      "sizes": "192x192 256x256 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

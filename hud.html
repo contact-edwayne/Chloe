@@ -1,0 +1,2706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CHLOE // HOME</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;500;700;900&display=swap" rel="stylesheet">
+<!-- Document/spreadsheet extraction libraries (loaded from CDN). pdf.js handles
+     PDFs, mammoth handles DOCX, SheetJS handles XLSX/XLS. Images are sent
+     directly as base64 to the backend's vision model — no extraction needed. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --cyan:    #00f7ff;
+    --cyan-d:  #00f7ff44;
+    --green:   #00ff88;
+    --amber:   #ffaa00;
+    --red:     #ff3355;
+    --magenta: #ff00aa;
+    --bg:      #000810;
+    --panel:   #000d1a;
+    --border:  #00f7ff2a;
+    --border2: #00f7ff55;
+  }
+
+  html, body {
+    background: #000;
+    min-height: 100vh;
+    overflow: hidden;
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--cyan);
+  }
+
+  /* Animated grid backdrop */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 30%, #00f7ff0a 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 70%, #ff00aa08 0%, transparent 50%),
+      linear-gradient(rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 40px 40px,
+      #000;
+    animation: bg-drift 24s ease-in-out infinite alternate;
+    pointer-events: none;
+    z-index: 0;
+  }
+  @keyframes bg-drift {
+    0%   { background-position: 20% 30%, 80% 70%, 0 0, 0 0, 0 0; }
+    100% { background-position: 30% 40%, 70% 60%, 40px 40px, 40px 40px, 0 0; }
+  }
+
+  /* Sweeping scanline */
+  body::after {
+    content: '';
+    position: fixed; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, #00f7ff66, transparent);
+    box-shadow: 0 0 12px #00f7ff88;
+    animation: scanline 8s linear infinite;
+    pointer-events: none;
+    z-index: 1;
+  }
+  @keyframes scanline {
+    0%   { top: -2px; opacity: 0; }
+    5%   { opacity: 1; }
+    95%  { opacity: 1; }
+    100% { top: 100vh; opacity: 0; }
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* MAIN FRAME */
+  .jr {
+    position: relative;
+    z-index: 2;
+    background: linear-gradient(180deg, #00050c 0%, #00080f 100%);
+    color: var(--cyan);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    /* Fluid: fill the viewport up to the max design size. Prevents the
+       chat panel from being clipped when the window opens narrower than
+       the design width (1100x760). */
+    width: min(1100px, 100vw);
+    height: min(760px, 100vh);
+    box-shadow:
+      0 0 60px #00f7ff22,
+      0 0 120px #00f7ff11,
+      inset 0 0 60px #00f7ff08;
+  }
+
+  /* Frame corner brackets */
+  .jr::before, .jr::after {
+    content: '';
+    position: absolute;
+    width: 26px; height: 26px;
+    border: 2px solid var(--cyan);
+    pointer-events: none;
+    z-index: 10;
+  }
+  .jr::before { top: 6px; left: 6px;  border-right: none; border-bottom: none; }
+  .jr::after  { top: 6px; right: 6px; border-left: none;  border-bottom: none; }
+  .corner-bl, .corner-br {
+    position: absolute;
+    width: 26px; height: 26px;
+    border: 2px solid var(--cyan);
+    pointer-events: none;
+    z-index: 10;
+  }
+  .corner-bl { bottom: 6px; left: 6px;  border-right: none; border-top: none; }
+  .corner-br { bottom: 6px; right: 6px; border-left: none;  border-top: none; }
+
+  /* TOP BAR */
+  .top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border2);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    background: linear-gradient(180deg, #00121d 0%, #000810 100%);
+    position: relative;
+  }
+  .top-bar::after {
+    content: '';
+    position: absolute;
+    bottom: -1px; left: 10%; right: 10%; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+    box-shadow: 0 0 6px var(--cyan);
+    animation: pulse-line 3s ease-in-out infinite;
+  }
+  @keyframes pulse-line {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 1; }
+  }
+  .brand {
+    color: var(--cyan);
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 6px;
+    text-shadow: 0 0 10px #00f7ff66;
+  }
+  .top-bar .center {
+    color: #00f7ffaa;
+    font-size: 10px;
+    letter-spacing: 5px;
+  }
+  .sys-tag {
+    background: #00ff8815;
+    border: 1px solid #00ff8855;
+    color: var(--green);
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 9px;
+    letter-spacing: 3px;
+    text-shadow: 0 0 6px #00ff8866;
+  }
+  .balance-pill {
+    background: rgba(255, 170, 0, 0.10);
+    border: 1px solid rgba(255, 170, 0, 0.45);
+    color: #ffaa00;
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-shadow: 0 0 6px rgba(255, 170, 0, 0.4);
+    font-weight: 700;
+    font-family: 'Share Tech Mono', monospace;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    user-select: none;
+  }
+  .balance-pill:hover  { background: rgba(255, 170, 0, 0.18); }
+  .balance-pill:active { transform: scale(0.96); }
+  .balance-pill.refreshing { opacity: 0.55; }
+  .balance-pill .lbl { opacity: 0.65; margin-right: 6px; }
+  .balance-pill.error { color: #ff3355; border-color: #ff335555; }
+
+  /* BODY: 2 columns (ring | chat) */
+  .body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    min-height: 0;
+  }
+
+  .left {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border2);
+    min-height: 0;
+    position: relative;
+  }
+
+  /* HUD RING AREA */
+  .hud-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 28px 12px 20px;
+    gap: 18px;
+    flex: 1;
+    position: relative;
+  }
+
+  .hud-stack {
+    position: relative;
+    width: 280px;
+    height: 280px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .ring-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .ring-svg.outer { animation: rot-cw  18s linear infinite; }
+  .ring-svg.mid   { animation: rot-ccw 12s linear infinite; }
+  .ring-svg.inner { animation: rot-cw   8s linear infinite; }
+  @keyframes rot-cw  { from { transform: rotate(0deg); }   to { transform: rotate(360deg); } }
+  @keyframes rot-ccw { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+
+  /* The ring itself */
+  .hud-ring {
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    border: 2px solid var(--cyan);
+    box-shadow: 0 0 24px #00f7ff55, inset 0 0 24px #00f7ff15;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 2;
+    transition: border-color 0.4s, box-shadow 0.4s;
+    animation: ring-idle 3s ease-in-out infinite;
+    overflow: hidden;
+  }
+  .hud-ring.listening  { border-color: var(--green); animation: ring-listen 0.8s ease-in-out infinite; }
+  .hud-ring.thinking   { border-color: var(--amber); animation: ring-think  1.5s ease-in-out infinite; }
+  .hud-ring.speaking   { border-color: var(--cyan);  animation: ring-speak  0.4s ease-in-out infinite alternate; }
+  /* Brief flash when the wake word fires, distinct from steady listening. */
+  .hud-ring.wake_acked { border-color: var(--green); animation: ring-wake-flash 0.6s ease-out 1 forwards; }
+  /* Follow-up window — paler/slower than full listening so the user can tell. */
+  .hud-ring.followup   { border-color: var(--green); animation: ring-followup 1.6s ease-in-out infinite; opacity: 0.8; }
+
+  @keyframes ring-idle {
+    0%, 100% { box-shadow: 0 0 24px #00f7ff55, inset 0 0 24px #00f7ff15; }
+    50%      { box-shadow: 0 0 40px #00f7ff77, inset 0 0 32px #00f7ff25; }
+  }
+  @keyframes ring-listen {
+    0%, 100% { box-shadow: 0 0 30px #00ff8877, inset 0 0 24px #00ff8822; }
+    50%      { box-shadow: 0 0 60px #00ff88aa, inset 0 0 36px #00ff8844; }
+  }
+  @keyframes ring-think {
+    0%, 100% { box-shadow: 0 0 24px #ffaa0066, inset 0 0 24px #ffaa0022; }
+    50%      { box-shadow: 0 0 50px #ffaa00aa, inset 0 0 30px #ffaa0044; }
+  }
+  @keyframes ring-speak {
+    0%   { box-shadow: 0 0 30px #00f7ff77, inset 0 0 24px #00f7ff22; }
+    100% { box-shadow: 0 0 60px #00f7ffaa, inset 0 0 36px #00f7ff44; }
+  }
+  @keyframes ring-wake-flash {
+    0%   { box-shadow: 0 0 0 0 #00ff8800,  inset 0 0 0 0 #00ff8800; transform: scale(1.00); }
+    35%  { box-shadow: 0 0 80px 16px #00ff88dd, inset 0 0 50px #00ff8866; transform: scale(1.04); }
+    100% { box-shadow: 0 0 30px #00ff8877, inset 0 0 24px #00ff8822; transform: scale(1.00); }
+  }
+  @keyframes ring-followup {
+    0%, 100% { box-shadow: 0 0 18px #00ff8855, inset 0 0 18px #00ff8815; }
+    50%      { box-shadow: 0 0 36px #00ff8888, inset 0 0 26px #00ff8830; }
+  }
+
+  /* 3D scene container — clipped to circle inside the ring */
+  .avatar-face {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: radial-gradient(circle, #001626 50%, #000204 100%);
+    border: 1px solid #00f7ff33;
+    position: relative;
+  }
+  #scene {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #scene canvas { display: block; width: 100% !important; height: 100% !important; }
+
+  /* Status line under ring */
+  .status-line {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px;
+    letter-spacing: 5px;
+    color: #00f7ff99;
+    transition: color 0.4s, text-shadow 0.4s;
+    text-shadow: 0 0 8px currentColor;
+    text-align: center;
+  }
+  .status-line.listening  { color: var(--green); }
+  .status-line.thinking   { color: var(--amber); }
+  .status-line.speaking   { color: var(--cyan); }
+  .status-line.wake_acked { color: var(--green); font-weight: 700; }
+  .status-line.followup   { color: var(--green); opacity: 0.85; }
+
+  /* State-controls below status */
+  .state-controls {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 0 18px 18px;
+  }
+  .btn {
+    background: rgba(0, 200, 255, 0.04);
+    border: 1px solid rgba(58, 216, 255, 0.22);
+    color: rgba(58, 216, 255, 0.6);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    padding: 6px 12px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s;
+    border-radius: 3px;
+  }
+  .btn:hover, .btn.on {
+    background: rgba(0, 200, 255, 0.12);
+    border-color: var(--cyan);
+    color: var(--cyan);
+    box-shadow: 0 0 10px rgba(58, 216, 255, 0.3);
+  }
+
+  /* CHAT */
+  .chat-area {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    position: relative;
+    background: linear-gradient(180deg, #00050c 0%, #000a14 100%);
+  }
+  .chat-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px;
+    letter-spacing: 4px;
+    color: #00f7ff99;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .chat-header .indicator {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    margin-right: 8px;
+    vertical-align: middle;
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: 0.3 } }
+
+  .chat-log {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    scrollbar-width: thin;
+    scrollbar-color: #00f7ff44 transparent;
+  }
+  .chat-log::-webkit-scrollbar { width: 6px; }
+  .chat-log::-webkit-scrollbar-thumb { background: #00f7ff44; border-radius: 3px; }
+  .chat-log::-webkit-scrollbar-track { background: transparent; }
+
+  .msg {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    animation: msg-slide 0.3s ease-out;
+  }
+  @keyframes msg-slide {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .msg.me { flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: #ff00aa15;
+    border: 1px solid var(--magenta);
+    color: var(--magenta);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+    box-shadow: 0 0 8px #ff00aa44;
+  }
+  .msg.me .msg-avatar {
+    background: #00f7ff15;
+    border-color: var(--cyan);
+    color: var(--cyan);
+    box-shadow: 0 0 8px #00f7ff44;
+  }
+  .msg-bubble {
+    max-width: 75%;
+    background: linear-gradient(135deg, #ff00aa10 0%, #ff00aa05 100%);
+    border: 1px solid #ff00aa33;
+    color: #ffd6ee;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    box-shadow: 0 0 12px #ff00aa15;
+  }
+  .msg.me .msg-bubble {
+    background: linear-gradient(135deg, #00f7ff10 0%, #00f7ff05 100%);
+    border-color: #00f7ff33;
+    color: #cfeaff;
+    box-shadow: 0 0 12px #00f7ff15;
+  }
+  .msg-bubble.tool-pending {
+    font-style: italic;
+    color: #ff00aa99;
+    border-style: dashed;
+  }
+
+  /* Chat input */
+  .chat-input-row {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border2);
+    display: flex;
+    gap: 8px;
+    background: #000408;
+  }
+  .chat-input {
+    flex: 1;
+    background: #00f7ff08;
+    border: 1px solid #00f7ff44;
+    border-radius: 4px;
+    padding: 10px 12px;
+    color: #fff;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .chat-input:focus {
+    border-color: var(--cyan);
+    box-shadow: 0 0 10px #00f7ff66;
+  }
+  .send-btn {
+    font-family: 'Orbitron', sans-serif;
+    padding: 8px 18px;
+    border: 1px solid var(--cyan);
+    background: #00f7ff15;
+    color: var(--cyan);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    letter-spacing: 3px;
+    transition: all 0.2s;
+  }
+  .send-btn:hover {
+    background: #00f7ff30;
+    box-shadow: 0 0 12px #00f7ff77;
+  }
+  .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* Loading state for the orb */
+  #orb-loader {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle, #001626 50%, #000204 100%);
+    z-index: 2;
+    transition: opacity 0.5s;
+    pointer-events: none;
+  }
+  #orb-loader.hidden { opacity: 0; }
+  #orb-loader .spinner {
+    width: 28px; height: 28px;
+    border: 1px solid rgba(120, 200, 255, 0.2);
+    border-top-color: rgba(170, 220, 255, 0.95);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── ATTACHMENTS (chips above input + paperclip button + drop zone) ─── */
+  .attach-btn {
+    background: #00f7ff15;
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 18px;
+    padding: 0 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 700;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .attach-btn:hover {
+    background: #00f7ff30;
+    box-shadow: 0 0 10px #00f7ff77;
+  }
+  .attach-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .chat-attachments {
+    display: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 16px 0;
+    background: #000408;
+  }
+  .chat-attachments.has-items { display: flex; }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #00f7ff10;
+    border: 1px solid #00f7ff44;
+    border-radius: 12px;
+    padding: 4px 4px 4px 10px;
+    font-size: 11px;
+    color: #cfeaff;
+    font-family: 'Share Tech Mono', monospace;
+    max-width: 240px;
+  }
+  .chip.processing {
+    border-style: dashed;
+    color: #00f7ff99;
+  }
+  .chip.error {
+    background: #ff335515;
+    border-color: var(--red);
+    color: var(--red);
+  }
+  .chip-icon { font-size: 12px; }
+  .chip-name {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chip-size { color: #00f7ff66; font-size: 9px; }
+  .chip-x {
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #00f7ff22;
+    border: none;
+    color: var(--cyan);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 0;
+    margin-left: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .chip-x:hover {
+    background: #ff335555;
+    color: var(--red);
+  }
+
+  .drop-zone {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 247, 255, 0.12);
+    border: 2px dashed var(--cyan);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 14px;
+    letter-spacing: 4px;
+    color: var(--cyan);
+    text-shadow: 0 0 12px var(--cyan);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 15;
+  }
+  .drop-zone.active { opacity: 1; }
+
+
+  /* ─── PTT (push-to-talk) button — sits next to the attach button. Click to
+        toggle; or hold spacebar (when chat input isn't focused). Pulses red
+        while recording. ─── */
+  .ptt-btn {
+    background: #00f7ff15;
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    padding: 0 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+  }
+  .ptt-btn:hover {
+    background: #00f7ff30;
+    box-shadow: 0 0 10px #00f7ff77;
+  }
+  .ptt-btn.active {
+    background: #ff335530;
+    border-color: var(--red);
+    color: var(--red);
+    box-shadow: 0 0 16px #ff335577;
+    animation: ptt-pulse 1s ease-in-out infinite;
+  }
+  @keyframes ptt-pulse {
+    0%, 100% { box-shadow: 0 0 16px #ff335577; }
+    50%      { box-shadow: 0 0 28px #ff3355aa; }
+  }
+
+  /* ─── STARTUP SPLASH SCREEN ─────────────────────────────────────────── */
+  /* Full-viewport overlay shown on HUD load while Chloe boots. The loading
+     bar's fill duration is set dynamically from the JS once the backend
+     broadcasts boot_start with the audio file's actual duration, so the
+     bar fills in lockstep with the boot sound. */
+  .splash {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: radial-gradient(circle at center,
+                  #001020 0%, #000408 70%, #000000 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    transition: opacity 0.7s ease-out;
+    opacity: 1;
+    overflow: hidden;
+  }
+  .splash.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Subtle moving scanline texture for that "system is initializing" feel */
+  .splash::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      repeating-linear-gradient(0deg,
+        transparent 0,
+        transparent 3px,
+        rgba(0, 247, 255, 0.04) 3px,
+        rgba(0, 247, 255, 0.04) 4px);
+    pointer-events: none;
+    animation: splash-scan 12s linear infinite;
+  }
+  /* Outer glow ring at the center */
+  .splash::after {
+    content: '';
+    position: absolute;
+    width: 600px;
+    height: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+                  rgba(0, 247, 255, 0.10) 0%,
+                  rgba(0, 247, 255, 0.04) 40%,
+                  transparent 70%);
+    animation: splash-glow 4s ease-in-out infinite;
+  }
+  .splash-content {
+    position: relative;
+    text-align: center;
+    font-family: 'Orbitron', sans-serif;
+    z-index: 1;
+  }
+  .splash-title {
+    font-size: 84px;
+    font-weight: 800;
+    letter-spacing: 22px;
+    color: var(--cyan);
+    margin: 0 0 10px 22px;  /* offset right margin to balance letter-spacing */
+    text-shadow:
+      0 0 20px var(--cyan),
+      0 0 50px var(--cyan),
+      0 0 80px rgba(0, 247, 255, 0.5);
+    animation: splash-title-pulse 2.4s ease-in-out infinite;
+  }
+  .splash-subtitle {
+    font-size: 13px;
+    letter-spacing: 9px;
+    color: var(--green);
+    margin: 0 0 36px 9px;
+    opacity: 0.85;
+    text-shadow: 0 0 10px var(--green);
+  }
+  .splash-loading {
+    width: 360px;
+    height: 3px;
+    background: rgba(0, 247, 255, 0.12);
+    border-radius: 2px;
+    margin: 0 auto;
+    overflow: hidden;
+    box-shadow:
+      0 0 8px rgba(0, 247, 255, 0.3),
+      inset 0 0 4px rgba(0, 0, 0, 0.6);
+  }
+  .splash-loading-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, var(--cyan), var(--green));
+    box-shadow: 0 0 12px var(--cyan);
+    /* JS replaces this transition with a dynamic duration on boot_start */
+    transition: width 6000ms linear;
+  }
+  .splash-status {
+    margin-top: 18px;
+    font-size: 10px;
+    letter-spacing: 4px;
+    color: rgba(0, 247, 255, 0.5);
+    min-height: 14px;
+  }
+  @keyframes splash-title-pulse {
+    0%, 100% {
+      text-shadow:
+        0 0 20px var(--cyan),
+        0 0 50px var(--cyan),
+        0 0 80px rgba(0, 247, 255, 0.5);
+    }
+    50% {
+      text-shadow:
+        0 0 30px var(--cyan),
+        0 0 70px var(--cyan),
+        0 0 120px rgba(0, 247, 255, 0.7);
+    }
+  }
+  @keyframes splash-scan {
+    0%   { transform: translateY(0); }
+    100% { transform: translateY(100px); }
+  }
+  @keyframes splash-glow {
+    0%, 100% { transform: scale(0.9); opacity: 0.7; }
+    50%      { transform: scale(1.1); opacity: 1.0; }
+  }
+
+  /* ─── Splash EXIT — "Hologram shutdown" ──────────────────────────────
+     Runs when the JS adds .exiting (after boot_end). Designed as the
+     visual inverse of the previous burst-out style — content compresses
+     inward instead of exploding outward, like an old CRT or hologram
+     powering off. Sequence:
+
+       0–120ms   Lock-in flash       — bright pulse, peak brightness, like
+                                       "all systems confirmed".
+       120–400ms Vertical compress   — content squashes to a thin horizontal
+                                       band at center. Classic CRT shutdown.
+       400–550ms Glitch jitter       — band shakes left/right with chromatic
+                                       hue shift. Brief "system disconnect."
+       550–900ms Horizontal stretch  — band stretches wide and dims, the
+                                       last visual remnant of the splash.
+       900–1100ms Final dissolve     — full fade to transparent → HUD shows.
+
+     Outer glow ring contracts inward instead of expanding (inverse of the
+     previous design). Scanlines flare bright once and fade. */
+
+  .splash.exiting {
+    pointer-events: none;
+    animation: splash-exit-bg 1100ms cubic-bezier(0.55, 0, 0.4, 1) forwards;
+  }
+
+  /* The whole content block animates as a single unit so the title +
+     subtitle + loading bar all compress together. Per-element animations
+     would fight this transform and produce visual chaos. */
+  .splash.exiting .splash-content {
+    animation: splash-exit-shutdown 1000ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+    transform-origin: center center;
+    will-change: transform, opacity, filter;
+  }
+
+  .splash.exiting::before {
+    /* Scanline texture flares bright once, then fades */
+    animation: splash-exit-scanflare 1100ms ease-out forwards;
+  }
+
+  .splash.exiting::after {
+    /* Outer glow ring contracts and dims — opposite of expanding outward */
+    animation: splash-exit-ringfade 1100ms cubic-bezier(0.55, 0, 0.2, 1) forwards;
+  }
+
+  @keyframes splash-exit-bg {
+    0%   { opacity: 1; }
+    11%  { opacity: 1; filter: brightness(1.25); }   /* lock-in flash */
+    25%  { opacity: 1; filter: brightness(1); }
+    70%  { opacity: 0.55; }
+    100% { opacity: 0; }
+  }
+
+  @keyframes splash-exit-shutdown {
+    /* 0%: at rest                                                          */
+    0% {
+      transform: scaleY(1) scaleX(1) translateX(0);
+      opacity: 1;
+      filter: brightness(1) saturate(1);
+    }
+    /* 12%: lock-in flash — slight scale-up, big brightness spike           */
+    12% {
+      transform: scaleY(1.04) scaleX(1.03);
+      opacity: 1;
+      filter: brightness(2.3) saturate(1.3);
+    }
+    /* 30%: vertical compress to a thin horizontal band                     */
+    30% {
+      transform: scaleY(0.06) scaleX(1.08);
+      opacity: 1;
+      filter: brightness(1.9) saturate(1.1);
+    }
+    /* 42%, 48%, 55%: glitch jitter — small horizontal shakes, hue shift   */
+    42% {
+      transform: scaleY(0.06) scaleX(1.08) translateX(11px);
+      filter: brightness(2.0) hue-rotate(8deg);
+    }
+    48% {
+      transform: scaleY(0.06) scaleX(1.08) translateX(-15px);
+      filter: brightness(1.6) hue-rotate(-10deg);
+    }
+    55% {
+      transform: scaleY(0.06) scaleX(1.08) translateX(0);
+      filter: brightness(1.8) hue-rotate(0);
+    }
+    /* 78%: horizontal stretch + dim — band elongates as it dies           */
+    78% {
+      transform: scaleY(0.04) scaleX(1.55);
+      opacity: 0.55;
+      filter: brightness(1.2);
+    }
+    /* 100%: gone                                                           */
+    100% {
+      transform: scaleY(0) scaleX(1.8);
+      opacity: 0;
+      filter: brightness(0.4);
+    }
+  }
+
+  @keyframes splash-exit-scanflare {
+    0%   { opacity: 1; filter: brightness(1); }
+    11%  { opacity: 1; filter: brightness(3); }       /* flare with the lock-in */
+    35%  { opacity: 1; filter: brightness(1.4); }
+    100% { opacity: 0; }
+  }
+
+  @keyframes splash-exit-ringfade {
+    /* Inverse of the previous design's expand-outward ring — this one
+       contracts inward (like the system "settling" into its housing). */
+    0%   { transform: scale(1);   opacity: 1; }
+    18%  { transform: scale(1.15); opacity: 1; filter: brightness(1.8); }
+    55%  { transform: scale(0.7); opacity: 0.6; }
+    100% { transform: scale(0.35); opacity: 0; }
+  }
+
+</style>
+</head>
+<body>
+
+<!-- Startup splash. Visible by default; fades out once the backend
+     broadcasts boot_end (or after the configured fallback timeout). -->
+<div id="splash-screen" class="splash">
+  <div class="splash-content">
+    <div class="splash-title">CHLOE</div>
+    <div class="splash-subtitle">SYSTEMS INITIALIZING</div>
+    <div class="splash-loading">
+      <div class="splash-loading-bar" id="splash-bar"></div>
+    </div>
+    <div class="splash-status" id="splash-status">CONNECTING…</div>
+  </div>
+</div>
+
+<div class="jr">
+  <div class="corner-bl"></div>
+  <div class="corner-br"></div>
+
+  <!-- TOP BAR -->
+  <div class="top-bar">
+    <span class="brand">CHLOE</span>
+    <span class="center">HOME // PRIMARY NODE</span>
+    <span style="display:flex;gap:14px;align-items:center">
+      <span class="sys-tag">ONLINE</span>
+      <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
+        <span class="lbl">₿</span><span id="balance-value">—</span> sat
+      </span>
+      <span id="clock" style="color:var(--cyan);font-weight:700">--:--:--</span>
+    </span>
+  </div>
+
+  <div class="body">
+    <!-- LEFT: HUD RING + 3D ORB -->
+    <div class="left">
+      <div class="hud-area">
+        <div class="hud-stack">
+          <!-- Outer animated ring -->
+          <svg class="ring-svg outer" viewBox="0 0 280 280">
+            <defs>
+              <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%"   stop-color="#00f7ff" stop-opacity="0.8"/>
+                <stop offset="50%"  stop-color="#00f7ff" stop-opacity="0.1"/>
+                <stop offset="100%" stop-color="#00f7ff" stop-opacity="0.8"/>
+              </linearGradient>
+            </defs>
+            <circle cx="140" cy="140" r="135" fill="none" stroke="url(#grad1)" stroke-width="1" stroke-dasharray="4 8"/>
+            <g stroke="#00f7ff" stroke-width="1.5" opacity="0.6">
+              <line x1="140" y1="2"   x2="140" y2="10"/>
+              <line x1="140" y1="270" x2="140" y2="278"/>
+              <line x1="2"   y1="140" x2="10"  y2="140"/>
+              <line x1="270" y1="140" x2="278" y2="140"/>
+            </g>
+            <g stroke="#00f7ff" stroke-width="2" fill="none" opacity="0.7">
+              <path d="M 30 10 L 10 10 L 10 30"/>
+              <path d="M 250 10 L 270 10 L 270 30"/>
+              <path d="M 30 270 L 10 270 L 10 250"/>
+              <path d="M 250 270 L 270 270 L 270 250"/>
+            </g>
+          </svg>
+
+          <!-- Mid ring with cardinal dots -->
+          <svg class="ring-svg mid" viewBox="0 0 280 280">
+            <circle cx="140" cy="140" r="118" fill="none" stroke="#00f7ff33" stroke-width="1"/>
+            <g fill="#00f7ff">
+              <circle cx="140" cy="22"  r="2.5"/>
+              <circle cx="258" cy="140" r="2.5"/>
+              <circle cx="140" cy="258" r="2.5"/>
+              <circle cx="22"  cy="140" r="2.5"/>
+            </g>
+          </svg>
+
+          <!-- Inner ring with arc segments -->
+          <svg class="ring-svg inner" viewBox="0 0 280 280">
+            <circle cx="140" cy="140" r="110" fill="none" stroke="#00f7ff22" stroke-width="1"/>
+            <path d="M 140 30 A 110 110 0 0 1 250 140" fill="none" stroke="#00f7ff" stroke-width="2" opacity="0.8"/>
+            <path d="M 140 250 A 110 110 0 0 1 30 140" fill="none" stroke="#00f7ff" stroke-width="2" opacity="0.5"/>
+          </svg>
+
+          <!-- Core ring with 3D orb canvas inside -->
+          <div class="hud-ring idle" id="ring">
+            <div class="avatar-face">
+              <div id="scene"></div>
+              <div id="orb-loader"><div class="spinner"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="status-line" id="status-line">
+          <span id="status-text">AWAITING COMMAND</span>
+        </div>
+      </div>
+
+      <div class="state-controls">
+        <button class="btn on" data-state="idle"      onclick="setState('idle')">IDLE</button>
+        <button class="btn"    data-state="listening" onclick="setState('listening')">LISTEN</button>
+        <button class="btn"    data-state="thinking"  onclick="setState('thinking')">THINK</button>
+        <button class="btn"    data-state="speaking"  onclick="setState('speaking')">SPEAK</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: CHAT -->
+    <div class="chat-area">
+      <div class="chat-header">
+        <span><span class="indicator"></span>COMM CHANNEL // OPEN</span>
+        <span style="font-size:9px;color:#00f7ff66">CH 01</span>
+      </div>
+      <div class="chat-log" id="chatlog">
+        <div class="msg chloe">
+          <div class="msg-avatar">C</div>
+          <div class="msg-bubble">Online. Standing by.</div>
+        </div>
+      </div>
+      <div class="chat-attachments" id="attachments"></div>
+      <div class="chat-input-row">
+        <button class="attach-btn" id="attach-btn" title="Attach files (PDF, DOCX, XLSX, CSV, TXT, MD, images)" onclick="document.getElementById('file-input').click()">+</button>
+        <button class="ptt-btn" id="ptt-btn" title="Push to talk (click to toggle, or hold spacebar when chat isn't focused)" onclick="togglePtt()">🎤 PTT</button>
+        <input type="text" class="chat-input" id="chat-input" placeholder="Speak to Chloe…" autocomplete="off">
+        <button class="send-btn" id="send-btn" onclick="sendChat()">SEND</button>
+      </div>
+      <input type="file" id="file-input" multiple accept="image/*,.pdf,.docx,.xlsx,.xls,.csv,.txt,.md" style="display:none">
+      <div class="drop-zone" id="drop-zone">DROP FILES TO ATTACH</div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── UI WIRING (non-module so it runs early) ─── -->
+<script>
+  // Clock
+  function tick() {
+    const d = new Date();
+    document.getElementById('clock').textContent =
+      d.toLocaleTimeString('en-US', { hour12: false });
+  }
+  tick(); setInterval(tick, 1000);
+
+  // setState — updates ring + status + buttons. The 3D scene listens for this
+  // by reading window.__chloeState (set below) on every frame.
+  window.__chloeState = 'idle';
+
+  // ─── Web Audio: TTS playback + real-amplitude analyser ──────────────────
+  // The desktop HUD plays Chloe's TTS replies in-browser (via reply_audio:true
+  // in chat sends) so the orb's pulse can be driven by REAL audio amplitude
+  // through an AnalyserNode. Two wins:
+  //   1. desync gone — orb pulses match the audio frame-perfect (same source)
+  //   2. response lag down — no Windows sd.play() buffering on the backend
+  // Exposed on window so the module script's updateAmp() can reach getAmp().
+  const TtsAudio = (() => {
+    let ctx = null, analyser = null, ampBuf = null, currentSource = null, active = false;
+    function ensureCtx() {
+      if (ctx) return ctx;
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) { console.error('[tts] no AudioContext'); return null; }
+      ctx = new Ctor();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      ampBuf = new Uint8Array(analyser.frequencyBinCount);
+      analyser.connect(ctx.destination);
+      return ctx;
+    }
+    async function play(b64, _format, onStart, onEnd) {
+      const c = ensureCtx();
+      if (!c) { onEnd && onEnd(); return; }
+      try { if (c.state === 'suspended') await c.resume(); } catch (_) {}
+      stop();
+      try {
+        const bin = atob(b64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const buffer = await c.decodeAudioData(u8.buffer);
+        const src = c.createBufferSource();
+        src.buffer = buffer;
+        src.connect(analyser);
+        src.onended = () => {
+          if (currentSource === src) {
+            currentSource = null; active = false;
+            onEnd && onEnd();
+          }
+        };
+        currentSource = src;
+        active = true;
+        src.start(0);
+        onStart && onStart();
+      } catch (e) {
+        console.error('[tts] decode/play error', e);
+        active = false;
+        onEnd && onEnd();
+      }
+    }
+    function stop() {
+      if (currentSource) {
+        try { currentSource.onended = null; currentSource.stop(); } catch (_) {}
+        currentSource = null;
+      }
+      active = false;
+    }
+    function getAmp() {
+      if (!active || !analyser) return null;
+      analyser.getByteFrequencyData(ampBuf);
+      // Mean of the low 32 bins — voice band is concentrated there.
+      let sum = 0;
+      const n = Math.min(ampBuf.length, 32);
+      for (let i = 0; i < n; i++) sum += ampBuf[i];
+      return (sum / n) / 255;
+    }
+    return { play, stop, getAmp, isActive: () => active };
+  })();
+  window.TtsAudio = TtsAudio;
+  // While `expectingAudio` is true, the early "speaking" string from the
+  // backend (which fires BEFORE TTS synth is done) is ignored — we wait for
+  // the actual audio buffer to start playing before transitioning state.
+  let expectingAudio = false;
+
+  // All visual states the ring + status line know how to render.
+  // wake_acked  = brief flash right after the wake word fires (auto-resolves
+  //               into 'listening' on the next backend broadcast)
+  // followup    = mic still open after Chloe's reply, listening for a
+  //               spontaneous follow-up without re-saying the wake word
+  const _STATES = ['idle','listening','thinking','speaking','wake_acked','followup'];
+  window.setState = function(s) {
+    if (!_STATES.includes(s)) return;
+    window.__chloeState = s;
+
+    const ring = document.getElementById('ring');
+    ring.classList.remove(..._STATES);
+    ring.classList.add(s);
+
+    const statusLine = document.getElementById('status-line');
+    statusLine.classList.remove(..._STATES);
+    statusLine.classList.add(s);
+
+    const labels = {
+      idle:       'AWAITING COMMAND',
+      listening:  'LISTENING',
+      thinking:   'PROCESSING',
+      speaking:   'TRANSMITTING',
+      wake_acked: 'HEARD YOU',
+      followup:   'FOLLOW-UP',
+    };
+    document.getElementById('status-text').textContent = labels[s] || s.toUpperCase();
+
+    document.querySelectorAll('.btn[data-state]').forEach(b => b.classList.remove('on'));
+    const active = document.querySelector(`.btn[data-state="${s}"]`);
+    if (active) active.classList.add('on');
+  };
+
+  // ────────────────────────────────────────────────────────────────────────
+  // SPLASH SCREEN — shown on initial HUD load, faded out when the backend
+  // signals boot_end (or via a fallback timer). When boot_start arrives the
+  // loading bar's CSS transition duration is rewritten to match the actual
+  // boot-sound length so the bar fills exactly while the audio plays.
+  const splash = {
+    el:        () => document.getElementById('splash-screen'),
+    bar:       () => document.getElementById('splash-bar'),
+    status:    () => document.getElementById('splash-status'),
+    _hideTimer: null,
+    _fallbackTimer: null,
+    _hidden: false,
+
+    setStatus(text) {
+      const s = this.status();
+      if (s) s.textContent = text;
+    },
+
+    onBootStart(durationS) {
+      // Sync the loading bar fill with the boot sound's actual duration.
+      const ms = Math.max(500, Math.round((durationS || 4) * 1000));
+      const bar = this.bar();
+      if (bar) {
+        // Reset width to 0 first, then animate to 100% over `ms`.
+        bar.style.transition = 'none';
+        bar.style.width = '0%';
+        // Force layout so the next style change is recognized as a transition
+        void bar.offsetWidth;
+        bar.style.transition = `width ${ms}ms linear`;
+        bar.style.width = '100%';
+      }
+      this.setStatus('BOOTING');
+      // Schedule the fade just after audio completes (200ms cushion so the
+      // visual finishes alongside the last sound frame, not before).
+      if (this._hideTimer) clearTimeout(this._hideTimer);
+      this._hideTimer = setTimeout(() => this.hide(), ms + 200);
+      // Cancel the conservative fallback now that we have a real duration.
+      if (this._fallbackTimer) {
+        clearTimeout(this._fallbackTimer);
+        this._fallbackTimer = null;
+      }
+    },
+
+    onBootEnd() {
+      // Backend says the sound has finished. Cancel any in-flight hide
+      // timer (we're hiding now) and fade.
+      if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null; }
+      this.hide();
+    },
+
+    hide() {
+      if (this._hidden) return;
+      this._hidden = true;
+      const e = this.el();
+      if (!e) return;
+      // Stage 1 (0-1100ms): polished exit animation — title burst, loading
+      //   bar zap, ring expansion, scanline intensify-then-fade.
+      e.classList.add('exiting');
+      // Stage 2 (post-1100ms): take it out of the layout entirely so it
+      //   can't intercept clicks or eat GPU layers afterwards.
+      setTimeout(() => {
+        e.classList.add('hidden');
+        e.style.display = 'none';
+      }, 1100);
+    },
+
+    // Mark backend connection so the splash can show "STANDBY" instead of
+    // "CONNECTING…" while we wait for boot_start.
+    onConnect() {
+      this.setStatus('STANDBY');
+    },
+
+    // Fallback: if no boot signal arrives within 20s of HUD load, fade the
+    // splash so the user isn't stuck. The window is generous because a
+    // PyInstaller-frozen build needs more time to import jarvis, enumerate
+    // audio devices, load the wake model, and reach _play_boot_chime. In
+    // dev mode (running from source) it's typically <5s; frozen mode can
+    // be 8-15s on first run before the OS file cache is warm.
+    armFallback() {
+      this._fallbackTimer = setTimeout(() => {
+        if (!this._hidden) {
+          console.log('[splash] no boot signal — fading via fallback');
+          this.hide();
+        }
+      }, 20000);
+    },
+  };
+  // Splash is visible by default; arm the fallback timer at script load.
+  splash.armFallback();
+
+  // ────────────────────────────────────────────────────────────────────────
+  // CHAT — talks to jarvis.py via WebSocket on ws://localhost:6789
+  // Protocol (matches jarvis.py handle_chat):
+  //   HUD → backend  : {"type":"chat","messages":[...],"system":"..."}
+  //   backend → HUD  : {"type":"start"} / {"type":"delta","text":"..."} /
+  //                    {"type":"done"} / {"type":"error","text":"..."}
+  // The backend ALSO broadcasts plain strings ("idle"|"listening"|"thinking"|
+  // "speaking") to all clients so the ring tracks the voice path too.
+  // ────────────────────────────────────────────────────────────────────────
+
+  const CHAT_SYSTEM = (
+    "You are Chloe, a personal home assistant. " +
+    "Reply in plain spoken sentences only — no markdown, no lists, no headers. " +
+    "Keep replies short, friendly, and conversational — usually one or two sentences."
+  );
+
+  let ws = null;
+  let wsReady = false;
+  let chatHistory = [];           // [{role:'user'|'assistant', content:'...'}]
+  // Cap chat history so long sessions don't bloat the request payload past
+  // Groq's per-model size limit. Compound-mini (the search model) has only
+  // 8k tokens of context; even Llama-3.3 starts to slow down with huge
+  // history. 16 = roughly 8 exchanges, which is plenty for natural dialogue.
+  const HISTORY_MAX = 16;
+  function _trimHistory() {
+    if (chatHistory.length > HISTORY_MAX) {
+      chatHistory.splice(0, chatHistory.length - HISTORY_MAX);
+    }
+  }
+  let currentReplyEl = null;       // bubble being filled by streaming deltas
+  let currentReplyText = '';
+  let busy = false;
+
+  // Browser TTS removed: chat replies now use the backend's ElevenLabs voice
+  // (same as the voice path), driven by hud_server's "speaking"/"idle"
+  // broadcasts.
+
+  function connectWS() {
+    try {
+      ws = new WebSocket('ws://localhost:6789');
+    } catch (e) {
+      console.error('WS construction failed', e);
+      scheduleReconnect();
+      return;
+    }
+    ws.onopen = () => {
+      wsReady = true;
+      console.log('[hud] connected to Chloe backend');
+      splash.onConnect();
+      // Kick off balance polling — fetch immediately, then every 30s.
+      requestWalletBalance();
+      if (!_balancePollTimer) {
+        _balancePollTimer = setInterval(requestWalletBalance, 30000);
+      }
+    };
+    ws.onclose = () => {
+      wsReady = false;
+      console.log('[hud] WS closed, will reconnect');
+      scheduleReconnect();
+    };
+    ws.onerror = (e) => {
+      console.warn('[hud] WS error', e);
+    };
+    ws.onmessage = (ev) => {
+      const raw = ev.data;
+      // Backend broadcasts plain state strings AND structured chat JSON on the
+      // same connection. Try JSON first; fall back to state string.
+      let data = null;
+      try { data = JSON.parse(raw); } catch (_) {}
+      if (data && typeof data === 'object') {
+        handleStructured(data);
+        return;
+      }
+      if (typeof raw === 'string') {
+        const s = raw.trim().toLowerCase();
+        if (_STATES.includes(s)) {
+          // Suppress the backend's early 'speaking' broadcast while we're
+          // waiting for browser-played TTS audio; the tts_audio handler will
+          // transition to 'speaking' the moment the buffer actually plays.
+          if (s === 'speaking' && expectingAudio) return;
+          setState(s);
+        }
+      }
+    };
+  }
+  let reconnectTimer = null;
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connectWS();
+    }, 1500);
+  }
+
+  function handleStructured(data) {
+    if (data.type === 'boot_start') {
+      // Backend is about to play the boot sound. Sync the splash loading
+      // bar to the audio's actual duration so they finish together.
+      splash.onBootStart(data.duration_s || 4);
+      return;
+    }
+    if (data.type === 'boot_end') {
+      // Backend says the boot sound just finished — fade the splash now.
+      splash.onBootEnd();
+      return;
+    }
+    if (data.type === 'tool_start') {
+      // Backend is running a tool (e.g. web_search). Show a subtle indicator
+      // in a temporary bubble so the user knows we're working on it.
+      const note = data.text || 'Searching…';
+      // If we already have a reply bubble open (from start), update it. Otherwise
+      // make a transient one.
+      if (!currentReplyEl) {
+        currentReplyEl = appendMsg('chloe', '');
+        currentReplyEl.classList.add('tool-running');
+      }
+      const bubble = currentReplyEl.querySelector('.msg-bubble');
+      if (bubble) {
+        bubble.classList.add('tool-pending');
+        bubble.textContent = `🔎 ${note}`;
+      }
+    } else if (data.type === 'start') {
+      // Begin a new assistant bubble (or take over an existing tool-pending one)
+      if (currentReplyEl) {
+        // Reuse the bubble that was showing the tool indicator
+        const bubble = currentReplyEl.querySelector('.msg-bubble');
+        if (bubble) {
+          bubble.classList.remove('tool-pending');
+          bubble.textContent = '';
+        }
+        currentReplyEl.classList.remove('tool-running');
+      } else {
+        currentReplyEl = appendMsg('chloe', '');
+      }
+      currentReplyText = '';
+      setState('thinking');
+    } else if (data.type === 'delta') {
+      const t = data.text || '';
+      currentReplyText += t;
+      if (currentReplyEl) {
+        const bubble = currentReplyEl.querySelector('.msg-bubble');
+        if (bubble) bubble.textContent = currentReplyText;
+        // keep scrolled to bottom while streaming
+        const log = document.getElementById('chatlog');
+        log.scrollTop = log.scrollHeight;
+      }
+    } else if (data.type === 'done') {
+      const reply = currentReplyText.trim();
+      if (reply) {
+        chatHistory.push({ role: 'assistant', content: reply });
+        _trimHistory();
+      }
+      currentReplyEl = null;
+      currentReplyText = '';
+      busy = false;
+      document.getElementById('send-btn').disabled = false;
+      // Stay in 'thinking' until tts_audio arrives and actually starts playing.
+      // The 'speaking' transition happens in the tts_audio handler's onStart
+      // callback so orb pulses align with real audio.
+    } else if (data.type === 'tts_audio') {
+      // Backend shipped TTS bytes; play them in-browser via Web Audio so the
+      // analyser can drive the orb's amplitude in lock-step with the audio.
+      expectingAudio = false;
+      const b64 = data.audio_b64;
+      const fmt = data.format || 'mp3';
+      if (!b64) {
+        console.warn('[hud] tts_audio with empty payload');
+        setState('idle');
+      } else {
+        TtsAudio.play(
+          b64, fmt,
+          () => setState('speaking'),  // onStart — fires when buffer actually plays
+          () => setState('idle')        // onEnd  — fires when playback finishes
+        );
+      }
+    } else if (data.type === 'error') {
+      console.error('[hud] backend error:', data.text);
+      if (currentReplyEl) {
+        const bubble = currentReplyEl.querySelector('.msg-bubble');
+        if (bubble) bubble.textContent = `[error] ${data.text || 'unknown'}`;
+      } else {
+        appendMsg('chloe', `[error] ${data.text || 'unknown'}`);
+      }
+      currentReplyEl = null;
+      currentReplyText = '';
+      busy = false;
+      document.getElementById('send-btn').disabled = false;
+      // Clear the audio-pending guard so a subsequent send isn't stuck.
+      expectingAudio = false;
+      setState('idle');
+    } else if (data.type === 'voice_exchange') {
+      // Voice/PTT exchange from the backend — show user's transcribed question
+      // and Chloe's reply in the chat log so voice activity is visible.
+      if (data.user) {
+        appendMsg('me', '🎤 ' + data.user);
+        chatHistory.push({ role: 'user', content: data.user });
+      }
+      if (data.assistant) {
+        appendMsg('chloe', data.assistant);
+        chatHistory.push({ role: 'assistant', content: data.assistant });
+      }
+      _trimHistory();
+    } else if (data.type === 'ptt_started') {
+      // backend confirmed PTT start — UI already in 'listening' from startPtt()
+    } else if (data.type === 'ptt_stopping') {
+      // backend confirmed PTT stop — it'll now transcribe + reply
+    } else if (data.type === 'ptt_busy') {
+      console.warn('[hud] PTT already active on backend');
+    } else if (data.type === 'ptt_idle') {
+      // PTT stop sent while not active — harmless, no-op
+    } else if (data.type === 'reply' && data.text) {
+      // Non-streaming fallback (used by hud_server when no handler is set)
+      appendMsg('chloe', data.text);
+      busy = false;
+      document.getElementById('send-btn').disabled = false;
+      setState('idle');
+    } else if (data.type === 'wallet_balance_result') {
+      onWalletBalanceResult(data);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // WALLET BALANCE PILL — read-only on the desktop HUD. Send/receive lives
+  // on the mobile PWA. Polls every 30s while the WS is open.
+  // ──────────────────────────────────────────────────────────────────────────
+  let _balancePollTimer = null;
+  function requestWalletBalance() {
+    const pill = document.getElementById('balance-pill');
+    if (pill) pill.classList.add('refreshing');
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'wallet_balance' }));
+    } else if (pill) {
+      // WS not open — clear the pulse anyway so it doesn't get stuck.
+      setTimeout(() => pill.classList.remove('refreshing'), 200);
+    }
+  }
+  function onWalletBalanceResult(data) {
+    const pill = document.getElementById('balance-pill');
+    const val  = document.getElementById('balance-value');
+    if (!pill || !val) return;
+    pill.classList.remove('refreshing');
+    if (!data.ok) {
+      pill.classList.add('error');
+      val.textContent = '—';
+      pill.title = data.error || 'wallet unavailable';
+      return;
+    }
+    pill.classList.remove('error');
+    const sat = data.balance_sat || 0;
+    val.textContent = sat.toLocaleString();
+    const parts = [`Bitcoin Lightning balance: ${sat.toLocaleString()} sat`];
+    if (data.pending_receive_sat) parts.push(`+${data.pending_receive_sat.toLocaleString()} incoming`);
+    if (data.pending_send_sat)    parts.push(`-${data.pending_send_sat.toLocaleString()} outgoing`);
+    parts.push('(click to refresh — full wallet UI is on the mobile PWA)');
+    pill.title = parts.join(' · ');
+  }
+  // Click pill → manual refresh.
+  document.addEventListener('DOMContentLoaded', () => {
+    const pill = document.getElementById('balance-pill');
+    if (pill) pill.addEventListener('click', requestWalletBalance);
+  });
+
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // ATTACHMENTS — file picker + drag-drop, with browser-side text extraction
+  // for docs (pdf.js / mammoth.js / SheetJS) and base64 passthrough for images.
+  // ──────────────────────────────────────────────────────────────────────────
+  const MAX_FILE_SIZE  = 10 * 1024 * 1024;  // 10 MB per file
+  const MAX_TOTAL_SIZE = 25 * 1024 * 1024;  // 25 MB across all attachments
+  let attachments = [];  // [{kind, filename, size, ...}]
+
+  function totalAttachmentSize() {
+    return attachments.reduce((s, a) => s + (a.size || 0), 0);
+  }
+
+  function fmtSize(n) {
+    if (n < 1024) return n + 'B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(0) + 'KB';
+    return (n / (1024 * 1024)).toFixed(1) + 'MB';
+  }
+
+  async function handleFiles(fileList) {
+    for (const file of fileList) {
+      if (file.size > MAX_FILE_SIZE) {
+        appendMsg('chloe', `[error] ${file.name} exceeds 10MB limit (${fmtSize(file.size)})`);
+        continue;
+      }
+      if (totalAttachmentSize() + file.size > MAX_TOTAL_SIZE) {
+        appendMsg('chloe', `[error] adding ${file.name} would exceed 25MB total attachment limit`);
+        continue;
+      }
+      // Show a "processing" chip immediately so the user gets feedback while
+      // pdf.js/mammoth/xlsx work through bigger files.
+      const placeholder = {
+        kind: 'pending',
+        filename: file.name,
+        size: file.size,
+        type: 'Loading',
+      };
+      attachments.push(placeholder);
+      renderChips();
+
+      try {
+        const att = await processFile(file);
+        const idx = attachments.indexOf(placeholder);
+        if (idx >= 0) attachments[idx] = att;
+        renderChips();
+      } catch (e) {
+        console.error('[hud] failed to process', file.name, e);
+        const idx = attachments.indexOf(placeholder);
+        if (idx >= 0) {
+          attachments[idx] = {
+            kind: 'error',
+            filename: file.name,
+            size: file.size,
+            error: e.message || String(e),
+          };
+        }
+        renderChips();
+      }
+    }
+    document.getElementById('file-input').value = '';
+  }
+
+  async function processFile(file) {
+    const ext  = (file.name.split('.').pop() || '').toLowerCase();
+    const mime = (file.type || '').toLowerCase();
+
+    if (mime.startsWith('image/')) {
+      const dataUrl = await readAsDataUrl(file);
+      return { kind: 'image', filename: file.name, size: file.size, dataUrl, mediaType: mime };
+    }
+    if (ext === 'pdf' || mime === 'application/pdf') {
+      const text = await extractPdfText(file);
+      return { kind: 'text', filename: file.name, size: file.size, text, type: 'PDF' };
+    }
+    if (ext === 'docx' || mime.includes('wordprocessingml')) {
+      const text = await extractDocxText(file);
+      return { kind: 'text', filename: file.name, size: file.size, text, type: 'Word' };
+    }
+    if (['xlsx', 'xls'].includes(ext) ||
+        mime.includes('spreadsheetml') || mime === 'application/vnd.ms-excel') {
+      const text = await extractXlsxText(file);
+      return { kind: 'text', filename: file.name, size: file.size, text, type: 'Spreadsheet' };
+    }
+    if (['csv', 'txt', 'md'].includes(ext) ||
+        mime === 'text/plain' || mime === 'text/csv' || mime === 'text/markdown') {
+      const text = await readAsText(file);
+      const typeLabel = ext === 'csv' ? 'CSV' : (ext === 'md' ? 'Markdown' : 'Text');
+      return { kind: 'text', filename: file.name, size: file.size, text, type: typeLabel };
+    }
+    throw new Error(`Unsupported file type: ${ext || mime || 'unknown'}`);
+  }
+
+  function readAsDataUrl(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = () => rej(r.error || new Error('FileReader failed'));
+      r.readAsDataURL(file);
+    });
+  }
+  function readAsText(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = () => rej(r.error || new Error('FileReader failed'));
+      r.readAsText(file);
+    });
+  }
+
+  async function extractPdfText(file) {
+    if (typeof pdfjsLib === 'undefined') throw new Error('PDF library not loaded');
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = '';
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(i => i.str).join(' ');
+      text += `\n--- Page ${p} ---\n${pageText}\n`;
+    }
+    if (!text.trim()) {
+      throw new Error('No extractable text (scanned PDF? OCR not supported)');
+    }
+    return text;
+  }
+  async function extractDocxText(file) {
+    if (typeof mammoth === 'undefined') throw new Error('DOCX library not loaded');
+    const buf = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer: buf });
+    return result.value || '';
+  }
+  async function extractXlsxText(file) {
+    if (typeof XLSX === 'undefined') throw new Error('XLSX library not loaded');
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: 'array' });
+    let text = '';
+    for (const name of wb.SheetNames) {
+      const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name]);
+      text += `\n--- Sheet: ${name} ---\n${csv}\n`;
+    }
+    return text;
+  }
+
+  function renderChips() {
+    const c = document.getElementById('attachments');
+    if (!c) return;
+    if (attachments.length === 0) {
+      c.classList.remove('has-items');
+      c.innerHTML = '';
+      return;
+    }
+    c.classList.add('has-items');
+    c.innerHTML = attachments.map((a, i) => {
+      let icon = '📄', cls = '';
+      if (a.kind === 'image')   icon = '🖼';
+      if (a.kind === 'pending') { icon = '⏳'; cls = 'processing'; }
+      if (a.kind === 'error')   { icon = '⚠'; cls = 'error'; }
+      const label = a.kind === 'error' ? `${a.filename} — ${a.error}` : a.filename;
+      return `<span class="chip ${cls}" title="${escapeAttr(label)}">
+        <span class="chip-icon">${icon}</span>
+        <span class="chip-name">${escapeAttr(a.filename)}</span>
+        <span class="chip-size">${fmtSize(a.size || 0)}</span>
+        <button class="chip-x" onclick="removeAttachment(${i})" title="Remove">×</button>
+      </span>`;
+    }).join('');
+  }
+  function escapeAttr(s) {
+    return String(s).replace(/[<>&"']/g, ch => ({
+      '<':'&lt;', '>':'&gt;', '&':'&amp;', '"':'&quot;', "'":'&#39;'
+    }[ch]));
+  }
+  window.removeAttachment = function(i) {
+    attachments.splice(i, 1);
+    renderChips();
+  };
+
+  // Drag-and-drop on the chat panel
+  function wireDragDrop() {
+    const chatArea = document.querySelector('.chat-area');
+    const dropZone = document.getElementById('drop-zone');
+    if (!chatArea || !dropZone) return;
+    let dragCounter = 0;
+    chatArea.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      dragCounter++;
+      dropZone.classList.add('active');
+    });
+    chatArea.addEventListener('dragover', (e) => { e.preventDefault(); });
+    chatArea.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        dropZone.classList.remove('active');
+      }
+    });
+    chatArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      dropZone.classList.remove('active');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleFiles(e.dataTransfer.files);
+      }
+    });
+    // Prevent the browser from navigating away if a file is dropped outside the zone
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => e.preventDefault());
+  }
+
+  function wireFilePicker() {
+    const inp = document.getElementById('file-input');
+    if (!inp) return;
+    inp.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // PUSH-TO-TALK — clicks the PTT button OR holds spacebar to bypass the wake
+  // word and record for as long as you want. Backend handles audio capture
+  // (sounddevice) and runs the same transcribe → ask Groq → speak pipeline.
+  // ──────────────────────────────────────────────────────────────────────────
+  let pttActive = false;
+
+  window.togglePtt = function() {
+    if (pttActive) stopPtt();
+    else startPtt();
+  };
+  function startPtt() {
+    if (pttActive) return;
+    if (!wsReady) {
+      appendMsg('chloe', '[error] Not connected to Chloe backend.');
+      scheduleReconnect();
+      return;
+    }
+    pttActive = true;
+    document.getElementById('ptt-btn').classList.add('active');
+    setState('listening');
+    try { ws.send(JSON.stringify({ type: 'ptt_start' })); }
+    catch (e) { console.error('[hud] ptt_start send failed', e); }
+  }
+  function stopPtt() {
+    if (!pttActive) return;
+    pttActive = false;
+    document.getElementById('ptt-btn').classList.remove('active');
+    setState('thinking');  // backend will broadcast actual state during processing
+    try { ws.send(JSON.stringify({ type: 'ptt_stop' })); }
+    catch (e) { console.error('[hud] ptt_stop send failed', e); }
+  }
+
+  // Spacebar hold-to-talk. Skip if user is typing in an input/textarea/etc.
+  function _isTextEditable(el) {
+    if (!el) return false;
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    if (e.repeat) return;  // ignore key auto-repeat
+    if (_isTextEditable(document.activeElement)) return;
+    e.preventDefault();
+    startPtt();
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    if (_isTextEditable(document.activeElement)) return;
+    e.preventDefault();
+    stopPtt();
+  });
+
+  window.sendChat = function() {
+    if (busy) return;
+    const inp = document.getElementById('chat-input');
+    const text = inp.value.trim();
+
+    // Block sending if any attachment is still processing or errored
+    const pending = attachments.filter(a => a.kind === 'pending');
+    if (pending.length > 0) {
+      appendMsg('chloe', `[error] Wait — still processing ${pending.length} attachment(s)`);
+      return;
+    }
+    const errored = attachments.filter(a => a.kind === 'error');
+    if (errored.length > 0) {
+      appendMsg('chloe', `[error] Remove the failed attachment(s) before sending`);
+      return;
+    }
+    if (!text && attachments.length === 0) return;
+
+    // Build the message content array (Anthropic-style: text + image blocks).
+    // Text-extracted docs go in as text blocks prefixed with their filename so
+    // Chloe sees the doc as labeled context. Images go in as base64 image blocks
+    // — the backend's _to_groq_messages() already converts those to Groq vision
+    // format, and _needs_vision() will route the turn to MODEL_VISION.
+    const content = [];
+    for (const a of attachments) {
+      if (a.kind === 'text') {
+        content.push({
+          type: 'text',
+          text: `[Attached ${a.type}: ${a.filename}]\n\n${a.text}\n\n`,
+        });
+      }
+    }
+    for (const a of attachments) {
+      if (a.kind === 'image') {
+        const base64 = (a.dataUrl.split(',')[1]) || '';
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: a.mediaType, data: base64 },
+        });
+      }
+    }
+    if (text) content.push({ type: 'text', text });
+
+    // Render in the chat log: compact view (don't dump full extracted doc text
+    // into the bubble — the user knows what they attached).
+    const displayParts = [];
+    if (attachments.length > 0) {
+      const tags = attachments.map(a =>
+        (a.kind === 'image' ? '🖼 ' : '📄 ') + a.filename);
+      displayParts.push(`[Attached: ${tags.join(', ')}]`);
+    }
+    if (text) displayParts.push(text);
+    appendMsg('me', displayParts.join('\n'));
+
+    // Backend sees the FULL attachment payload this turn. For chat history we
+    // store only the compact marker so future turns don't carry every doc's
+    // full text (would balloon token usage and rate-limit risk). Intentional.
+    const fullMessage    = { role: 'user', content };
+    const historyMessage = { role: 'user', content: displayParts.join('\n') };
+    const payload        = chatHistory.concat([fullMessage]);
+    chatHistory.push(historyMessage);
+    _trimHistory();
+
+    inp.value = '';
+    attachments = [];
+    renderChips();
+
+    if (!wsReady) {
+      appendMsg('chloe', '[error] Not connected to Chloe backend. Is Chloe running?');
+      scheduleReconnect();
+      return;
+    }
+
+    busy = true;
+    document.getElementById('send-btn').disabled = true;
+    setState('thinking');
+
+    try {
+      // reply_audio:true ships TTS bytes over WS so the browser plays them and
+      // the orb can react to real audio amplitude. expectingAudio guards the
+      // early "speaking" broadcast from kicking off synthetic syllables.
+      expectingAudio = true;
+      ws.send(JSON.stringify({
+        type: 'chat',
+        messages: payload,
+        system: CHAT_SYSTEM,
+        max_tokens: 1024,
+        reply_audio: true,
+      }));
+    } catch (e) {
+      console.error('[hud] send failed', e);
+      busy = false;
+      document.getElementById('send-btn').disabled = false;
+      setState('idle');
+      appendMsg('chloe', `[error] failed to send: ${e.message || e}`);
+    }
+  };
+
+  function appendMsg(who, text) {
+    const log = document.getElementById('chatlog');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + who;
+    wrap.innerHTML = `
+      <div class="msg-avatar">${who === 'me' ? 'E' : 'C'}</div>
+      <div class="msg-bubble"></div>
+    `;
+    wrap.querySelector('.msg-bubble').textContent = text;
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return wrap;
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const inp = document.getElementById('chat-input');
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    });
+    // Wire attachment UI (paperclip button + drag-drop overlay)
+    wireFilePicker();
+    wireDragDrop();
+    // Connect to backend
+    connectWS();
+  });
+</script>
+
+<!-- ─── THREE.JS IMPORT MAP ─── -->
+<script type="importmap">
+{
+  "imports": {
+    "three":          "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/":  "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<!-- ─── 3D GALAXY ORB (inlined from holo-app.js + holo-orb.js + holo-particles.js + holo-postfx.js) ─── -->
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }     from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass }     from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass }     from 'three/addons/postprocessing/OutputPass.js';
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSTFX (from holo-postfx.js)
+// ════════════════════════════════════════════════════════════════════════════
+const ChromaScanlinePass = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime:    { value: 0 },
+    uChroma:  { value: 0.0018 },
+    uScan:    { value: 0.05 },
+    uVignette:{ value: 0.7 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uChroma;
+    uniform float uScan;
+    uniform float uVignette;
+    varying vec2 vUv;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+    void main() {
+      vec2 uv = vUv;
+      vec2 dir = (uv - 0.5);
+      float dist = length(dir);
+
+      float ca = uChroma * (0.5 + dist * 1.5);
+      vec2 dN = normalize(dir + vec2(0.001));
+      float r = texture2D(tDiffuse, uv + dN * ca).r;
+      float g = texture2D(tDiffuse, uv).g;
+      float b = texture2D(tDiffuse, uv - dN * ca).b;
+      vec3 col = vec3(r, g, b);
+
+      float scan = sin(uv.y * 800.0 + uTime * 0.5) * 0.5 + 0.5;
+      col *= 1.0 - scan * uScan;
+
+      float noise = hash(vec2(uv.y * 200.0, floor(uTime * 24.0))) * 0.04;
+      col += vec3(noise * 0.3, noise * 0.5, noise) * 0.5;
+
+      float vig = smoothstep(0.95, 0.4, dist);
+      col *= mix(1.0, vig, uVignette);
+
+      col = mix(col, col * vec3(0.85, 0.95, 1.1), 0.25);
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// GALAXY ORB (from holo-orb.js)
+// ════════════════════════════════════════════════════════════════════════════
+const orbVertex = `
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+
+  uniform float uTime;
+  uniform float uAmp;
+  uniform float uDeform;
+
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    float n000 = hash(i);
+    float n100 = hash(i+vec3(1,0,0));
+    float n010 = hash(i+vec3(0,1,0));
+    float n110 = hash(i+vec3(1,1,0));
+    float n001 = hash(i+vec3(0,0,1));
+    float n101 = hash(i+vec3(1,0,1));
+    float n011 = hash(i+vec3(0,1,1));
+    float n111 = hash(i+vec3(1,1,1));
+    return mix(
+      mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+      mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+      f.z);
+  }
+
+  void main() {
+    vec3 p = position;
+    vec3 N = normalize(p);
+    float n = noise(N * 2.5 + uTime * 0.4);
+    float n2 = noise(N * 5.0 - uTime * 0.6);
+    float deform = (n - 0.5) * 0.10 + (n2 - 0.5) * 0.04;
+    p += N * (deform * uDeform + uAmp * 0.06);
+
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = normalize(normalMatrix * N);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+
+const orbFragment = `
+  varying vec3 vNormal;
+  varying vec3 vWorldPos;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+
+  uniform float uTime;
+  uniform float uAmp;
+  uniform float uTurbulence;
+  uniform float uSpiralSpeed;
+  uniform vec3  uCoreColor;
+  uniform vec3  uMidColor;
+  uniform vec3  uEdgeColor;
+  uniform float uOpacity;
+
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(
+      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 5; i++) { v += a * noise3(p); p *= 2.05; a *= 0.5; }
+    return v;
+  }
+
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+
+    vec3 lp = normalize(vLocalPos);
+    float lat = asin(lp.y);
+    float lon = atan(lp.z, lp.x);
+
+    float spiral = lon + lat * 3.0 + uTime * uSpiralSpeed;
+
+    vec3 q = vec3(cos(spiral) * 1.6, lat * 1.8, sin(spiral) * 1.6);
+    float galaxy = fbm(q + uTime * 0.15);
+    float fineDetail = fbm(q * 3.5 - uTime * 0.25);
+    float arms = pow(0.5 + 0.5 * sin(spiral * 3.0 + galaxy * 4.0 + uTurbulence * 6.0 * sin(uTime * 0.7)), 2.5);
+
+    float density = arms * (galaxy * 0.7 + fineDetail * 0.3);
+    density = pow(density, 1.5);
+    density += 0.15 * fineDetail;
+
+    float starField = pow(noise3(lp * 50.0 + uTime * 0.05), 22.0) * 14.0;
+
+    vec3 col = mix(uEdgeColor, uMidColor, density);
+    col = mix(col, uCoreColor, pow(density, 2.5));
+    col += uCoreColor * starField;
+
+    col *= 1.0 + uAmp * 0.7;
+
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    col += uEdgeColor * fres * 0.9;
+    col += uMidColor  * pow(fres, 6.0) * 1.6;
+
+    float pulse = sin(length(vLocalPos) * 18.0 - uTime * 6.0) * 0.5 + 0.5;
+    pulse = pow(pulse, 8.0);
+    col += uCoreColor * pulse * uAmp * 0.6;
+
+    float scan = sin(vWorldPos.y * 240.0 + uTime * 1.5) * 0.5 + 0.5;
+    col += uEdgeColor * pow(scan, 6.0) * 0.04;
+
+    col = col / (1.0 + col * 0.35);
+
+    float alpha = clamp(density * 0.85 + fres * 0.6 + 0.22, 0.0, 1.0) * uOpacity;
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const shellVertex = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  void main() {
+    vec3 p = position;
+    vec3 N = normalize(p);
+    p += N * (sin(uTime * 1.2) * 0.015 + uAmp * 0.10);
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vNormal = normalize(normalMatrix * N);
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+const shellFragment = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uAmp;
+  uniform vec3  uColor;
+
+  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float noise3(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(
+      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
+      f.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) { v += a * noise3(p); p *= 2.0; a *= 0.5; }
+    return v;
+  }
+
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);
+
+    float wisp = fbm(vLocalPos * 2.5 + uTime * 0.3);
+    wisp = pow(wisp, 1.6);
+
+    vec3 col = uColor * (wisp * 1.2 + fres * 1.5);
+    col += uColor * pow(fres, 8.0) * 2.0;
+
+    col *= 1.0 + uAmp * 0.9;
+
+    float alpha = (fres * 0.7 + wisp * 0.4) * (0.55 + uAmp * 0.4);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const pulseVertex = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform float uTime;
+  uniform float uScale;
+  void main() {
+    vec3 p = position * uScale;
+    vLocalPos = p;
+    vec4 worldPos = modelMatrix * vec4(p, 1.0);
+    vNormal = normalize(normalMatrix * normalize(position));
+    vViewDir = normalize(cameraPosition - worldPos.xyz);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
+  }
+`;
+const pulseFragment = `
+  varying vec3 vNormal;
+  varying vec3 vViewDir;
+  varying vec3 vLocalPos;
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(vViewDir);
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    fres = pow(fres, 1.5);
+    float alpha = fres * uOpacity;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(uColor * (1.0 + fres * 1.5), alpha);
+  }
+`;
+
+function buildOrb() {
+  const group = new THREE.Group();
+
+  // Inner galaxy core
+  const coreGeo = new THREE.SphereGeometry(0.78, 96, 96);
+  const coreUniforms = {
+    uTime:         { value: 0 },
+    uAmp:          { value: 0 },
+    uDeform:       { value: 1.0 },
+    uTurbulence:   { value: 0.3 },
+    uSpiralSpeed:  { value: 0.15 },
+    uCoreColor:    { value: new THREE.Color(0xffe8aa) },
+    uMidColor:     { value: new THREE.Color(0x4a9eff) },
+    uEdgeColor:    { value: new THREE.Color(0x1a3a66) },
+    uOpacity:      { value: 1.0 },
+  };
+  const coreMat = new THREE.ShaderMaterial({
+    vertexShader: orbVertex,
+    fragmentShader: orbFragment,
+    transparent: true,
+    side: THREE.FrontSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: coreUniforms,
+  });
+  const coreMesh = new THREE.Mesh(coreGeo, coreMat);
+  group.add(coreMesh);
+
+  // Outer plasma shell
+  const shellGeo = new THREE.SphereGeometry(0.95, 64, 64);
+  const shellUniforms = {
+    uTime:  { value: 0 },
+    uAmp:   { value: 0 },
+    uColor: { value: new THREE.Color(0x88ccff) },
+  };
+  const shellMat = new THREE.ShaderMaterial({
+    vertexShader: shellVertex,
+    fragmentShader: shellFragment,
+    transparent: true,
+    side: THREE.FrontSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: shellUniforms,
+  });
+  const shellMesh = new THREE.Mesh(shellGeo, shellMat);
+  group.add(shellMesh);
+
+  // Pulse waves pool
+  const pulses = [];
+  const pulseGeo = new THREE.SphereGeometry(1.0, 48, 48);
+  for (let i = 0; i < 5; i++) {
+    const u = {
+      uScale:   { value: 1.0 },
+      uColor:   { value: new THREE.Color(0xaaddff) },
+      uOpacity: { value: 0.0 },
+    };
+    const m = new THREE.ShaderMaterial({
+      vertexShader: pulseVertex,
+      fragmentShader: pulseFragment,
+      transparent: true,
+      side: THREE.FrontSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: u,
+    });
+    const mesh = new THREE.Mesh(pulseGeo, m);
+    mesh.visible = false;
+    group.add(mesh);
+    pulses.push({ mesh, u, age: -1, life: 0 });
+  }
+
+  // Orbiting equatorial rings
+  function makeRing(radius, tubeRadius, color, tilt) {
+    const g = new THREE.TorusGeometry(radius, tubeRadius, 16, 128);
+    const m = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(g, m);
+    mesh.rotation.x = tilt;
+    return mesh;
+  }
+  const ring1 = makeRing(1.10, 0.004, 0x66ccff, Math.PI * 0.42);
+  const ring2 = makeRing(1.22, 0.003, 0x99eeff, Math.PI * 0.55);
+  const ring3 = makeRing(1.35, 0.002, 0x4488cc, Math.PI * 0.48);
+  group.add(ring1); group.add(ring2); group.add(ring3);
+
+  let pulseTimer = 0;
+  let nextPulseSpawn = 0;
+
+  return {
+    group,
+    update({ t, dt, state, amp }) {
+      coreUniforms.uTime.value = t;
+      coreUniforms.uAmp.value = amp;
+      shellUniforms.uTime.value = t;
+      shellUniforms.uAmp.value = amp;
+
+      let turb = 0.25, spiral = 0.15, deform = 1.0;
+      if (state === 'listening') {
+        turb = 0.15; spiral = 0.08; deform = 0.6;
+      } else if (state === 'thinking') {
+        turb = 0.85; spiral = 0.45; deform = 1.4;
+      } else if (state === 'speaking') {
+        turb = 0.55; spiral = 0.25; deform = 1.1 + amp * 0.6;
+      }
+      coreUniforms.uTurbulence.value += (turb - coreUniforms.uTurbulence.value) * 0.08;
+      coreUniforms.uSpiralSpeed.value += (spiral - coreUniforms.uSpiralSpeed.value) * 0.08;
+      coreUniforms.uDeform.value += (deform - coreUniforms.uDeform.value) * 0.08;
+
+      const spinMul = state === 'thinking' ? 4.0 : state === 'speaking' ? 2.5 : state === 'listening' ? 0.6 : 1.0;
+      ring1.rotation.z += dt * 0.25 * spinMul;
+      ring2.rotation.z -= dt * 0.18 * spinMul;
+      ring3.rotation.z += dt * 0.32 * spinMul;
+      ring1.rotation.y += dt * 0.05 * spinMul;
+      ring2.rotation.x += dt * 0.04 * spinMul;
+
+      pulseTimer += dt;
+      if (state === 'speaking' && amp > 0.55 && pulseTimer > nextPulseSpawn) {
+        for (const p of pulses) {
+          if (p.age < 0) {
+            p.age = 0;
+            p.life = 1.2;
+            p.mesh.visible = true;
+            break;
+          }
+        }
+        nextPulseSpawn = pulseTimer + 0.18 + Math.random() * 0.12;
+      }
+      for (const p of pulses) {
+        if (p.age >= 0) {
+          p.age += dt;
+          const k = Math.min(p.age / p.life, 1);
+          const s = 0.95 + k * 1.55;
+          p.u.uScale.value = s;
+          p.u.uOpacity.value = (1.0 - k) * 0.7;
+          if (p.age >= p.life) {
+            p.age = -1;
+            p.mesh.visible = false;
+          }
+        }
+      }
+    },
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PARTICLES (from holo-particles.js)
+// ════════════════════════════════════════════════════════════════════════════
+function buildParticles() {
+  const group = new THREE.Group();
+
+  // Inner orbit — bright tracers
+  const N1 = 120;
+  const inner = new THREE.BufferGeometry();
+  const innerPos = new Float32Array(N1 * 3);
+  const innerData = new Float32Array(N1 * 4);
+  const innerSize = new Float32Array(N1);
+  for (let i = 0; i < N1; i++) {
+    const r = 1.4 + Math.random() * 1.0;
+    const theta0 = Math.random() * Math.PI * 2;
+    const phi0 = (Math.random() - 0.5) * 0.6;
+    const speed = 0.15 + Math.random() * 0.4;
+    innerData.set([r, theta0, phi0, speed], i * 4);
+    innerSize[i] = 0.2 + Math.random() * 0.6;
+  }
+  inner.setAttribute('position', new THREE.BufferAttribute(innerPos, 3));
+  inner.setAttribute('aData', new THREE.BufferAttribute(innerData, 4));
+  inner.setAttribute('aSize', new THREE.BufferAttribute(innerSize, 1));
+
+  const innerMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x88ddff) },
+      uPxRatio: { value: window.devicePixelRatio || 1 },
+    },
+    vertexShader: `
+      attribute vec4 aData;
+      attribute float aSize;
+      uniform float uTime;
+      uniform float uPxRatio;
+      varying float vAlpha;
+      void main() {
+        float r = aData.x;
+        float theta = aData.y + uTime * aData.w;
+        float phi = aData.z + sin(uTime * 0.3 + aData.y) * 0.15;
+        vec3 p;
+        p.x = r * cos(theta) * cos(phi);
+        p.y = r * sin(phi);
+        p.z = r * sin(theta) * cos(phi);
+        vAlpha = 0.6 + 0.4 * sin(uTime * 2.0 + aData.y * 5.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = aSize * uPxRatio * (180.0 / -mv.z);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float core = smoothstep(0.5, 0.0, d);
+        float halo = smoothstep(0.5, 0.1, d);
+        vec3 col = uColor * (core * 1.5 + halo * 0.5);
+        gl_FragColor = vec4(col, halo * vAlpha);
+      }
+    `,
+  });
+  const innerPoints = new THREE.Points(inner, innerMat);
+  group.add(innerPoints);
+
+  // Outer dust
+  const N2 = 800;
+  const outer = new THREE.BufferGeometry();
+  const outerPos = new Float32Array(N2 * 3);
+  const outerSize = new Float32Array(N2);
+  const outerSeed = new Float32Array(N2);
+  for (let i = 0; i < N2; i++) {
+    const r = 2.0 + Math.random() * 4.0;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = (Math.random() - 0.5) * Math.PI;
+    outerPos[i*3]   = r * Math.cos(theta) * Math.cos(phi);
+    outerPos[i*3+1] = r * Math.sin(phi);
+    outerPos[i*3+2] = r * Math.sin(theta) * Math.cos(phi);
+    outerSize[i] = 0.3 + Math.random() * 0.6;
+    outerSeed[i] = Math.random() * 100;
+  }
+  outer.setAttribute('position', new THREE.BufferAttribute(outerPos, 3));
+  outer.setAttribute('aSize', new THREE.BufferAttribute(outerSize, 1));
+  outer.setAttribute('aSeed', new THREE.BufferAttribute(outerSeed, 1));
+
+  const outerMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x4488cc) },
+      uPxRatio: { value: window.devicePixelRatio || 1 },
+    },
+    vertexShader: `
+      attribute float aSize;
+      attribute float aSeed;
+      uniform float uTime;
+      uniform float uPxRatio;
+      varying float vAlpha;
+      void main() {
+        vec3 p = position;
+        p.x += sin(uTime * 0.15 + aSeed) * 0.08;
+        p.y += cos(uTime * 0.12 + aSeed * 1.3) * 0.08;
+        p.z += sin(uTime * 0.10 + aSeed * 2.1) * 0.08;
+        vAlpha = 0.3 + 0.4 * sin(uTime * 0.5 + aSeed * 3.0);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        gl_PointSize = aSize * uPxRatio * (160.0 / -mv.z);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying float vAlpha;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        float halo = smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(uColor * halo, halo * vAlpha * 0.5);
+      }
+    `,
+  });
+  const outerPoints = new THREE.Points(outer, outerMat);
+  group.add(outerPoints);
+
+  // Data ring
+  const ringGeo = new THREE.RingGeometry(1.55, 1.62, 128);
+  const ringMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x66bbff) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uColor;
+      varying vec2 vUv;
+      void main() {
+        float a = atan(vUv.y - 0.5, vUv.x - 0.5);
+        float dash = step(0.6, sin(a * 60.0 + uTime * 1.5));
+        float pulse = step(0.7, sin(a * 6.0 - uTime * 2.0));
+        float alpha = (dash * 0.4 + pulse * 0.8);
+        gl_FragColor = vec4(uColor * (0.6 + pulse), alpha);
+      }
+    `,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI * 0.42;
+  ring.position.y = -0.05;
+  group.add(ring);
+
+  const ring2 = new THREE.Mesh(
+    new THREE.RingGeometry(1.95, 1.99, 128),
+    ringMat.clone()
+  );
+  ring2.material.uniforms = {
+    uTime: ringMat.uniforms.uTime,
+    uColor: { value: new THREE.Color(0x3388cc) },
+  };
+  ring2.rotation.x = Math.PI * 0.55;
+  ring2.rotation.z = Math.PI * 0.3;
+  group.add(ring2);
+
+  return {
+    group,
+    update({ t }) {
+      innerMat.uniforms.uTime.value = t;
+      outerMat.uniforms.uTime.value = t;
+      ringMat.uniforms.uTime.value = t;
+      ring.rotation.z = t * 0.05;
+      ring2.rotation.y = -t * 0.03;
+    },
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SCENE SETUP — confined to the .avatar-face container
+// ════════════════════════════════════════════════════════════════════════════
+const container = document.getElementById('scene');
+function getSize() {
+  const r = container.getBoundingClientRect();
+  return { w: r.width || 200, h: r.height || 200 };
+}
+let { w, h } = getSize();
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(w, h);
+renderer.setClearColor(0x000000, 0);  // transparent — let CSS gradient show through
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x000308, 0.015);
+
+const camera = new THREE.PerspectiveCamera(28, w / h, 0.1, 100);
+camera.position.set(0, 0, 5.4);
+camera.lookAt(0, 0, 0);
+
+const avatar = new THREE.Group();
+scene.add(avatar);
+
+const orb = buildOrb();
+avatar.add(orb.group);
+
+const particles = buildParticles();
+scene.add(particles.group);
+
+// Halo behind orb
+const haloGeo = new THREE.PlaneGeometry(7, 7);
+const haloMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  uniforms: {
+    uTime: { value: 0 },
+    uAmp:  { value: 0 },
+    uColor: { value: new THREE.Color(0x3399ff) },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float uTime; uniform vec3 uColor; uniform float uAmp;
+    varying vec2 vUv;
+    void main() {
+      vec2 p = vUv - 0.5;
+      float d = length(p);
+      float glow = smoothstep(0.5, 0.05, d);
+      glow = pow(glow, 2.0);
+      float pulse = 0.7 + 0.3 * sin(uTime * 0.7) + uAmp * 0.6;
+      gl_FragColor = vec4(uColor * glow * pulse * 0.30, glow * 0.30);
+    }
+  `,
+});
+const halo = new THREE.Mesh(haloGeo, haloMat);
+halo.position.z = -1.4;
+scene.add(halo);
+
+// Postprocessing
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.5, 0.55);
+composer.addPass(bloom);
+const chromaScan = new ShaderPass(ChromaScanlinePass);
+composer.addPass(chromaScan);
+composer.addPass(new OutputPass());
+
+// ════════════════════════════════════════════════════════════════════════════
+// AMPLITUDE SIMULATION — drives orb visuals based on current state
+// ════════════════════════════════════════════════════════════════════════════
+function hashN(n) { return Math.abs(Math.sin(n * 12.9898) * 43758.5453) % 1; }
+function pnoise(t) {
+  const i = Math.floor(t), f = t - i;
+  const a = hashN(i), b = hashN(i + 1);
+  const u = f * f * (3 - 2 * f);
+  return a * (1 - u) + b * u;
+}
+let amp = 0;
+let speakSyllable = 0, nextSyllable = 0;
+function updateAmp(t, dt, state) {
+  let target = 0;
+  if (state === 'idle') {
+    target = 0.10 + Math.sin(t * 0.9) * 0.05 + pnoise(t * 0.6) * 0.06;
+  } else if (state === 'listening') {
+    target = 0.20 + pnoise(t * 1.2) * 0.35 + pnoise(t * 3.7) * 0.12;
+  } else if (state === 'thinking') {
+    target = 0.35 + pnoise(t * 2.3) * 0.25 + pnoise(t * 5.1) * 0.10;
+  } else if (state === 'speaking') {
+    // Prefer real audio amplitude from the AnalyserNode when in-browser TTS
+    // is playing — orb pulses then match the audio frame-perfect because
+    // they share the same source. Falls back to synthetic syllables if we're
+    // displaying 'speaking' from a backend-only path (e.g. wake-word loop).
+    const realAmp = (typeof window !== 'undefined' && window.TtsAudio)
+                    ? window.TtsAudio.getAmp() : null;
+    if (realAmp !== null) {
+      // Light noise floor so the orb has a hint of life on quiet phonemes.
+      target = 0.20 + realAmp * 0.85 + pnoise(t * 8) * 0.04;
+    } else {
+      speakSyllable -= dt;
+      if (speakSyllable <= 0) {
+        nextSyllable = 0.85 + Math.random() * 0.5;
+        speakSyllable = 0.08 + Math.random() * 0.20;
+      }
+      const env = Math.max(0, Math.sin((1 - speakSyllable / 0.28) * Math.PI));
+      target = 0.20 + env * nextSyllable + pnoise(t * 8) * 0.08;
+    }
+  }
+  amp += (target - amp) * 0.18;
+  amp = Math.max(0, Math.min(1, amp));
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ANIMATE
+// ════════════════════════════════════════════════════════════════════════════
+const clock = new THREE.Clock();
+
+function animate() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.getElapsedTime();
+
+  const state = window.__chloeState || 'idle';
+  updateAmp(t, dt, state);
+
+  const baseSpin = state === 'thinking' ? 0.35 : state === 'speaking' ? 0.15 : 0.08;
+  avatar.rotation.y += dt * baseSpin;
+
+  const breathe = 1.0 + amp * 0.04;
+  avatar.scale.setScalar(breathe);
+
+  orb.update({ t, dt, state, amp });
+  particles.update({ t, dt, state, amp });
+
+  haloMat.uniforms.uTime.value = t;
+  haloMat.uniforms.uAmp.value = amp;
+  chromaScan.uniforms.uTime.value = t;
+
+  composer.render();
+  requestAnimationFrame(animate);
+}
+
+// Hide loader once first frame is rendered
+requestAnimationFrame(() => {
+  const l = document.getElementById('orb-loader');
+  if (l) {
+    l.classList.add('hidden');
+    setTimeout(() => l.remove(), 600);
+  }
+  animate();
+});
+
+// Resize observer — keep orb sized to the ring container
+const ro = new ResizeObserver(() => {
+  const s = getSize();
+  if (s.w === 0 || s.h === 0) return;
+  renderer.setSize(s.w, s.h);
+  composer.setSize(s.w, s.h);
+  bloom.setSize(s.w, s.h);
+  camera.aspect = s.w / s.h;
+  camera.updateProjectionMatrix();
+});
+ro.observe(container);
+
+// Init state
+window.setState('idle');
+</script>
+
+</body>
+</html>

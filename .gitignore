@@ -1,0 +1,106 @@
+# ─── Secrets — NEVER commit ──────────────────────────────────────────────────
+.env
+_env
+.env.*
+!.env.example
+*.seed
+*.key
+*.pem
+secrets/
+C:/Chloe/secrets/
+
+# ─── Personal data — would leak conversation history / wallet state ─────────
+chloe_memory.db
+chloe_memory.db-journal
+chloe_memory.db-wal
+breez_data/
+wallet_data/
+chloe.log
+*.log
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.installed.cfg
+
+# ─── Virtual environments ────────────────────────────────────────────────────
+venv/
+venv_*/
+env/
+.venv/
+ENV/
+
+# ─── PyInstaller build artifacts ─────────────────────────────────────────────
+build/
+dist/
+*.spec.lock
+*.exe
+
+# ─── Heavy model files (download separately, don't bundle in git) ───────────
+models/
+kokoro_models/
+sounds/
+*.onnx
+*.ppn
+
+# ─── Editor / OS noise ───────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Backup files from sed / Edit operations ────────────────────────────────
+*.bak
+*.bak.*
+*.backup
+*~
+
+# ─── HUD / build temporary artifacts ────────────────────────────────────────
+hud.html.bak.*
+jarvis.py.bak*
+hud_server.py.bak*
+start_jarvis.py.bak*
+
+# ─── Audio scratch ───────────────────────────────────────────────────────────
+*.mp3
+*.wav
+!boot.mp3
+!sounds/*
+
+# ─── Misc ────────────────────────────────────────────────────────────────────
+requirements_frozen.txt
+test.mp3
+image.jpg
+copy_of_*.py
+apply_introspection_patch.py
+_copy_*.bat
+
+# ─── Internal docs / personal data — would leak personal context ─────────────
+# facts.md is the runtime personal-facts file Chloe reads at startup.
+facts.md
+# Persona / about docs Chloe loads at runtime — keep local, not on GitHub.
+chloe_about.md
+chloe_self.md
+chloe_handoff.md
+# Internal planning + handoff notes — not for public consumption.
+SESSION_HANDOFF_*.md
+NEXT_FEATURES_PLAN.md
+HANDOFF_NEXT_CHAT.md
+VOICE_BIOMETRICS_PLAN.md
+MOBILE_SETUP.md
+COMMANDS.md
+WALLET_PLAN.md
+WALLET_SETUP.md
+# Empty junk file at repo root.
+python
+# Old face-asset directory; review and add back selectively if needed.
+JarvisFace/

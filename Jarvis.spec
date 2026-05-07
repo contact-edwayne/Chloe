@@ -1,0 +1,150 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""
+PyInstaller spec for Chloe.
+
+Build:
+    (venv) C:\\Users\\eleew\\Documents\\jarvis> pyinstaller Jarvis.spec --clean
+
+Output: dist\\Chloe\\Chloe.exe (plus _internal/ folder).
+
+After building, copy these into dist\\Chloe\\ alongside Chloe.exe so the
+exe can find them at runtime:
+    _env                    (or .env / env)
+    chloe_about.md          (self-knowledge file)
+    facts.md                (will be auto-created if missing)
+    models\\                (custom wake-word ONNX files)
+    sounds\\                (boot.mp3 etc)
+    kokoro_models\\         (Kokoro TTS model + voices)
+
+These are kept OUTSIDE the bundled exe so they can be edited / updated
+without rebuilding, and so the exe size stays manageable (Kokoro alone
+is ~330MB).
+
+Logging: with console=False, all stdout/stderr from start_jarvis.py and
+its threads goes to chloe.log next to the exe. Tail that file if Chloe
+fails to start.
+"""
+
+from PyInstaller.utils.hooks import collect_all
+
+# Cast a wide net: any package that ships JSON / DLL / model data via
+# importlib.resources or pkg_resources needs collect_all so PyInstaller
+# bundles those non-Python files. Each previous build kept failing on a
+# different missing data file (kokoro_onnx/config.json, then
+# language_tags/data/json/index.json, ...). Rather than play whack-a-mole,
+# bulk-collect everything in kokoro's transitive dependency tree.
+#
+# Packages that are actually installed get bundled; missing ones are
+# skipped silently so the spec works regardless of what's pip-installed.
+_PKGS_TO_COLLECT = (
+    'kokoro_onnx',     # the TTS engine itself
+    'misaki',          # kokoro's IPA phonemizer
+    'onnxruntime',     # ONNX inference (DLLs + config)
+    'language_tags',   # IETF BCP 47 language code lookup (JSON data)
+    'num2words',       # spell out numbers ("123" -> "one hundred twenty-three")
+    'inflect',         # plural/singular for English
+    'phonemizer',      # alternative phonemizer some Kokoro variants use
+    'espeakng_loader', # ships espeak-ng-data/ — Kokoro requires this directory
+    'nltk',            # tokenizer some text-processors lean on
+    'regex',           # unicode tables
+    'unidic_lite',     # Japanese tokenization (misaki bundles JP support)
+    'pyopenjtalk',     # Japanese phonemizer (misaki dep on JP voices)
+)
+
+_collected_datas = []
+_collected_binaries = []
+_collected_hidden = []
+for _pkg in _PKGS_TO_COLLECT:
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _collected_datas.extend(_d)
+        _collected_binaries.extend(_b)
+        _collected_hidden.extend(_h)
+    except Exception:
+        # Package not installed in this venv — skip silently.
+        pass
+
+a = Analysis(
+    ['start_jarvis.py'],
+    pathex=[],
+    binaries=_collected_binaries,
+    datas=[
+        # Python source modules — bundled inside the exe.
+        ('jarvis.py',         '.'),
+        ('hud_server.py',     '.'),
+        ('chloe_memory.py',   '.'),
+        # HUD frontend — bundled (the exe loads it via setHtml at startup).
+        ('hud.html',          '.'),
+        # OpenWakeWord ships melspectrogram + embedding ONNX files inside its
+        # site-packages "resources" folder; the model loader needs them.
+        ('venv\\Lib\\site-packages\\openwakeword\\resources',
+         'openwakeword\\resources'),
+    ] + _collected_datas,
+    hiddenimports=[
+        # Things imported lazily inside functions, so PyInstaller's static
+        # analysis can miss them.
+        'sounddevice',
+        'soundfile',
+        'edge_tts',
+        'openwakeword',
+        'openwakeword.model',
+        'kokoro_onnx',
+        'onnxruntime',
+        'scipy',
+        'scipy.signal',
+        'requests',
+        'bs4',
+        'groq',
+        'dotenv',
+        'winsound',
+        # Phonemizer kokoro depends on for IPA conversion
+        'misaki',
+        'misaki.en',
+    ] + _collected_hidden,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    # faster_whisper / torch are intentionally NOT here — currently blocked
+    # by Python 3.14 wheel availability. Add back when they install.
+    excludes=[
+        'faster_whisper',
+        'torch',
+        'transformers',
+    ],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='Chloe',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    # console=False hides the terminal window — the splash + HUD are the
+    # only visible UI. Set to True temporarily if you need to debug a
+    # failed launch in real time (or just check chloe.log).
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    # New icon: chloe_icon.ico (multi-resolution, generated by make_chloe_icon.py).
+    # Falls back to the legacy jarvis_icon.ico if the new one isn't present yet.
+    icon=['chloe_icon.ico', 'jarvis_icon.ico'],
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Chloe',
+)
