@@ -65,7 +65,8 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
 - History trimming keeps token costs low while preserving meaningful context
 
 ### 🔍 Web Search
-- Real-time search powered by **Tavily API**
+- Real-time search via Groq's `compound-mini` model — server-side tool calls handle the search loop end-to-end
+- A small router heuristic detects time-sensitive queries and routes only those to the search-capable model, saving quota for what only it can do
 - Enables Chloe to answer questions beyond her training data cutoff
 
 ---
@@ -179,8 +180,8 @@ chloe/
 ### Install
 
 ```bash
-git clone https://github.com/contact-edwayne/chloe.git
-cd chloe
+git clone https://github.com/contact-edwayne/Chloe.git
+cd Chloe
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -188,15 +189,30 @@ pip install -r requirements.txt
 
 ### Configure
 
-Create a file named `_env` in the project root:
+Copy `.env.example` to `.env` and fill in your own keys:
+
+```bash
+copy .env.example .env
+```
+
+The minimum required keys for chat to work:
 
 ```
 GROQ_API_KEY=your_groq_key
+```
+
+Optional keys for the full experience:
+
+```
+# Premium voice (set USE_ELEVENLABS=1 to enable)
 ELEVENLABS_API_KEY=your_elevenlabs_key
 ELEVENLABS_VOICE_ID=your_voice_id
-TAVILY_API_KEY=your_tavily_key
-BREEZE_API_KEY=your_breeze_key
+
+# Bitcoin Lightning wallet
+BREEZ_API_KEY=your_breez_key
 ```
+
+See `.env.example` for the complete list of tunable settings.
 
 ### Run
 
