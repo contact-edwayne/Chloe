@@ -23,8 +23,9 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
 
 ## Live Demo
 
-> 📹 Demo video coming soon — wake word trigger, voice interaction, orb state
-> transitions, and Lightning payment flow.
+[![Watch the Chloe demo](demo.gif)](https://youtu.be/76BGUzwDIIQ)
+
+> Click the GIF above to watch the full demo on YouTube — voice interaction, multimodal vision, and Lightning wallet integration.
 
 ---
 
