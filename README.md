@@ -4,7 +4,7 @@
 > real-time voice pipeline, persistent memory, and live Bitcoin Lightning
 > integration. Built end-to-end by Edward Wayne.
 
-![Demo GIF placeholder — replace with demo.gif when recorded]
+![Chloe demo](demo.gif)
 
 ---
 
@@ -54,7 +54,7 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
   visual content is detected, text model otherwise
 
 ### ⚡ Bitcoin & Lightning Integration
-- Send and receive Lightning invoices via **Breeze SDK**
+- Send and receive Lightning invoices via **Breez SDK** (Liquid)
 - Live wallet balance displayed in the HUD
 - Voice-triggered payment flows — fully hands-free
 
@@ -73,35 +73,22 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                        USER                              │
-│          Voice / Text / Image / Video / URL              │
-└─────────────────────┬────────────────────────────────────┘
-                      │
-          ┌───────────▼────────────┐
-          │    HUD  (hud.html)     │  ← Three.js orb, canvas avatar face,
-          │    Browser Frontend    │    chat interface, state display,
-          │    (PyQt6 window)      │    attachment handling
-          └───────────┬────────────┘
-                      │  WebSocket  ws://localhost:6789
-          ┌───────────▼────────────┐
-          │    hud_server.py       │  ← Async WebSocket bridge
-          │                        │    Broadcasts state to all clients
-          └───────────┬────────────┘
-                      │
-          ┌───────────▼────────────┐
-          │      jarvis.py         │  ← Core brain
-          │  ┌─ Voice loop         │    Wake word → record → transcribe
-          │  ├─ Chat handler       │    Text/vision → stream response
-          │  ├─ Memory system      │    Persistent cross-modal context
-          │  └─ Bitcoin/Lightning  │    Breeze SDK send/receive/balance
-          └────────────────────────┘
-                      │
-      ┌───────────────┼────────────────┬────────────────┐
-      │               │                │                │
-  Groq API       ElevenLabs        Breeze SDK      Tavily API
-  LLM + STT      Neural TTS        Lightning       Web Search
+```mermaid
+flowchart TD
+    User["👤 User<br>voice · text · image · video · URL"]
+    HUD["<b>HUD</b> — hud.html<br>Three.js orb · canvas avatar · chat<br>PyQt6 + QWebEngineView shell"]
+    Bridge["<b>hud_server.py</b><br>async WebSocket bridge"]
+    Core["<b>jarvis.py</b> — core brain<br>voice loop · chat handler<br>memory · Lightning wallet"]
+    Groq["<b>Groq</b><br>Llama 3.3 70B / Llama 4 Scout<br>Whisper STT · compound-mini search"]
+    Eleven["<b>ElevenLabs</b><br>neural TTS"]
+    Breez["<b>Breez SDK</b><br>Lightning Network"]
+
+    User --> HUD
+    HUD <==>|"WS ws://localhost:6789"| Bridge
+    Bridge <==> Core
+    Core --> Groq
+    Core --> Eleven
+    Core --> Breez
 ```
 
 ---
@@ -119,8 +106,8 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
 | Avatar | HTML5 Canvas — procedural face with lip sync |
 | Backend | Python — asyncio, websockets, threading |
 | Desktop | PyQt6 + QWebEngineView |
-| Bitcoin | Breeze SDK — Lightning Network send/receive/balance |
-| Search | Tavily API |
+| Bitcoin | Breez SDK Liquid — Lightning Network send/receive/balance |
+| Search | Groq compound-mini — server-side tool calls handle the search loop |
 | Packaging | PyInstaller — standalone .exe, no Python required |
 | Transport | WebSocket real-time bidirectional bridge |
 
@@ -133,14 +120,16 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
   per-sentence TTS playback as tokens arrive
 - **Multimodal AI** — Automatic routing between text and vision models based
   on input type detection; handles text, images, video, and URLs
-- **API orchestration** — Six external services (Groq, ElevenLabs, OpenWakeWord,
-  Breeze, Tavily, WebSocket) integrated into one coherent real-time system
+- **API orchestration** — Five external services (Groq for LLM/STT/search via
+  compound-mini, ElevenLabs neural TTS, OpenWakeWord wake detection, Breez SDK
+  Liquid for Lightning, plus a custom WebSocket bridge) integrated into one
+  coherent real-time system
 - **Voice pipeline architecture** — Full wake word → STT → LLM → TTS chain
   with clean state machine (idle/listening/thinking/speaking)
 - **WebGL / Shader programming** — Custom GLSL shaders for galaxy orb core,
   plasma shell, audio-reactive pulse waves, and full post-processing pipeline
-- **Financial API integration** — Lightning Network payments via Breeze SDK,
-  voice-triggered invoice creation and balance queries
+- **Financial API integration** — Lightning Network payments via Breez SDK
+  Liquid, voice-triggered invoice creation and balance queries
 - **Memory system design** — Persistent context with user-controlled long-term
   retention across both voice and text modalities
 - **Desktop application packaging** — PyQt6 native window with embedded
