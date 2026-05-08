@@ -4,7 +4,7 @@
 > real-time voice pipeline, persistent memory, and live Bitcoin Lightning
 > integration. Built end-to-end by Edward Wayne.
 
-![Chloe demo](demo.gif)
+[![Chloe demo](demo.gif)](https://youtu.be/76BGUzwDIIQ)
 
 ---
 
@@ -23,9 +23,7 @@ persistent memory, and a custom 3D holographic UI — designed and built from sc
 
 ## Live Demo
 
-[![Watch the Chloe demo](demo.gif)](https://youtu.be/76BGUzwDIIQ)
-
-> Click the GIF above to watch the full demo on YouTube — voice interaction, multimodal vision, and Lightning wallet integration.
+> [Watch the full demo on YouTube](https://youtu.be/76BGUzwDIIQ) — voice interaction, multimodal vision, and Lightning wallet integration.
 
 ---
 
