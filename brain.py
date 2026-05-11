@@ -689,6 +689,11 @@ class Brain:
             return {'tldr': '', 'key_points': [], 'entities': [], 'concepts': [], 'tags': []}
         return result
 
+    # Matches a YAML mapping key line ("title:", "tags_list:", etc.) at column 0.
+    # Used by _normalize_frontmatter to decide whether a line still belongs to
+    # the frontmatter or has crossed into body content.
+    _YAML_FIELD_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_\-]*\s*:')
+
     def _validate_and_clean_page(self, response: str):
         """Validate an LLM-generated wiki page response.
 
@@ -697,7 +702,12 @@ class Brain:
         returned SKIP_PAGE marker, or response lacks valid YAML frontmatter).
 
         Strips any preamble before the first --- line so responses like
-        "Here is the page:\n---\n..." still work.
+        "Here is the page:\n---\n..." still work. Also normalizes the
+        frontmatter to exactly one well-formed block — collapses chains of
+        duplicate '---' opener lines and inserts a missing closing '---'
+        before the first body line. Both patterns have shown up in real LLM
+        output (hybrid_llm_router.md had a double opener; pyqt6.md was
+        missing its close).
         """
         if not response:
             return None
@@ -716,7 +726,88 @@ class Brain:
         # Sanity check: must have a title field somewhere in the first 500 chars
         if 'title:' not in cleaned[:500]:
             return None
-        return cleaned
+        return self._normalize_frontmatter(cleaned)
+
+    def _normalize_frontmatter(self, page: str) -> str:
+        """Ensure the page starts with exactly one well-formed '---' frontmatter
+        block. Idempotent on already-well-formed input.
+
+        Two corruption patterns this fixes:
+          1. Double leading '---' — the LLM emitted an empty frontmatter block
+             before the real one (seen on hybrid_llm_router.md 2026-05-11).
+             Collapse the chain to a single opener.
+          2. Missing closing '---' — the LLM forgot the close fence and YAML
+             bleeds straight into the body (seen on pyqt6.md 2026-05-11).
+             Insert a '---' before the first non-YAML line.
+
+        Caller is expected to have stripped any preamble already so the page
+        opens with '---' on line 0.
+        """
+        lines = page.splitlines()
+        if not lines or lines[0].strip() != '---':
+            return page  # defensive — caller should have ensured this
+
+        # Skip past any chain of additional '---' opener lines (with optional
+        # blank lines mixed in). Collapses "---\n---\n..." or
+        # "---\n\n---\n..." to a single opener.
+        i = 1
+        while i < len(lines):
+            s = lines[i].strip()
+            if s == '---':
+                i += 1
+                continue
+            if s == '':
+                # Peek ahead: is the next non-blank another '---'? If so this
+                # blank is between duplicate fences and should be skipped too.
+                j = i + 1
+                while j < len(lines) and lines[j].strip() == '':
+                    j += 1
+                if j < len(lines) and lines[j].strip() == '---':
+                    i = j + 1
+                    continue
+                break
+            break
+
+        # Walk the YAML body. Either we find a closing '---' (well-formed) or
+        # we hit a clearly-non-YAML line (heading, body text) and need to
+        # insert a closer in front of it.
+        yaml_body_start = i
+        close_idx = None
+        insert_before = None
+        for j in range(yaml_body_start, len(lines)):
+            line = lines[j]
+            st = line.strip()
+            if st == '---':
+                close_idx = j
+                break
+            if st == '':
+                continue  # blank lines allowed inside YAML
+            if line[0] in (' ', '\t'):
+                continue  # indented continuation / list item
+            if self._YAML_FIELD_RE.match(line):
+                continue
+            insert_before = j
+            break
+
+        if close_idx is not None:
+            # Frontmatter is well-formed — just rebuild with the single opener.
+            rebuilt = ['---'] + lines[yaml_body_start:]
+        elif insert_before is not None:
+            # Insert a closing fence in front of the first body line. Trim
+            # trailing blanks inside the YAML region first for cleanliness.
+            k = insert_before - 1
+            while k >= yaml_body_start and lines[k].strip() == '':
+                k -= 1
+            rebuilt = (['---'] + lines[yaml_body_start:k + 1]
+                       + ['---'] + lines[insert_before:])
+        else:
+            # YAML extends to EOF with no body. Just append the missing close.
+            rebuilt = ['---'] + lines[yaml_body_start:] + ['---']
+
+        # Always end with a single trailing newline — markdown convention,
+        # and the caller's response.strip() above has already dropped any
+        # trailing whitespace, so re-adding one here keeps output stable.
+        return '\n'.join(rebuilt) + '\n'
 
     def _update_page(self, page_type: str, name: str, existing,
                      extraction: dict, source_slug: str, source_title: str,
