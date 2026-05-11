@@ -135,7 +135,10 @@ def _light_call(prompt: str) -> str:
                 "stream":   False,
                 "options":  {"temperature": 0.3, "num_predict": 1500},
             },
-            timeout=120,
+            # 300s (not 120s) to cover qwen2.5:32b cold-reload (~85s) on top
+            # of actual inference time. Hit on 2026-05-11: Groq locked out +
+            # qwen unloaded between calls = two-way fallback timed out.
+            timeout=300,
         )
         if r.status_code != 200:
             print(f"[brain] light HTTP {r.status_code}: {r.text[:200]}", flush=True)
