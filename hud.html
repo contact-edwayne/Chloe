@@ -902,7 +902,266 @@
     100% { transform: scale(0.35); opacity: 0; }
   }
 
-</style>
+
+  /* ─── CH02 LIGHTS PANEL ─────────────────────────────────────────────── */
+  .lights-panel {
+    display: none;
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .lights-panel.active { display: flex; }
+  .lights-panel::-webkit-scrollbar { width: 6px; }
+  .lights-panel::-webkit-scrollbar-thumb { background: #00f7ff44; border-radius: 3px; }
+  .lights-panel::-webkit-scrollbar-track { background: transparent; }
+
+  .ch-label {
+    font-size: 9px; color: #00f7ff66;
+    cursor: pointer; user-select: none;
+    transition: color 0.15s, text-shadow 0.15s;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+  }
+  .ch-label:hover {
+    color: var(--cyan);
+    text-shadow: 0 0 6px var(--cyan-d);
+    border-color: var(--border);
+  }
+
+  .lights-section-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 9px; letter-spacing: 4px;
+    color: #00f7ff66; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .preset-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border2);
+    background: rgba(0, 247, 255, 0.04);
+    color: var(--cyan);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .preset-btn:hover {
+    background: rgba(0, 247, 255, 0.12);
+    box-shadow: 0 0 10px var(--cyan-d);
+  }
+  .preset-btn.user-saved { border-color: #ff00aa55; color: #ff00aacc; }
+  .preset-btn.user-saved:hover {
+    background: rgba(255, 0, 170, 0.08);
+    box-shadow: 0 0 10px #ff00aa44;
+  }
+  .preset-del {
+    margin-left: 4px; cursor: pointer;
+    color: #ff00aa66;
+    font-size: 12px;
+  }
+  .preset-del:hover { color: var(--magenta); }
+  .preset-add {
+    padding: 6px 10px;
+    border: 1px dashed var(--border2);
+    background: transparent;
+    color: #00f7ff77;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; cursor: pointer;
+  }
+  .preset-add:hover { color: var(--cyan); border-color: var(--cyan); }
+
+  .bulb-card {
+    border: 1px solid var(--border);
+    background: rgba(0, 13, 26, 0.6);
+    padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .bulb-header {
+    display: flex; justify-content: space-between;
+    align-items: center; gap: 10px;
+  }
+  .bulb-name-wrap {
+    display: flex; align-items: center; gap: 8px;
+    flex: 1;
+  }
+  .bulb-name {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 13px; letter-spacing: 2px;
+    color: var(--cyan); cursor: pointer;
+  }
+  .bulb-name:hover { text-shadow: 0 0 6px var(--cyan-d); }
+  .bulb-name-input {
+    background: #000; border: 1px solid var(--cyan);
+    color: var(--cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 13px; letter-spacing: 2px;
+    padding: 2px 6px; outline: none;
+  }
+  .bulb-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #555;
+    flex-shrink: 0;
+  }
+  .bulb-status-dot.online { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .bulb-status-dot.offline { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .bulb-meta { color: #00f7ff44; font-size: 9px; letter-spacing: 1px; }
+
+  .toggle-switch {
+    width: 44px; height: 22px;
+    border: 1px solid var(--border2);
+    background: #00050c;
+    border-radius: 11px;
+    position: relative; cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: #00f7ff66;
+    transition: all 0.2s;
+  }
+  .toggle-switch.on {
+    background: rgba(0, 247, 255, 0.18);
+    border-color: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan-d);
+  }
+  .toggle-switch.on::after {
+    left: 24px;
+    background: var(--cyan);
+    box-shadow: 0 0 6px var(--cyan);
+  }
+
+  .brightness-row { display: flex; align-items: center; gap: 10px; }
+  .brightness-row label {
+    font-size: 9px; letter-spacing: 2px; color: #00f7ff66;
+    text-transform: uppercase; min-width: 28px;
+  }
+  .brightness-slider {
+    flex: 1; height: 4px;
+    -webkit-appearance: none; appearance: none;
+    background: linear-gradient(90deg, #00f7ff44, var(--cyan));
+    border-radius: 2px; outline: none; cursor: pointer;
+  }
+  .brightness-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 6px var(--cyan);
+    cursor: pointer;
+  }
+  .brightness-pct {
+    font-size: 10px; color: var(--cyan);
+    min-width: 36px; text-align: right;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  .swatch-row { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+  .swatch {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: 1px solid #00f7ff33;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .swatch:hover { transform: scale(1.25); }
+  .custom-btn {
+    padding: 3px 10px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--cyan);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 9px; letter-spacing: 2px;
+    text-transform: uppercase; cursor: pointer;
+    margin-left: 6px;
+  }
+  .custom-btn:hover {
+    background: rgba(0, 247, 255, 0.08);
+    box-shadow: 0 0 6px var(--cyan-d);
+  }
+
+  .discover-btn {
+    align-self: flex-start;
+    padding: 8px 14px;
+    border: 1px solid var(--border2);
+    background: rgba(0, 247, 255, 0.06);
+    color: var(--cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px; letter-spacing: 3px;
+    text-transform: uppercase; cursor: pointer;
+  }
+  .discover-btn:hover {
+    background: rgba(0, 247, 255, 0.15);
+    box-shadow: 0 0 10px var(--cyan-d);
+  }
+  .discover-btn.busy { opacity: 0.5; cursor: wait; }
+
+  /* Color wheel modal */
+  .wheel-modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(0, 5, 12, 0.85);
+    display: none; align-items: center; justify-content: center;
+    z-index: 9999;
+    backdrop-filter: blur(4px);
+  }
+  .wheel-modal-bg.open { display: flex; }
+  .wheel-modal {
+    background: var(--panel);
+    border: 1px solid var(--cyan);
+    box-shadow: 0 0 30px var(--cyan-d);
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 16px;
+    align-items: center;
+    min-width: 320px;
+  }
+  .wheel-modal-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px; letter-spacing: 4px;
+    color: var(--cyan); text-transform: uppercase;
+  }
+  .color-wheel { cursor: crosshair; border-radius: 50%; }
+  .wheel-controls { display: flex; gap: 12px; align-items: center; }
+  .color-preview {
+    width: 50px; height: 50px;
+    border: 1px solid var(--border2);
+    background: #000;
+  }
+  .color-hex {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px; color: var(--cyan);
+    background: #00050c;
+    border: 1px solid var(--border);
+    padding: 6px 10px; width: 100px;
+    text-align: center; letter-spacing: 2px;
+    text-transform: uppercase;
+    outline: none;
+  }
+  .color-hex:focus { border-color: var(--cyan); }
+  .wheel-actions { display: flex; gap: 10px; }
+  .wheel-btn {
+    padding: 6px 16px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px; letter-spacing: 3px;
+    text-transform: uppercase; cursor: pointer;
+  }
+  .wheel-btn:hover { background: rgba(0, 247, 255, 0.1); }
+  .wheel-btn.primary {
+    border-color: var(--cyan);
+    background: rgba(0, 247, 255, 0.15);
+    box-shadow: 0 0 10px var(--cyan-d);
+  }
+  </style>
 </head>
 <body>
 
@@ -928,6 +1187,7 @@
     <span class="brand">CHLOE</span>
     <span class="center">HOME // PRIMARY NODE</span>
     <span style="display:flex;gap:14px;align-items:center">
+      <button class="brain-btn" id="brain-btn" onclick="toggleBrainGraph()" title="Open brain graph view">BRAIN</button>
       <span class="sys-tag">ONLINE</span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
         <span class="lbl">₿</span><span id="balance-value">—</span> sat
@@ -1009,13 +1269,28 @@
     <div class="chat-area">
       <div class="chat-header">
         <span><span class="indicator"></span>COMM CHANNEL // OPEN</span>
-        <span style="font-size:9px;color:#00f7ff66">CH 01</span>
+        <span class="ch-label" id="ch-label" onclick="toggleChannel()">CH 01</span>
       </div>
       <div class="chat-log" id="chatlog">
         <div class="msg chloe">
           <div class="msg-avatar">C</div>
           <div class="msg-bubble">Online. Standing by.</div>
         </div>
+      </div>
+      <div class="lights-panel" id="lights-panel">
+        <div>
+          <div class="lights-section-title">Presets</div>
+          <div class="preset-row" id="presets-row">
+            <span style="color:#00f7ff44;font-size:10px;">loading...</span>
+          </div>
+        </div>
+        <div>
+          <div class="lights-section-title">Bulbs</div>
+          <div id="bulbs-list" style="display:flex;flex-direction:column;gap:10px;">
+            <span style="color:#00f7ff44;font-size:10px;">loading...</span>
+          </div>
+        </div>
+        <button class="discover-btn" id="discover-btn" onclick="lightsDiscover()">+ Discover New Bulbs</button>
       </div>
       <div class="chat-attachments" id="attachments"></div>
       <div class="chat-input-row">
@@ -1053,6 +1328,18 @@
   // Exposed on window so the module script's updateAmp() can reach getAmp().
   const TtsAudio = (() => {
     let ctx = null, analyser = null, ampBuf = null, currentSource = null, active = false;
+
+    // Streaming-chunk state. When the backend has CHLOE_TTS_STREAMING=1 it
+    // broadcasts `tts_audio_chunk` messages instead of one big `tts_audio`,
+    // so the orb starts pulsing on the FIRST sentence's audio rather than
+    // waiting for the whole reply to synthesize. Queue + chain.
+    const streamQueue = [];
+    let streamMode = false;
+    let streamFinalReceived = false;
+    let streamOnFinalEnd = null;
+    // Single-shot (legacy `tts_audio`) state.
+    let legacyOnEnd = null;
+
     function ensureCtx() {
       if (ctx) return ctx;
       const Ctor = window.AudioContext || window.webkitAudioContext;
@@ -1065,11 +1352,14 @@
       analyser.connect(ctx.destination);
       return ctx;
     }
-    async function play(b64, _format, onStart, onEnd) {
+
+    // Decode + play ONE buffer. Returns true if playback started, false on
+    // decode/start failure. onended fires _onChunkEnded so the queue drains
+    // (or legacy onEnd fires) without callers needing to know which mode.
+    async function _playBuffer(b64) {
       const c = ensureCtx();
-      if (!c) { onEnd && onEnd(); return; }
+      if (!c) return false;
       try { if (c.state === 'suspended') await c.resume(); } catch (_) {}
-      stop();
       try {
         const bin = atob(b64);
         const u8 = new Uint8Array(bin.length);
@@ -1080,27 +1370,111 @@
         src.connect(analyser);
         src.onended = () => {
           if (currentSource === src) {
-            currentSource = null; active = false;
-            onEnd && onEnd();
+            currentSource = null;
+            active = false;
+            _onChunkEnded();
           }
         };
         currentSource = src;
         active = true;
         src.start(0);
-        onStart && onStart();
+        return true;
       } catch (e) {
         console.error('[tts] decode/play error', e);
         active = false;
-        onEnd && onEnd();
+        return false;
       }
     }
+
+    // Called when the currently-playing buffer's onended fires.
+    function _onChunkEnded() {
+      if (streamMode) {
+        if (streamQueue.length > 0) {
+          // More chunks already in hand — chain straight into the next.
+          const next = streamQueue.shift();
+          _playBuffer(next.b64).then(ok => {
+            if (!ok) _onChunkEnded();  // skip the bad chunk, try next
+          });
+        } else if (streamFinalReceived) {
+          // Stream finished cleanly.
+          const cb = streamOnFinalEnd;
+          streamMode = false;
+          streamFinalReceived = false;
+          streamOnFinalEnd = null;
+          if (cb) cb();
+        }
+        // else: queue is empty but final not received yet — wait for the
+        // next playChunk to arrive over the WS. No-op.
+      } else {
+        const cb = legacyOnEnd;
+        legacyOnEnd = null;
+        if (cb) cb();
+      }
+    }
+
+    // Single-shot playback for the legacy `tts_audio` path (mobile PWA, any
+    // future caller that doesn't want chunking). Unchanged contract.
+    async function play(b64, _format, onStart, onEnd) {
+      stop();
+      legacyOnEnd = onEnd || null;
+      streamMode = false;
+      const ok = await _playBuffer(b64);
+      if (ok) {
+        if (onStart) onStart();
+      } else {
+        legacyOnEnd = null;
+        if (onEnd) onEnd();
+      }
+    }
+
+    // Streaming playback for `tts_audio_chunk`. Call once per chunk arrival.
+    // onStart fires only on the very first chunk's actual playback start.
+    // onFinalEnd fires only after the chunk marked is_final has played AND
+    // the queue has drained. Subsequent calls during an active stream just
+    // append to the queue; their onStart/onFinalEnd are ignored on purpose
+    // (callbacks are already wired to the first call).
+    //
+    // chunk_id === 0 is treated as the start of a NEW stream — any in-flight
+    // stream is stopped first. This handles the user-sent-a-new-chat-mid-reply
+    // race: chat 'done' fires before TTS begins, so the user can submit a
+    // new chat while the prior reply is still chunking. Without this guard,
+    // the new chunks would queue behind the old reply's chunks.
+    async function playChunk(b64, _format, chunk_id, isFinal, onStart, onFinalEnd) {
+      const isNewStream = chunk_id === 0 || !streamMode;
+      if (isNewStream) {
+        stop();  // safe no-op if nothing was playing
+        streamMode = true;
+        streamFinalReceived = !!isFinal;
+        streamOnFinalEnd = onFinalEnd || null;
+        legacyOnEnd = null;
+        const ok = await _playBuffer(b64);
+        if (ok) {
+          if (onStart) onStart();
+        } else {
+          // First-chunk decode failed — drain any queued chunks; if none, end.
+          _onChunkEnded();
+        }
+        return;
+      }
+
+      // Mid-stream chunk — append to queue. Callbacks already wired.
+      if (isFinal) streamFinalReceived = true;
+      streamQueue.push({ b64 });
+    }
+
     function stop() {
+      streamQueue.length = 0;
+      streamMode = false;
+      streamFinalReceived = false;
+      streamOnFinalEnd = null;
+      legacyOnEnd = null;
       if (currentSource) {
         try { currentSource.onended = null; currentSource.stop(); } catch (_) {}
         currentSource = null;
       }
       active = false;
     }
+
     function getAmp() {
       if (!active || !analyser) return null;
       analyser.getByteFrequencyData(ampBuf);
@@ -1110,7 +1484,7 @@
       for (let i = 0; i < n; i++) sum += ampBuf[i];
       return (sum / n) / 255;
     }
-    return { play, stop, getAmp, isActive: () => active };
+    return { play, playChunk, stop, getAmp, isActive: () => active };
   })();
   window.TtsAudio = TtsAudio;
   // While `expectingAudio` is true, the early "speaking" string from the
@@ -1416,6 +1790,27 @@
           () => setState('idle')        // onEnd  — fires when playback finishes
         );
       }
+    } else if (data.type === 'tts_audio_chunk') {
+      // Streaming TTS — backend has CHLOE_TTS_STREAMING=1 and is shipping
+      // the reply one sentence at a time. Queue + chain through TtsAudio so
+      // the orb starts pulsing on the first sentence and amplitude
+      // reactivity is preserved across the whole reply.
+      expectingAudio = false;
+      const b64 = data.audio_b64;
+      const fmt = data.format || 'mp3';
+      const isFinal = !!data.is_final;
+      if (!b64) {
+        console.warn('[hud] tts_audio_chunk with empty payload',
+                     'chunk_id=', data.chunk_id,
+                     'is_final=', isFinal);
+        if (isFinal) setState('idle');
+      } else {
+        TtsAudio.playChunk(
+          b64, fmt, data.chunk_id | 0, isFinal,
+          () => setState('speaking'),  // onStart — first chunk only
+          () => setState('idle')        // onFinalEnd — after last chunk finishes
+        );
+      }
     } else if (data.type === 'error') {
       console.error('[hud] backend error:', data.text);
       if (currentReplyEl) {
@@ -1459,7 +1854,383 @@
       setState('idle');
     } else if (data.type === 'wallet_balance_result') {
       onWalletBalanceResult(data);
+    } else if (data.type === 'lights_state_result') {
+      onLightsState(data);
+    } else if (data.type === 'lights_discover_result') {
+      onLightsDiscover(data);
+    } else if (data.type === 'lights_action_result' ||
+               data.type === 'lights_rename_result' ||
+               data.type === 'lights_preset_apply_result' ||
+               data.type === 'lights_preset_save_result' ||
+               data.type === 'lights_preset_delete_result') {
+      // backend will follow up with a lights_state_result broadcast
+      if (data.error) console.warn('[lights]', data.type, data.error);
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // CH02 LIGHTS PANEL — channel switcher + bulb cards + presets + color wheel
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // 16 named colors mirror lights.py COLORS_RGB so the swatches match what the
+  // backend "color" intent understands. The CUSTOM button drops into the HSL
+  // wheel for arbitrary RGB values.
+  const LIGHT_SWATCHES = [
+    ['red',     '#ff0000'], ['orange',  '#ff6e00'], ['amber',   '#ff5a00'],
+    ['yellow',  '#ffe600'], ['lime',    '#b4ff00'], ['green',   '#00ff00'],
+    ['mint',    '#3cffa0'], ['cyan',    '#00e6e6'], ['teal',    '#00b4b4'],
+    ['blue',    '#0000ff'], ['indigo',  '#4b00b4'], ['violet',  '#8c00ff'],
+    ['purple',  '#b400dc'], ['magenta', '#ff00c8'], ['pink',    '#ff50b4'],
+    ['white',   '#ffffff'],
+  ];
+
+  let _currentChannel = 'CH01';
+  let _lightsState = { bulbs: [], presets: [] };
+  let _wheelTargetBulb = null;   // name of the bulb the wheel is editing
+  let _wheelColor = '#ffffff';
+
+  function toggleChannel() {
+    _currentChannel = (_currentChannel === 'CH01') ? 'CH02' : 'CH01';
+    const label = document.getElementById('ch-label');
+    const chatLog = document.getElementById('chatlog');
+    const lightsPanel = document.getElementById('lights-panel');
+    const inputRow = document.querySelector('.chat-input-row');
+    const attachments = document.getElementById('attachments');
+    if (_currentChannel === 'CH02') {
+      if (label) label.textContent = 'CH 02';
+      if (chatLog) chatLog.style.display = 'none';
+      if (lightsPanel) lightsPanel.classList.add('active');
+      if (inputRow) inputRow.style.display = 'none';
+      if (attachments) attachments.style.display = 'none';
+      requestLightsState();
+    } else {
+      if (label) label.textContent = 'CH 01';
+      if (chatLog) chatLog.style.display = '';
+      if (lightsPanel) lightsPanel.classList.remove('active');
+      if (inputRow) inputRow.style.display = '';
+      if (attachments) attachments.style.display = '';
+    }
+  }
+
+  function requestLightsState() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_state' }));
+    }
+  }
+
+  function onLightsState(data) {
+    _lightsState = { bulbs: data.bulbs || [], presets: data.presets || [] };
+    renderPresets();
+    renderBulbs();
+  }
+
+  function onLightsDiscover(data) {
+    const btn = document.getElementById('discover-btn');
+    if (btn) {
+      btn.classList.remove('busy');
+      btn.textContent = '+ Discover New Bulbs';
+    }
+    const found = (data.found || []).length;
+    if (found === 0) {
+      alert('Discovery scan complete. No bulbs found.\nCheck that bulbs are powered on and on the same WiFi as this PC.');
+    } else {
+      // The state broadcast that follows will repaint the bulb list.
+      // If any new bulbs are unnamed, prompt to name them now.
+      setTimeout(() => {
+        const unnamed = (_lightsState.bulbs || []).filter(b => !b.name);
+        for (const b of unnamed) {
+          const name = prompt(`Found a bulb at ${b.ip} (mac ${b.mac}). Name it (e.g. "kitchen", "lamp"). Leave blank to skip.`);
+          if (name && name.trim()) {
+            ws.send(JSON.stringify({ type: 'lights_rename', mac: b.mac, name: name.trim() }));
+          }
+        }
+      }, 500);
+    }
+  }
+
+  function renderPresets() {
+    const row = document.getElementById('presets-row');
+    if (!row) return;
+    row.innerHTML = '';
+    const builtin = new Set(['movie', 'reading', 'focus', 'sunset', 'romantic', 'off']);
+    for (const p of _lightsState.presets || []) {
+      const btn = document.createElement('button');
+      btn.className = 'preset-btn';
+      if (!builtin.has((p.name || '').toLowerCase())) btn.classList.add('user-saved');
+      btn.textContent = p.name;
+      btn.onclick = () => applyPreset(p.name);
+
+      // user presets get a delete x
+      if (!builtin.has((p.name || '').toLowerCase())) {
+        const x = document.createElement('span');
+        x.className = 'preset-del';
+        x.textContent = '×';
+        x.title = 'Delete preset';
+        x.onclick = (e) => {
+          e.stopPropagation();
+          if (confirm(`Delete preset "${p.name}"?`)) deletePreset(p.name);
+        };
+        btn.appendChild(x);
+      }
+      row.appendChild(btn);
+    }
+    const add = document.createElement('button');
+    add.className = 'preset-add';
+    add.textContent = '+ Save Current';
+    add.onclick = () => {
+      const name = prompt('Save current bulb state as preset. Name?');
+      if (name && name.trim()) savePreset(name.trim());
+    };
+    row.appendChild(add);
+  }
+
+  function renderBulbs() {
+    const list = document.getElementById('bulbs-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const named = (_lightsState.bulbs || []).filter(b => b.name);
+    const unnamed = (_lightsState.bulbs || []).filter(b => !b.name);
+
+    if (named.length === 0 && unnamed.length === 0) {
+      list.innerHTML = '<span style="color:#00f7ff44;font-size:10px;">No bulbs configured. Click "Discover" below.</span>';
+      return;
+    }
+
+    for (const b of named) {
+      list.appendChild(renderBulbCard(b));
+    }
+    if (unnamed.length > 0) {
+      const note = document.createElement('div');
+      note.style.cssText = 'color:#ff00aa99;font-size:10px;letter-spacing:1px;';
+      note.textContent = `${unnamed.length} unnamed bulb(s) — name them so you can control them.`;
+      list.appendChild(note);
+      for (const b of unnamed) {
+        list.appendChild(renderBulbCard(b));
+      }
+    }
+  }
+
+  function renderBulbCard(b) {
+    const card = document.createElement('div');
+    card.className = 'bulb-card';
+
+    const header = document.createElement('div');
+    header.className = 'bulb-header';
+
+    const nameWrap = document.createElement('div');
+    nameWrap.className = 'bulb-name-wrap';
+    const dot = document.createElement('div');
+    dot.className = 'bulb-status-dot ' + (b.online ? 'online' : 'offline');
+    nameWrap.appendChild(dot);
+    const name = document.createElement('span');
+    name.className = 'bulb-name';
+    name.textContent = b.name || '(unnamed)';
+    name.title = 'Click to rename';
+    name.onclick = () => startRename(name, b);
+    nameWrap.appendChild(name);
+    const meta = document.createElement('span');
+    meta.className = 'bulb-meta';
+    meta.textContent = `${b.ip || '—'}  ${b.mac.slice(-6)}`;
+    nameWrap.appendChild(meta);
+    header.appendChild(nameWrap);
+
+    const toggle = document.createElement('div');
+    toggle.className = 'toggle-switch' + (b.on ? ' on' : '');
+    toggle.title = b.on ? 'On — click to turn off' : 'Off — click to turn on';
+    toggle.onclick = () => {
+      if (!b.name) { alert('Name this bulb first.'); return; }
+      lightsAction({ target: b.name, on: !b.on });
+    };
+    header.appendChild(toggle);
+    card.appendChild(header);
+
+    if (!b.name) return card;  // unnamed bulbs only show header
+
+    // Brightness slider
+    const briRow = document.createElement('div');
+    briRow.className = 'brightness-row';
+    const lbl = document.createElement('label'); lbl.textContent = 'BRI';
+    const slider = document.createElement('input');
+    slider.type = 'range'; slider.min = 1; slider.max = 100;
+    slider.value = Math.round(((b.brightness || 0) / 255) * 100) || 100;
+    slider.className = 'brightness-slider';
+    const pct = document.createElement('span');
+    pct.className = 'brightness-pct';
+    pct.textContent = slider.value + '%';
+    let _briTimer = null;
+    slider.oninput = () => { pct.textContent = slider.value + '%'; };
+    slider.onchange = () => {
+      lightsAction({ target: b.name, brightness: parseInt(slider.value, 10) });
+    };
+    briRow.appendChild(lbl); briRow.appendChild(slider); briRow.appendChild(pct);
+    card.appendChild(briRow);
+
+    // Swatches + CUSTOM
+    const swatchRow = document.createElement('div');
+    swatchRow.className = 'swatch-row';
+    for (const [cname, hex] of LIGHT_SWATCHES) {
+      const sw = document.createElement('div');
+      sw.className = 'swatch';
+      sw.style.background = hex;
+      sw.title = cname;
+      sw.onclick = () => lightsAction({ target: b.name, color: cname });
+      swatchRow.appendChild(sw);
+    }
+    const custom = document.createElement('button');
+    custom.className = 'custom-btn';
+    custom.textContent = 'Custom';
+    custom.onclick = () => openWheel(b);
+    swatchRow.appendChild(custom);
+    card.appendChild(swatchRow);
+
+    return card;
+  }
+
+  function startRename(span, bulb) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = bulb.name || '';
+    input.className = 'bulb-name-input';
+    span.replaceWith(input);
+    input.focus(); input.select();
+    const commit = () => {
+      const v = input.value.trim();
+      if (v && v !== bulb.name) {
+        ws.send(JSON.stringify({ type: 'lights_rename', mac: bulb.mac, name: v }));
+      } else {
+        renderBulbs();  // restore display
+      }
+    };
+    const cancel = () => renderBulbs();
+    input.onblur = commit;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') commit();
+      else if (e.key === 'Escape') cancel();
+    };
+  }
+
+  function lightsAction(payload) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_action', ...payload }));
+    }
+  }
+
+  function applyPreset(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_preset_apply', name }));
+    }
+  }
+
+  function savePreset(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_preset_save', name }));
+    }
+  }
+
+  function deletePreset(name) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_preset_delete', name }));
+    }
+  }
+
+  function lightsDiscover() {
+    const btn = document.getElementById('discover-btn');
+    if (btn) {
+      btn.classList.add('busy');
+      btn.textContent = 'Scanning...';
+    }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'lights_discover' }));
+    }
+  }
+
+  // ── Color wheel ────────────────────────────────────────────────────────
+  function hslToRgb(h, s, l) {
+    if (s === 0) return [Math.round(l*255), Math.round(l*255), Math.round(l*255)];
+    const q = l < 0.5 ? l * (1 + s) : l + s - l*s;
+    const p = 2*l - q;
+    const c = (t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    return [Math.round(c(h+1/3)*255), Math.round(c(h)*255), Math.round(c(h-1/3)*255)];
+  }
+  function rgbToHex(r, g, b) {
+    const h = (n) => n.toString(16).padStart(2, '0');
+    return '#' + h(r) + h(g) + h(b);
+  }
+  function hexToRgb(hex) {
+    hex = (hex || '').replace('#', '').trim();
+    if (hex.length !== 6) return null;
+    const n = parseInt(hex, 16);
+    if (isNaN(n)) return null;
+    return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+  }
+  let _wheelDrawn = false;
+  function drawWheel() {
+    const canvas = document.getElementById('color-wheel');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const cx = w/2, cy = h/2, r = Math.min(w, h)/2 - 2;
+    const img = ctx.createImageData(w, h);
+    const d = img.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const dx = x - cx, dy = y - cy;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const i = (y * w + x) * 4;
+        if (dist > r) { d[i+3] = 0; continue; }
+        const angle = Math.atan2(dy, dx);
+        const hue = (angle + Math.PI) / (2 * Math.PI);
+        const sat = dist / r;
+        const [R, G, B] = hslToRgb(hue, sat, 0.5);
+        d[i] = R; d[i+1] = G; d[i+2] = B; d[i+3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    _wheelDrawn = true;
+    canvas.onclick = (ev) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.floor((ev.clientX - rect.left) * (canvas.width / rect.width));
+      const y = Math.floor((ev.clientY - rect.top) * (canvas.height / rect.height));
+      const px = ctx.getImageData(x, y, 1, 1).data;
+      if (px[3] === 0) return;
+      _wheelColor = rgbToHex(px[0], px[1], px[2]);
+      document.getElementById('color-preview').style.background = _wheelColor;
+      document.getElementById('color-hex').value = _wheelColor.toUpperCase();
+    };
+  }
+  function openWheel(bulb) {
+    _wheelTargetBulb = bulb.name;
+    document.getElementById('wheel-modal-title').textContent = 'COLOR — ' + (bulb.name || 'bulb').toUpperCase();
+    document.getElementById('wheel-modal-bg').classList.add('open');
+    if (!_wheelDrawn) drawWheel();
+    _wheelColor = '#ffffff';
+    document.getElementById('color-preview').style.background = _wheelColor;
+    document.getElementById('color-hex').value = _wheelColor.toUpperCase();
+  }
+  function closeWheel() {
+    document.getElementById('wheel-modal-bg').classList.remove('open');
+    _wheelTargetBulb = null;
+  }
+  function onHexInput() {
+    const v = document.getElementById('color-hex').value;
+    const rgb = hexToRgb(v);
+    if (rgb) {
+      _wheelColor = '#' + v.replace('#', '').toLowerCase();
+      document.getElementById('color-preview').style.background = _wheelColor;
+    }
+  }
+  function applyWheel() {
+    if (!_wheelTargetBulb) return;
+    const rgb = hexToRgb(_wheelColor);
+    if (!rgb) { alert('Invalid color.'); return; }
+    lightsAction({ target: _wheelTargetBulb, rgb });
+    closeWheel();
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -2702,5 +3473,110 @@ ro.observe(container);
 window.setState('idle');
 </script>
 
+
+  <!-- BRAIN GRAPH OVERLAY (added by brain graph integration) -->
+  
+<!-- ─── Color wheel modal (CH02) ─── -->
+<div class="wheel-modal-bg" id="wheel-modal-bg" onclick="if(event.target===this)closeWheel()">
+  <div class="wheel-modal">
+    <div class="wheel-modal-title" id="wheel-modal-title">Color</div>
+    <canvas class="color-wheel" id="color-wheel" width="240" height="240"></canvas>
+    <div class="wheel-controls">
+      <div class="color-preview" id="color-preview"></div>
+      <input type="text" class="color-hex" id="color-hex" maxlength="7" oninput="onHexInput()">
+    </div>
+    <div class="wheel-actions">
+      <button class="wheel-btn" onclick="closeWheel()">Cancel</button>
+      <button class="wheel-btn primary" onclick="applyWheel()">Apply</button>
+    </div>
+  </div>
+</div>
+
+  <style id="brain-graph-styles">
+    .brain-btn {
+      background: transparent;
+      border: 1px solid var(--border2);
+      color: var(--cyan);
+      font: inherit;
+      letter-spacing: 0.12em;
+      padding: 4px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .brain-btn:hover {
+      background: rgba(0, 247, 255, 0.08);
+      border-color: var(--cyan);
+    }
+    .brain-btn.on {
+      background: rgba(168, 85, 247, 0.18);
+      border-color: #a855f7;
+      color: #d8b4ff;
+    }
+    #brain-graph-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #000;
+      display: none;
+    }
+    #brain-graph-overlay.on { display: block; }
+    #brain-graph-overlay iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #000;
+    }
+    #brain-graph-close {
+      position: absolute;
+      top: 10px; right: 14px;
+      z-index: 10001;
+      background: var(--panel);
+      border: 1px solid var(--border2);
+      color: var(--cyan);
+      font: inherit;
+      letter-spacing: 0.1em;
+      padding: 5px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    #brain-graph-close:hover { border-color: var(--cyan); }
+  </style>
+  <div id="brain-graph-overlay">
+    <button id="brain-graph-close" onclick="toggleBrainGraph(false)">CLOSE [Esc]</button>
+    <iframe id="brain-graph-iframe" title="Chloe Brain Graph"></iframe>
+  </div>
+  <script>
+    function toggleBrainGraph(force) {
+      const ov = document.getElementById('brain-graph-overlay');
+      const btn = document.getElementById('brain-btn');
+      const f = document.getElementById('brain-graph-iframe');
+      const willOpen = (force === undefined) ? !ov.classList.contains('on') : !!force;
+      if (willOpen) {
+        // CRITICAL: show the overlay FIRST so the iframe has real dimensions
+        // when its page loads. Otherwise vis-network creates its canvas at
+        // 0x0 inside a display:none parent and never re-fits when shown.
+        ov.classList.add('on');
+        if (btn) btn.classList.add('on');
+        let host = (window.location.hostname && window.location.hostname !== '')
+          ? window.location.hostname : 'localhost';
+        const port = 6790;
+        const src = `http://${host}:${port}/brain-graph.html?t=${Date.now()}`;
+        // Tiny defer so layout has flushed before the iframe starts loading.
+        setTimeout(() => { f.src = src; }, 30);
+      } else {
+        ov.classList.remove('on');
+        if (btn) btn.classList.remove('on');
+        // Free the iframe so a re-open does a fresh fetch
+        f.src = 'about:blank';
+      }
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('brain-graph-overlay').classList.contains('on')) {
+        toggleBrainGraph(false);
+      }
+    });
+  </script>
+  <!-- END BRAIN GRAPH OVERLAY -->
 </body>
 </html>

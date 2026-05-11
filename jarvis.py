@@ -43,6 +43,9 @@ from pathlib import Path
 import numpy as np
 from dotenv import load_dotenv
 from groq import AsyncGroq, Groq
+from brain_wiring import BRAIN, try_handle_brain_command
+import lights as _lights
+from lights import try_handle_lights_command
 
 # Used for the URL-attachment feature in chat (auto-detect http(s) links in the
 # user message, fetch them server-side, prepend the page text to the prompt).
@@ -124,8 +127,10 @@ OLLAMA_FALLBACK_ENABLED = os.environ.get("CHLOE_OLLAMA_FALLBACK", "1").strip() !
 # Set CHLOE_OLLAMA_PRIMARY=0 in _env to fall back to the original cloud-first
 # routing (Groq fast Llama → hedge-retry → compound → Ollama on failure).
 OLLAMA_PRIMARY          = os.environ.get("CHLOE_OLLAMA_PRIMARY", "1").strip() != "0"
-# Cached after the first probe — avoids hammering /api/tags on every turn.
-# None = not yet checked; bool after the first call to _ollama_available().
+# Cached after each probe — avoids hammering /api/tags on every turn.
+# Tuple (bool, timestamp) so we can re-probe after _OLLAMA_PROBE_TTL seconds.
+# Without the TTL, starting Ollama mid-session would never be detected.
+_OLLAMA_PROBE_TTL = 60.0  # seconds before re-probing the daemon
 _ollama_available_cache = None  # type: ignore[var-annotated]
 
 # Voice loop config
@@ -459,6 +464,65 @@ async def _ws_broadcast(obj):
           flush=True)
 
 
+# ─── Streaming TTS for the chat path (opt-in via CHLOE_TTS_STREAMING=1) ─────
+# The default chat path buffers the whole reply, then synthesizes, then
+# broadcasts. For long replies that's a 5+ second wait before any audio plays.
+# When this flag is on, _reply_audio_or_speak routes to _reply_audio_chunked
+# which splits the reply into sentences (via the existing _split_sentences_for_tts
+# helper used by the voice/PTT path), synthesizes each in order, and broadcasts
+# `tts_audio_chunk` messages so the HUD can start playing the first sentence
+# while later ones are still being synthesized. Drops time-to-first-audio from
+# ~5s to ~500ms on long replies.
+#
+# Off by default so the demo recording path is untouched. Set to 1 only after
+# verifying the chunked path doesn't regress anything.
+TTS_STREAMING = os.environ.get("CHLOE_TTS_STREAMING", "0").strip() == "1"
+
+
+async def _reply_audio_chunked(reply: str, *, label: str = "chat"):
+    """Streaming-TTS variant of the reply_audio path. Synthesizes the reply
+    one sentence at a time and broadcasts each as a `tts_audio_chunk`. The HUD
+    queues chunks and plays them sequentially through the same AnalyserNode
+    used for single-shot tts_audio, so amplitude reactivity still works.
+
+    Each chunk message:
+        {type: "tts_audio_chunk", chunk_id, total_chunks, is_final,
+         format, audio_b64, text}
+
+    Caller still gets the same await-until-done semantics as
+    _reply_audio_or_speak's single-shot branch — this returns when every
+    chunk has been broadcast. (HUD-side playback may continue after; the
+    finally-clause "idle" broadcast in handle_chat ends up filtered by the
+    HUD's expectingAudio guard until TtsAudio's onFinalEnd fires.)"""
+    sentences = _split_sentences_for_tts(reply)
+    if not sentences:
+        return
+    total = len(sentences)
+    for idx, sent in enumerate(sentences):
+        try:
+            result = await asyncio.to_thread(_synthesize_tts_bytes, sent)
+            if result is None:
+                print(f"[chloe] {label} chunked TTS: synth failed on "
+                      f"chunk {idx + 1}/{total}", flush=True)
+                continue
+            audio_bytes, fmt = result
+            ab64 = base64.b64encode(audio_bytes).decode("ascii")
+            await _ws_broadcast({
+                "type":         "tts_audio_chunk",
+                "chunk_id":     idx,
+                "total_chunks": total,
+                "is_final":     (idx == total - 1),
+                "format":       fmt,
+                "audio_b64":    ab64,
+                "text":         sent,
+            })
+            print(f"[chloe] {label}: chunk {idx + 1}/{total} "
+                  f"({len(audio_bytes)} bytes, {fmt})", flush=True)
+        except Exception as e:
+            print(f"[chloe] {label} chunked TTS error on chunk "
+                  f"{idx + 1}/{total}: {e}", flush=True)
+
+
 async def _reply_audio_or_speak(reply: str, data: dict, *, label: str = "chat"):
     """Route Chloe's spoken reply based on the inbound `reply_audio` flag.
 
@@ -468,12 +532,26 @@ async def _reply_audio_or_speak(reply: str, data: dict, *, label: str = "chat"):
                          point-to-point) because Tailscale-served browser WS
                          connections can swap between request and TTS-finish
                          — same bug class the wallet hit.
+
+                         When CHLOE_TTS_STREAMING=1 is set, this routes
+                         through _reply_audio_chunked instead — same effect
+                         on the HUD via the new tts_audio_chunk handler,
+                         drastically lower TTFB on long replies.
     reply_audio falsy  → original behavior: speak on PC speakers via _speak().
 
     Lives at module scope so handle_chat, handle_ptt_audio, and any future
     reply path can share it without duplicating the bytes/broadcast dance.
     `label` only affects log lines."""
     if data.get("reply_audio"):
+        if TTS_STREAMING:
+            try:
+                await _reply_audio_chunked(reply, label=label)
+                return
+            except Exception as e:
+                # If chunked path crashes, fall through to single-shot so
+                # the user still hears something — better degraded than mute.
+                print(f"[chloe] {label} chunked TTS crashed, falling back "
+                      f"to single-shot: {e}", flush=True)
         try:
             result = await asyncio.to_thread(_synthesize_tts_bytes, reply)
             if result is None:
@@ -527,9 +605,15 @@ _REALTIME_KEYWORDS = (
     # News / events
     "news", "headline", "headlines", "breaking",
     "what happened", "what's happening", "happening now",
-    # Sports
-    "score", "scored", "won", "winning", "leading", "playoff", "match",
+    # Sports — phrases must be sports-specific. Bare words like "score",
+    # "match", "won", "winning", "leading" false-positive on common
+    # questions ("Hans Zimmer score", "I won the lottery", "leading
+    # cause", "music match"). Use disambiguated phrases instead.
+    "final score", "the score is", "game score", "scored",
+    "playoff", "playoffs", "the match", "match tonight", "match today",
     "game tonight", "game today",
+    "who won", "did they win", "winning team", "currently winning",
+    "who's leading", "team is leading", "currently leading",
     # Politics / officeholders
     "election", "polls", "polling",
     "who is", "who's the", "who is the", "ceo", "president", "prime minister",
@@ -885,6 +969,55 @@ async def handle_chat(data, websocket):
                     hud_server.broadcast_sync("idle")
             return
 
+    # Lights: /lights status and natural-language ("turn off the bedroom")
+    if messages:
+        _last_user_l = _user_text_from_message(messages[-1]) or ""
+        lights_reply = await asyncio.to_thread(try_handle_lights_command, _last_user_l)
+        if lights_reply is not None:
+            _push_history("user", _last_user_l, modality="chat")
+            _push_history("assistant", lights_reply, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            await _ws_send(websocket, {"type": "delta", "text": lights_reply})
+            await _ws_send(websocket, {"type": "done"})
+            if not data.get("no_tts"):
+                hud_server.broadcast_sync("speaking")
+                try:
+                    await _reply_audio_or_speak(lights_reply, data, label="chat-lights")
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on lights reply: {e}")
+                finally:
+                    hud_server.broadcast_sync("idle")
+            return
+
+    # Brain commands: /ingest, /query, /lint, /fact, /brain, /podcast, /add
+    if messages:
+        _last_user = _user_text_from_message(messages[-1]) or ""
+        brain_reply = await asyncio.to_thread(try_handle_brain_command, _last_user)
+        if brain_reply is not None:
+            # brain_reply may be a string (normal) or a dict {text, no_tts}
+            # for commands that produce their own audio (e.g. /podcast plays
+            # a WAV via os.startfile and shouldn\'t also TTS the status text).
+            if isinstance(brain_reply, dict):
+                _brain_text = brain_reply.get("text", "")
+                _brain_silent = bool(brain_reply.get("no_tts"))
+            else:
+                _brain_text = brain_reply
+                _brain_silent = False
+            _push_history("user", _last_user, modality="chat")
+            _push_history("assistant", _brain_text, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            await _ws_send(websocket, {"type": "delta", "text": _brain_text})
+            await _ws_send(websocket, {"type": "done"})
+            if not data.get("no_tts") and not _brain_silent:
+                hud_server.broadcast_sync("speaking")
+                try:
+                    await _reply_audio_or_speak(_brain_text, data, label="chat-brain")
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on brain reply: {e}")
+                finally:
+                    hud_server.broadcast_sync("idle")
+            return
+
     # If the user message contains URLs, fetch them server-side and inject the
     # readable text into the message before sending to Groq. Browser CORS makes
     # client-side fetch unreliable, so it has to live here.
@@ -970,7 +1103,11 @@ async def handle_chat(data, websocket):
     groq_messages = _to_groq_messages(messages)
     groq_messages.insert(0, {"role": "system", "content": full_system})
 
-    print(f"[chloe] chat → {model} [{route_reason}] ({len(groq_messages)} msgs)")
+    # Show the model that will ACTUALLY generate. When use_ollama, model
+    # var holds MODEL_TEXT (used for trim sizing only); the real model is
+    # OLLAMA_MODEL. Display that so logs match the "Ollama (X) replied" line.
+    _display_model = f"ollama:{OLLAMA_MODEL}" if use_ollama else model
+    print(f"[chloe] chat → {_display_model} [{route_reason}] ({len(groq_messages)} msgs)")
     hud_server.broadcast_sync("thinking")
 
     # ─── Ollama-primary fast path ────────────────────────────────────────
@@ -1271,7 +1408,16 @@ async def handle_chat(data, websocket):
                     finally:
                         hud_server.broadcast_sync("idle")
                 return
-        await _ws_send(websocket, {"type": "error", "text": f"{type(e).__name__}: {e}"})
+        # Diagnose the failure mode so the user knows what to fix
+        diag_parts = [f"{type(e).__name__}: {e}"]
+        ollama_state = "reachable" if _ollama_available() else "unreachable"
+        diag_parts.append(f"Ollama fallback: {ollama_state}")
+        if not OLLAMA_FALLBACK_ENABLED:
+            diag_parts.append("Fallback disabled (CHLOE_OLLAMA_FALLBACK=0)")
+        elif ollama_state == "unreachable":
+            diag_parts.append(f"To enable local fallback, run `ollama serve` "
+                              f"(model: {OLLAMA_MODEL}, URL: {OLLAMA_URL})")
+        await _ws_send(websocket, {"type": "error", "text": " | ".join(diag_parts)})
 
 async def handle_volume(data, websocket):
     pass  # placeholder for future mic-level meters
@@ -1396,6 +1542,13 @@ async def _dispatch(data, websocket):
     elif t == "wallet_create_invoice":  await handle_wallet_create_invoice(data, websocket)
     elif t == "wallet_send":            await handle_wallet_send(data, websocket)
     elif t == "wallet_history":         await handle_wallet_history(data, websocket)
+    elif t == "lights_state":           await handle_lights_state(data, websocket)
+    elif t == "lights_action":          await handle_lights_action(data, websocket)
+    elif t == "lights_discover":        await handle_lights_discover(data, websocket)
+    elif t == "lights_rename":          await handle_lights_rename(data, websocket)
+    elif t == "lights_preset_apply":    await handle_lights_preset_apply(data, websocket)
+    elif t == "lights_preset_save":     await handle_lights_preset_save(data, websocket)
+    elif t == "lights_preset_delete":   await handle_lights_preset_delete(data, websocket)
     else: await _ws_send(websocket, {"type": "error", "text": f"unknown type: {t}"})
 
 
@@ -1717,10 +1870,35 @@ def _resolve_mic_device(sd):
         if MIC_DEVICE_OVERRIDE.isdigit():
             return int(MIC_DEVICE_OVERRIDE)
         needle = MIC_DEVICE_OVERRIDE.lower()
-        for i, d in enumerate(sd.query_devices()):
-            if d.get("max_input_channels", 0) > 0 and needle in d["name"].lower():
-                print(f"[voice] CHLOE_MIC matched device {i}: {d['name']}")
-                return i
+        # Substring match — but a name like "Microphone" matches the WDM-KS
+        # variant first on Windows, and PortAudio blocking input doesn't
+        # support WDM-KS (error -9999). Three-pass: prefer WASAPI, then any
+        # non-WDM-KS host, then anything (preserves prior behavior as a last
+        # resort so the warning path still fires when nothing matches).
+        host_apis = sd.query_hostapis()
+        def _hostname(d):
+            h = d.get("hostapi")
+            if h is None or not (0 <= h < len(host_apis)):
+                return ""
+            return host_apis[h]["name"].upper()
+        devs = list(enumerate(sd.query_devices()))
+        def _match_pass(predicate):
+            for i, d in devs:
+                if (d.get("max_input_channels", 0) > 0
+                    and needle in d["name"].lower()
+                    and predicate(_hostname(d))):
+                    print(f"[voice] CHLOE_MIC matched device {i}: {d['name']} "
+                          f"({_hostname(d) or '?'})")
+                    return i
+            return None
+        for predicate in (
+            lambda h: "WASAPI" in h,
+            lambda h: "WDM-KS" not in h and "KERNEL STREAMING" not in h,
+            lambda h: True,
+        ):
+            picked = _match_pass(predicate)
+            if picked is not None:
+                return picked
         print(f"[voice] WARNING: CHLOE_MIC={MIC_DEVICE_OVERRIDE!r} matched no device, using default")
         return None
 
@@ -2168,6 +2346,18 @@ def _ptt_record_phase(sd, device):
         print("[voice] PTT remember-ack complete", flush=True)
         return
 
+    # Lights: "turn off the bedroom" / "set top light to 30%"
+    lights_reply = try_handle_lights_command(transcript)
+    if lights_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", lights_reply, modality="voice")
+        _broadcast_exchange(transcript, lights_reply)
+        hud_server.broadcast_sync("speaking")
+        _speak(lights_reply)
+        hud_server.broadcast_sync("idle")
+        print("[voice] PTT lights-ack complete", flush=True)
+        return
+
     reply = _ask_groq(transcript)
     if not reply:
         print("[voice] PTT got empty reply from Groq — aborting", flush=True)
@@ -2478,6 +2668,17 @@ def _process_voice_turn(audio, sd, device) -> bool:
         _broadcast_exchange(transcript, ack)
         hud_server.broadcast_sync("speaking")
         _speak(ack)
+        hud_server.broadcast_sync("idle")
+        return True
+
+    # Lights: "turn off the bedroom" / "set top light to 30%"
+    lights_reply = try_handle_lights_command(transcript)
+    if lights_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", lights_reply, modality="voice")
+        _broadcast_exchange(transcript, lights_reply)
+        hud_server.broadcast_sync("speaking")
+        _speak(lights_reply)
         hud_server.broadcast_sync("idle")
         return True
 
@@ -3373,14 +3574,19 @@ def _groq_chat_attempt(user_text: str, model: str) -> str:
 
 def _ollama_available() -> bool:
     """Lazy probe: is the local Ollama daemon reachable AND does it have a
-    model loaded? Result cached so we don't HTTP-poll on every turn.
-    Returns False (without erroring) if the daemon is offline or the
-    fallback is disabled."""
+    model loaded? Result cached for _OLLAMA_PROBE_TTL seconds so we don't
+    HTTP-poll on every turn, but also so a mid-session `ollama serve` gets
+    picked up without a Chloe restart. Returns False (without erroring) if
+    the daemon is offline or the fallback is disabled."""
     global _ollama_available_cache
-    if _ollama_available_cache is not None:
-        return _ollama_available_cache
+    import time as _time
+    now = _time.monotonic()
+    if isinstance(_ollama_available_cache, tuple):
+        cached_value, cached_at = _ollama_available_cache
+        if now - cached_at < _OLLAMA_PROBE_TTL:
+            return cached_value
     if not OLLAMA_FALLBACK_ENABLED:
-        _ollama_available_cache = False
+        _ollama_available_cache = (False, now)
         return False
     try:
         import requests as _req
@@ -3389,19 +3595,23 @@ def _ollama_available() -> bool:
             tags = r.json().get("models", []) or []
             names = [t.get("name", "") for t in tags if t.get("name")]
             has_model = any(OLLAMA_MODEL in n or n.startswith(OLLAMA_MODEL.split(":")[0]) for n in names)
-            print(f"[chloe] Ollama detected at {OLLAMA_URL} ({len(names)} models)", flush=True)
-            if names:
-                print(f"[chloe]   available: {names}", flush=True)
-            if not has_model:
-                print(f"[chloe]   WARNING: target model '{OLLAMA_MODEL}' not pulled. "
-                      f"Run: ollama pull {OLLAMA_MODEL}", flush=True)
-            _ollama_available_cache = bool(names)
-            return _ollama_available_cache
+            # Only log on the first probe of a session or after a state change
+            prev = _ollama_available_cache[0] if isinstance(_ollama_available_cache, tuple) else None
+            result = bool(names)
+            if prev != result:
+                print(f"[chloe] Ollama detected at {OLLAMA_URL} ({len(names)} models)", flush=True)
+                if names:
+                    print(f"[chloe]   available: {names}", flush=True)
+                if not has_model:
+                    print(f"[chloe]   WARNING: target model '{OLLAMA_MODEL}' not pulled. "
+                          f"Run: ollama pull {OLLAMA_MODEL}", flush=True)
+            _ollama_available_cache = (result, now)
+            return result
     except Exception as e:
         if VOICE_DEBUG:
             print(f"[chloe] Ollama probe failed at {OLLAMA_URL}: "
                   f"{type(e).__name__}: {e}", flush=True)
-    _ollama_available_cache = False
+    _ollama_available_cache = (False, now)
     return False
 
 
@@ -3724,12 +3934,58 @@ def _ask_groq(user_text: str) -> str:
             _voice_history.pop()
     return reply
 
+_TTS_LINK_RE        = _re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+_TTS_WIKILINK_RE    = _re.compile(r'\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]')
+_TTS_CODEBLOCK_RE   = _re.compile(r'```[\s\S]*?```')
+_TTS_INLINE_CODE_RE = _re.compile(r'`([^`]+)`')
+_TTS_HEADING_RE     = _re.compile(r'^#{1,6}\s+', _re.MULTILINE)
+_TTS_BLOCKQUOTE_RE  = _re.compile(r'^>\s*', _re.MULTILINE)
+_TTS_BULLET_RE      = _re.compile(r'^\s*[-\u2022]\s+', _re.MULTILINE)
+_TTS_HRULE_RE       = _re.compile(r'^---+\s*$', _re.MULTILINE)
+_TTS_ASTERISK_RE    = _re.compile(r'\*+')
+_TTS_UNDERSCORE_PAIR_RE = _re.compile(r'(?<!\w)_+([^_\n]+?)_+(?!\w)')
+
+def _clean_for_tts(text: str) -> str:
+    """Strip markdown symbols that the TTS engine would otherwise pronounce
+    out loud (asterisks, hashes, backticks, etc). Conservative on underscores
+    so snake_case identifiers like 'daily_context.py' stay intact.
+    """
+    if not text:
+        return text
+    # Code blocks: keep content readable but drop the fences.
+    text = _TTS_CODEBLOCK_RE.sub(lambda m: m.group(0).strip("`").strip(), text)
+    # Inline links/wikilinks: keep visible text only.
+    text = _TTS_LINK_RE.sub(r"\1", text)
+    text = _TTS_WIKILINK_RE.sub(
+        lambda m: (m.group(2) or m.group(1).split("/")[-1]).replace("_", " "),
+        text,
+    )
+    # Inline code: drop the backticks.
+    text = _TTS_INLINE_CODE_RE.sub(r"\1", text)
+    # Block markers.
+    text = _TTS_HEADING_RE.sub("", text)
+    text = _TTS_BLOCKQUOTE_RE.sub("", text)
+    text = _TTS_BULLET_RE.sub("", text)
+    text = _TTS_HRULE_RE.sub("", text)
+    # Emphasis. Asterisks always strippable; underscore italics only when
+    # paired around a non-identifier word so 'snake_case' survives.
+    text = _TTS_ASTERISK_RE.sub("", text)
+    text = _TTS_UNDERSCORE_PAIR_RE.sub(r"\1", text)
+    # Whitespace cleanup.
+    text = _re.sub(r"[ \t]+", " ", text)
+    text = _re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _speak(text: str) -> None:
     """Synthesize TTS and play. Engine priority:
         1. ElevenLabs   if USE_ELEVENLABS=1 + ELEVENLABS_API_KEY set
         2. Kokoro local if USE_KOKORO=1 + model files present
         3. edge-tts     (always-available free default)
     All three share the same sentence-streaming + barge-in pipeline."""
+    text = _clean_for_tts(text)
+    if not text:
+        return
     if USE_ELEVENLABS and ELEVENLABS_API_KEY:
         _speak_elevenlabs(text)
     elif USE_KOKORO:
@@ -3748,6 +4004,9 @@ def _synthesize_tts_bytes(text: str):
 
     Falls through the same priority chain as _speak. Returns None only if
     every engine in the chain failed."""
+    text = _clean_for_tts(text)
+    if not text:
+        return None
     if USE_ELEVENLABS and ELEVENLABS_API_KEY:
         b = _elevenlabs_to_bytes(text)
         if b: return (b, "mp3")
@@ -4310,6 +4569,85 @@ def _speak_kokoro(text: str) -> None:
 
 
 # ─── REGISTER + START VOICE LOOP ON IMPORT ───────────────────────────────────
+# ─── DIRECT LIGHTS WS ENDPOINTS ─────────────────────────────────────────────
+# These bypass the LLM/voice path so the HUD CH02 panel can drive bulbs
+# directly. State changes broadcast lights_state_result so every client
+# (HUD + PWA) updates in sync.
+
+async def _broadcast_lights_state():
+    """Snapshot current bulb + preset state and push to all WS clients."""
+    snap = await asyncio.to_thread(_lights.get_state_snapshot)
+    await _ws_broadcast({"type": "lights_state_result", "ok": True, **snap})
+
+
+async def handle_lights_state(data, websocket):
+    snap = await asyncio.to_thread(_lights.get_state_snapshot)
+    await _ws_send(websocket, {"type": "lights_state_result", "ok": True, **snap})
+
+
+async def handle_lights_action(data, websocket):
+    target = data.get("target") or "all"
+    kwargs = {}
+    for k in ("on", "brightness", "color", "ct", "rgb"):
+        if k in data and data[k] is not None:
+            kwargs[k] = data[k]
+    result = await asyncio.to_thread(_lights.apply_action, target, **kwargs)
+    await _ws_send(websocket, {"type": "lights_action_result", **result})
+    await _broadcast_lights_state()
+
+
+async def handle_lights_discover(data, websocket):
+    found = await asyncio.to_thread(_lights.discover)
+    await _ws_send(websocket, {"type": "lights_discover_result", "ok": True, "found": found})
+    await _broadcast_lights_state()
+
+
+async def handle_lights_rename(data, websocket):
+    mac = (data.get("mac") or "").strip()
+    new_name = (data.get("name") or "").strip()
+    if not mac or not new_name:
+        await _ws_send(websocket, {"type": "lights_rename_result", "ok": False,
+                                   "error": "mac and name required"})
+        return
+    ok = await asyncio.to_thread(_lights.rename_bulb, mac, new_name)
+    await _ws_send(websocket, {"type": "lights_rename_result", "ok": ok,
+                               "mac": mac, "name": new_name.lower()})
+    await _broadcast_lights_state()
+
+
+async def handle_lights_preset_apply(data, websocket):
+    name = (data.get("name") or "").strip()
+    if not name:
+        await _ws_send(websocket, {"type": "lights_preset_apply_result", "ok": False,
+                                   "error": "name required"})
+        return
+    result = await asyncio.to_thread(_lights.apply_preset, name)
+    await _ws_send(websocket, {"type": "lights_preset_apply_result", **result})
+    await _broadcast_lights_state()
+
+
+async def handle_lights_preset_save(data, websocket):
+    name = (data.get("name") or "").strip()
+    if not name:
+        await _ws_send(websocket, {"type": "lights_preset_save_result", "ok": False,
+                                   "error": "name required"})
+        return
+    result = await asyncio.to_thread(_lights.save_preset, name)
+    await _ws_send(websocket, {"type": "lights_preset_save_result", **result})
+    await _broadcast_lights_state()
+
+
+async def handle_lights_preset_delete(data, websocket):
+    name = (data.get("name") or "").strip()
+    if not name:
+        await _ws_send(websocket, {"type": "lights_preset_delete_result", "ok": False,
+                                   "error": "name required"})
+        return
+    result = await asyncio.to_thread(_lights.delete_preset, name)
+    await _ws_send(websocket, {"type": "lights_preset_delete_result", **result})
+    await _broadcast_lights_state()
+
+
 hud_server.set_jarvis_handler(_dispatch)
 print(f"[chloe] handler registered  model={MODEL_TEXT}  vision={MODEL_VISION}")
 print(f"[chloe] groq key: {'set' if GROQ_API_KEY else 'MISSING (chat will fail)'}")

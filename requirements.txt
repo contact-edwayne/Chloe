@@ -33,6 +33,11 @@ requests==2.33.1
 beautifulsoup4==4.14.3
 pillow==12.2.0                   # image attachments → vision model
 
+# ─── Screen vision (/see) ───────────────────────────────────────────────────
+mss>=9.0                         # cross-platform screen capture
+pywin32>=306; sys_platform == "win32"   # foreground-window detection (Win32)
+psutil>=5.9                      # exe basename for blocklist match
+
 # ─── Bitcoin Lightning (Breez SDK Liquid) ────────────────────────────────────
 breez-sdk-liquid>=0.6            # may need to be installed from Breez's index
 bip-utils>=2.9                   # BIP-39 mnemonic generation

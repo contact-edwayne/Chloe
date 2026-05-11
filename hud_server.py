@@ -22,7 +22,10 @@ async def handler(websocket):
                 data = json.loads(message)
                 if data.get("type") in ("chat", "volume", "ptt_start", "ptt_stop", "ptt_audio",
                                         "wallet_balance", "wallet_create_invoice",
-                                        "wallet_send", "wallet_history"):
+                                        "wallet_send", "wallet_history",
+                                        "lights_state", "lights_action", "lights_discover",
+                                        "lights_rename", "lights_preset_apply",
+                                        "lights_preset_save", "lights_preset_delete"):
                     if jarvis_handler:
                         await jarvis_handler(data, websocket)
                     else:
@@ -74,15 +77,14 @@ async def start_server():
     # max_size bumped so mobile WAV blobs (a few seconds of 16kHz mono int16
     # base64 ~ 100-300KB) and TTS audio replies don't bump the websockets
     # default. 8MB gives headroom for longer holds and ElevenLabs MP3 replies.
+    # Start the brain graph HTTP server alongside (separate port).
+    # Failure to bind is non-fatal — the chat path keeps working.
+    try:
+        import brain_http
+        brain_http.start()
+    except Exception as e:
+        print(f"[hud_server] brain_http start failed: {e}", flush=True)
+
     async with websockets.serve(handler, WS_HOST, WS_PORT, max_size=8 * 1024 * 1024):
         shown = "localhost" if WS_HOST in ("127.0.0.1", "localhost") else WS_HOST
-        print(f"WebSocket server started on ws://{shown}:{WS_PORT} (bind={WS_HOST})")
-        await asyncio.Future()
-
-def broadcast_sync(message):
-    if server_loop and hud_clients:
-        asyncio.run_coroutine_threadsafe(broadcast(message), server_loop)
-
-def set_jarvis_handler(fn):
-    global jarvis_handler
-    jarvis_handler = fn
+        print(f"WebSocket server started on ws://{shown}:{WS_PORT} (bind={WS_H
