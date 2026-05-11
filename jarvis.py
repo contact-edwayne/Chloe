@@ -1009,13 +1009,29 @@ async def handle_chat(data, websocket):
             await _ws_send(websocket, {"type": "delta", "text": _brain_text})
             await _ws_send(websocket, {"type": "done"})
             if not data.get("no_tts") and not _brain_silent:
-                hud_server.broadcast_sync("speaking")
+                # In reply_audio mode the HUD plays TTS in-browser; its
+                # TtsAudio.play onStart/onEnd callbacks already drive the
+                # speaking->idle transition in lock-step with actual playback.
+                # Broadcasting "speaking"/"idle" here races ahead of the audio
+                # (most visible on long /query replies, where the backend
+                # "idle" arrives while decodeAudioData is still resolving)
+                # and the orb flips back to idle mid-speech. Skip the manual
+                # broadcasts in that mode; the audio callbacks handle state.
+                # Local _speak path still needs them because
+                # _reply_audio_or_speak awaits through playback locally.
+                _hud_via_audio = bool(data.get("reply_audio"))
+                if not _hud_via_audio:
+                    hud_server.broadcast_sync("speaking")
                 try:
                     await _reply_audio_or_speak(_brain_text, data, label="chat-brain")
                 except Exception as e:
                     print(f"[chloe] chat TTS error on brain reply: {e}")
-                finally:
+                    # Backstop: unexpected exception — force idle so the HUD
+                    # doesn't get stuck in speaking/thinking.
                     hud_server.broadcast_sync("idle")
+                else:
+                    if not _hud_via_audio:
+                        hud_server.broadcast_sync("idle")
             return
 
     # If the user message contains URLs, fetch them server-side and inject the
