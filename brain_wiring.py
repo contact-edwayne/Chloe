@@ -809,11 +809,56 @@ def try_handle_brain_command(user_text: str):
     if msg.startswith("/ask ") or msg == "/ask":
         return handle_ask(msg[len("/ask"):].strip())
 
+    if msg.startswith("/recall "):
+        # Demo-visibility hook over ChloeMemory.search_turns. Shows what
+        # the semantic recall layer would surface for a given query —
+        # same code path the chat handler uses when looks_like_recall_query
+        # fires, just with min_age_hours=0 so today's turns are included.
+        text = msg[len("/recall "):].strip()
+        if not text:
+            return "Usage: `/recall <query>`"
+        # Late import — avoids a circular import at module load.
+        try:
+            from jarvis import _memory  # type: ignore
+        except Exception as e:
+            return f"/recall unavailable: {e}"
+        if _memory is None:
+            return "/recall: memory not initialized yet"
+        # min_age_hours=0.25 (15 min) skips the trivially-recent self-
+        # reference case where the user's just-typed /recall question and
+        # Chloe's just-emitted response would otherwise surface as the top
+        # hits. Anything older than that is genuinely historical and worth
+        # showing. Override by setting min_age_hours in source if needed.
+        hits = _memory.search_turns(text, limit=10, min_age_hours=0.25)
+        if not hits:
+            return f"No matching turns for: _{text}_"
+        import datetime as _dt
+        now = _dt.datetime.now().timestamp()
+        out = [f"**Top recall hits for**: _{text}_  ({len(hits)} of up to 10)\n"]
+        for i, h in enumerate(hits, 1):
+            age_s = max(0, now - float(h.get('ts', now)))
+            if age_s < 60:
+                age = f"{int(age_s)}s ago"
+            elif age_s < 3600:
+                age = f"{int(age_s/60)}m ago"
+            elif age_s < 86400:
+                age = f"{int(age_s/3600)}h ago"
+            else:
+                age = f"{int(age_s/86400)}d ago"
+            snippet = (h.get('content', '') or '').replace('\n', ' ')
+            if len(snippet) > 160:
+                snippet = snippet[:157] + '...'
+            role = h.get('role', '?')
+            modality = h.get('modality', '?')
+            out.append(f"{i}. **{role} · {modality} · {age}** — {snippet}")
+        return "\n".join(out)
+
     if msg in ("/brain", "/help brain"):
         return ("**Brain commands:**\n"
                 "  `/ingest [--dry-run] <filename>` - ingest from "
                 f"`{BRAIN.raw_dir}` (--dry-run previews without writing)\n"
                 "  `/query <question>`      - search the wiki\n"
+                "  `/recall <query>`        - semantic search over conversation history\n"
                 "  `/add <type> <slug> <body>` - manually add an entity or concept page\n"
                 "  `/overview [slug...]`    - generate 2-voice podcast script from sources\n"
                 "  `/podcast [pattern]`     - render the most recent overview script to audio\n"
