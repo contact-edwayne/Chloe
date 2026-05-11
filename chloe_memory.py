@@ -32,12 +32,86 @@ loop, the WebSocket loop, and the chat path. SQLite in WAL mode + one
 connection-per-call + an internal lock around writes keeps this safe.
 """
 
+import os
 import sqlite3
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
+
+import numpy as np
+import requests
+
+
+# ─── Semantic recall config ─────────────────────────────────────────────────
+# Switched 2026-05-11 from FTS5 keyword search to Ollama-backed vector
+# embeddings. Public API of search_turns() is unchanged — callers see the
+# same {ts, role, content, modality} dicts and the same min_age_hours filter.
+# If embedding ever fails (Ollama unreachable, model not pulled, network
+# blip), search_turns falls back to the FTS5 implementation so recall keeps
+# working — degraded but not broken. The FTS5 schema and triggers stay in
+# place for that reason.
+_EMBED_MODEL = os.environ.get("CHLOE_EMBED_MODEL", "nomic-embed-text")
+_EMBED_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+# Short timeout — embed runs synchronously inside append_turn from the chat
+# handler, so a 30s hang on Ollama trouble would freeze the conversation.
+# 5s covers a cold load of nomic-embed-text comfortably; if it's slower than
+# that, the embed gets skipped (NULL embedding) and the backfill script can
+# patch it up later. Tune via CHLOE_EMBED_TIMEOUT for slow boxes.
+_EMBED_TIMEOUT = float(os.environ.get("CHLOE_EMBED_TIMEOUT", "5"))
+
+# Minimum cosine similarity for a turn to surface from search_turns(). With
+# only a few hundred turns in the corpus, brute-force top-k always returns
+# K results even when nothing in the DB is actually relevant — the model
+# answers "tell me about dogs" with "Why don't eggs tell jokes?" because
+# it was the LEAST-different of the available junk. The threshold cuts that
+# noise: anything below it is dropped from results, even if it would have
+# been in the top-k. Empirically with nomic-embed-text, ~0.5 separates
+# "same topic, different wording" from "tangentially related"; ~0.35
+# separates "tangentially related" from "unrelated noise". Tune for your
+# corpus via CHLOE_RECALL_THRESHOLD.
+_RECALL_THRESHOLD = float(os.environ.get("CHLOE_RECALL_THRESHOLD", "0.35"))
+
+
+def _is_noise_turn(role: str, content: str) -> bool:
+    """Return True for turns that should never surface in semantic recall.
+
+    Patterns observed in real corpus 2026-05-11:
+      - Empty / single-char content (e.g. ".") — wake-word false positives
+        on the voice path. These have no semantic content but their L2-
+        normalized embeddings still get moderate cosine scores against
+        random queries.
+      - User typing a slash command (e.g. "/recall toy story"). These match
+        themselves on subsequent /recall queries, producing recursive demo
+        noise where the top hit is the literal query string from 2 minutes
+        ago.
+      - Assistant emitting recall-command output (starts with "**Top recall
+        hits for**"). Same self-reference problem — recall output shows up
+        in future recalls.
+      - Synthetic [CONTEXT — viewing wiki page X] messages auto-injected
+        when Ed clicks a brain-graph node. Not actual conversation, just
+        UI-injected context the chat handler stitches in.
+
+    These are commands and meta-conversation, not actual content worth
+    remembering. Filtering at read time means we don't need to clean up
+    or re-embed the existing corpus; the embeddings stay but the rows
+    just never surface."""
+    if not content:
+        return False
+    c = content.strip()
+    # Voice false-positives: "." / single chars / very short noise.
+    if len(c) < 3:
+        return True
+    if role == "user" and c.startswith("/"):
+        return True
+    if role == "assistant" and c.startswith("**Top recall hits for**"):
+        return True
+    # Brain-graph "you are looking at this node" injections.
+    if c.startswith("[CONTEXT —") or c.startswith("[CONTEXT -"):
+        return True
+    return False
+
 
 
 # Header injected into a freshly created facts file. Kept short — facts
@@ -120,6 +194,15 @@ class ChloeMemory:
                     INSERT INTO turns_fts(rowid, content) VALUES (new.id, new.content);
                 END;
             """)
+            # Migration 2026-05-11: add embedding column for vector recall.
+            # Idempotent — only ALTERs if the column isn't already there.
+            # Existing turns get NULL embeddings; run backfill_embeddings.py
+            # to populate retroactively. New turns embed on insert via
+            # append_turn(). search_turns() ignores NULL-embedding rows.
+            existing_cols = {r[1] for r in c.execute(
+                "PRAGMA table_info(turns)").fetchall()}
+            if 'embedding' not in existing_cols:
+                c.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
 
     def _init_facts(self):
         """Create facts.md with a starter header if it doesn't exist."""
@@ -134,15 +217,24 @@ class ChloeMemory:
 
     def append_turn(self, role: str, content: str, modality: str = "voice"):
         """Persist a single turn. Empty/whitespace-only content is ignored
-        so we don't pollute the log with empty assistant replies on errors."""
+        so we don't pollute the log with empty assistant replies on errors.
+
+        Also embeds the content via Ollama and stores the vector in the
+        embedding column so search_turns() can do semantic recall. If the
+        embed call fails (Ollama unreachable, model not pulled), the turn
+        still gets persisted with a NULL embedding — search_turns will
+        skip it for vector recall but it's still in FTS5 fallback and in
+        recent_turns() / turns_in_range()."""
         if not content or not content.strip():
             return
+        content = content.strip()
+        embedding_blob = self._embed(content)
         try:
             with self._lock, self._connect() as c:
                 c.execute(
-                    "INSERT INTO turns(ts, role, content, modality) "
-                    "VALUES (?, ?, ?, ?)",
-                    (time.time(), role, content.strip(), modality),
+                    "INSERT INTO turns(ts, role, content, modality, embedding) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (time.time(), role, content, modality, embedding_blob),
                 )
         except sqlite3.Error as e:
             # Don't let memory errors break the conversation flow.
@@ -195,18 +287,139 @@ class ChloeMemory:
             for r in reversed(rows)
         ]
 
-    # ─── Layer 3: semantic recall (FTS5) ─────────────────────────────────
+    # ─── Layer 3: semantic recall (vector embeddings via Ollama) ─────────
+    # Upgraded 2026-05-11 from FTS5 keyword matching to Ollama-backed
+    # vector embeddings (default: nomic-embed-text). FTS5 stays as the
+    # fallback when embedding is unavailable.
+
+    def _embed(self, text: str) -> bytes | None:
+        """Call Ollama's /api/embeddings endpoint and return an L2-normalized
+        float32 byte string suitable for storing in a BLOB column.
+
+        Returns None if the embed failed for any reason (Ollama unreachable,
+        model not pulled, network error, empty response). Callers should
+        treat None as 'no embedding available' and either fall back to
+        FTS5 (query path) or insert a NULL embedding (write path).
+
+        L2-normalizing on the way in lets us compute cosine similarity at
+        query time with a single matmul — np.dot of two unit vectors is
+        cosine, no division needed downstream."""
+        if not text or not text.strip():
+            return None
+        try:
+            r = requests.post(
+                f"{_EMBED_URL}/api/embeddings",
+                json={"model": _EMBED_MODEL, "prompt": text.strip()},
+                timeout=_EMBED_TIMEOUT,
+            )
+            r.raise_for_status()
+            emb = r.json().get("embedding") or []
+            if not emb:
+                return None
+            arr = np.asarray(emb, dtype=np.float32)
+            norm = float(np.linalg.norm(arr))
+            if not norm or not np.isfinite(norm):
+                return None
+            arr = arr / norm
+            return arr.tobytes()
+        except Exception as e:
+            print(f"[memory] embed failed ({_EMBED_MODEL} @ {_EMBED_URL}): {e}",
+                  flush=True)
+            return None
 
     def search_turns(self, query: str, limit: int = 5,
                      min_age_hours: float = 0.5) -> list[dict]:
-        """FTS5 full-text search over historical turns. Returns the top-k
-        most-relevant matches sorted by FTS rank.
+        """Semantic search over historical turns. Embeds the query via
+        Ollama and returns the top-k highest-cosine turns. Falls back to
+        FTS5 keyword search if embedding fails so recall degrades gracefully
+        instead of breaking.
 
         `min_age_hours` excludes turns from the very recent past (default
         last 30 min) so that a 'what did I say about X earlier' query
         doesn't just echo the active conversation back at the user.
         Set to 0 to include everything.
+
+        Return shape (list of {ts, role, content, modality}) is unchanged
+        from the FTS5 version — all callers in jarvis.py keep working.
         """
+        if not query or not query.strip():
+            return []
+
+        q_blob = self._embed(query)
+        if q_blob is None:
+            # Embed unavailable — FTS5 keeps recall working, just keyword-only.
+            print("[memory] vector recall unavailable, falling back to FTS5",
+                  flush=True)
+            return self._search_turns_fts5(query, limit, min_age_hours)
+
+        q_vec = np.frombuffer(q_blob, dtype=np.float32)
+        cutoff = time.time() - (min_age_hours * 3600.0)
+
+        try:
+            with self._lock, self._connect() as c:
+                rows = c.execute("""
+                    SELECT ts, role, content, modality, embedding
+                    FROM turns
+                    WHERE ts < ? AND embedding IS NOT NULL
+                """, (cutoff,)).fetchall()
+        except sqlite3.Error as e:
+            print(f"[memory] search_turns failed: {e}", flush=True)
+            return []
+
+        if not rows:
+            return []
+
+        # Stack BLOBs into a single (N, D) matrix and brute-force cosine.
+        # Embeddings are pre-normalized so cosine == dot product. Validate
+        # dim against the query vector so a model swap (nomic 768 → mxbai
+        # 1024) doesn't silently mix mismatched embeddings.
+        vecs = []
+        metas = []
+        for ts, role, content, modality, blob in rows:
+            try:
+                v = np.frombuffer(blob, dtype=np.float32)
+            except Exception:
+                continue
+            if v.shape != q_vec.shape:
+                continue
+            vecs.append(v)
+            metas.append((ts, role, content, modality))
+
+        if not vecs:
+            # All stored embeddings are wrong-dim (post-model-swap) — fallback.
+            print("[memory] no compatible-dim embeddings found, falling back to FTS5",
+                  flush=True)
+            return self._search_turns_fts5(query, limit, min_age_hours)
+
+        M = np.stack(vecs)             # (N, D)
+        scores = M @ q_vec             # (N,) cosine similarities
+
+        # Sort all by score descending — we'll filter inside the loop so
+        # that noise-turn skips don't shrink our top-k. argpartition would
+        # save a few microseconds on huge corpora but with hundreds-to-low-
+        # thousands of turns the full sort is trivial and the code reads
+        # cleaner.
+        order = np.argsort(-scores)
+
+        hits: list[dict] = []
+        for idx in order:
+            score = float(scores[idx])
+            if score < _RECALL_THRESHOLD:
+                break  # remaining are all below threshold, sorted desc
+            ts, role, content, modality = metas[idx]
+            if _is_noise_turn(role, content):
+                continue  # slash command or recall output — never surface
+            hits.append({"ts": ts, "role": role,
+                         "content": content, "modality": modality})
+            if len(hits) >= limit:
+                break
+        return hits
+
+    def _search_turns_fts5(self, query: str, limit: int,
+                           min_age_hours: float) -> list[dict]:
+        """Legacy FTS5 keyword search. Kept as the fallback path when
+        embedding is unavailable — recall degrades from semantic to
+        keyword instead of breaking entirely."""
         if not query or not query.strip():
             return []
 
@@ -237,14 +450,15 @@ class ChloeMemory:
                 """, (match_expr, cutoff, limit)).fetchall()
         except sqlite3.OperationalError as e:
             # Bad MATCH expression — return nothing rather than crashing.
-            print(f"[memory] search_turns FTS error: {e}", flush=True)
+            print(f"[memory] _search_turns_fts5 FTS error: {e}", flush=True)
             return []
         except sqlite3.Error as e:
-            print(f"[memory] search_turns failed: {e}", flush=True)
+            print(f"[memory] _search_turns_fts5 failed: {e}", flush=True)
             return []
         return [
             {"ts": r[0], "role": r[1], "content": r[2], "modality": r[3]}
             for r in rows
+            if not _is_noise_turn(r[1], r[2])
         ]
 
     # ─── Layer 2: long-term facts ────────────────────────────────────────
