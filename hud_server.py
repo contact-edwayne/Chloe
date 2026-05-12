@@ -25,24 +25,24 @@ async def handler(websocket):
                                         "wallet_send", "wallet_history",
                                         "lights_state", "lights_action", "lights_discover",
                                         "lights_rename", "lights_preset_apply",
-                                        "lights_preset_save", "lights_preset_delete"):
+                                        "lights_preset_save", "lights_preset_delete",
+                                        "social_drafts_list", "social_draft_now",
+                                        "social_draft_edit", "social_draft_approve",
+                                        "social_draft_reject"):
                     if jarvis_handler:
                         await jarvis_handler(data, websocket)
                     else:
                         # Boot race: HUD/PWA WS opens and immediately auto-polls
                         # (e.g. wallet_balance every 30s) before jarvis.py has
                         # finished booting and registered its handler. Silently
-                        # drop the request and log to terminal — the next poll
-                        # tick will succeed. Previously we replied with
-                        # "Jarvis backend not ready yet." which surfaced as a
-                        # chat-bubble on every fresh start.
+                        # drop the request and log to terminal -- the next poll
+                        # tick will succeed.
                         print(f"[hud_server] dropping {data.get('type')!r} "
-                              f"— jarvis_handler not registered yet", flush=True)
+                              f"-- jarvis_handler not registered yet", flush=True)
                     continue
             except (json.JSONDecodeError, TypeError):
                 pass
 
-            # Plain state string — relay to all other clients
             others = [c for c in hud_clients if c != websocket]
             if others:
                 results = await asyncio.gather(
@@ -51,7 +51,7 @@ async def handler(websocket):
                 )
                 for r in results:
                     if isinstance(r, Exception):
-                        pass  # client disconnected mid-broadcast, ignore
+                        pass
     except websockets.exceptions.ConnectionClosedOK:
         pass
     except websockets.exceptions.ConnectionClosedError:
@@ -69,16 +69,16 @@ async def broadcast(message):
     )
     for r in results:
         if isinstance(r, Exception):
-            pass  # ignore disconnected clients
+            pass
 
 async def start_server():
     global server_loop
     server_loop = asyncio.get_event_loop()
-    # max_size bumped so mobile WAV blobs (a few seconds of 16kHz mono int16
-    # base64 ~ 100-300KB) and TTS audio replies don't bump the websockets
-    # default. 8MB gives headroom for longer holds and ElevenLabs MP3 replies.
-    # Start the brain graph HTTP server alongside (separate port).
-    # Failure to bind is non-fatal — the chat path keeps working.
+    # Start the brain graph HTTP server alongside (separate port). Failure
+    # to bind is non-fatal — the chat path keeps working. Restored 2026-05-12
+    # after a prior file rewrite (when social-media WS handlers were added)
+    # accidentally dropped this block; symptom was "localhost refused to
+    # connect" on http://localhost:6790/brain-graph.html.
     try:
         import brain_http
         brain_http.start()
@@ -87,4 +87,13 @@ async def start_server():
 
     async with websockets.serve(handler, WS_HOST, WS_PORT, max_size=8 * 1024 * 1024):
         shown = "localhost" if WS_HOST in ("127.0.0.1", "localhost") else WS_HOST
-        print(f"WebSocket server started on ws://{shown}:{WS_PORT} (bind={WS_H
+        print(f"WebSocket server started on ws://{shown}:{WS_PORT} (bind={WS_HOST})")
+        await asyncio.Future()
+
+def broadcast_sync(message):
+    if server_loop and hud_clients:
+        asyncio.run_coroutine_threadsafe(broadcast(message), server_loop)
+
+def set_jarvis_handler(fn):
+    global jarvis_handler
+    jarvis_handler = fn
