@@ -46,6 +46,10 @@ from groq import AsyncGroq, Groq
 from brain_wiring import BRAIN, try_handle_brain_command
 import lights as _lights
 from lights import try_handle_lights_command
+from search import try_handle_search_command, web_search, format_for_context
+import social        # Bluesky XRPC client + secrets I/O
+import social_db     # SQLite drafts DAO
+import social_composer  # persona-driven post drafting
 
 # Used for the URL-attachment feature in chat (auto-detect http(s) links in the
 # user message, fetch them server-side, prepend the page text to the prompt).
@@ -583,6 +587,163 @@ async def _reply_audio_or_speak(reply: str, data: dict, *, label: str = "chat"):
 # any of these words ("is it raining" without "currently/now"), so it'll miss
 # some. Tradeoff: compound-mini's TPM limit is small enough that being modest
 # with it is worth the occasional miss. The user can always rephrase.
+async def _brave_fallback_search(websocket, query, data):
+    """Brave-backed search + LLM synthesis as a hedge-retry final fallback.
+
+    Used when the primary model reply hedges and the compound-mini retry
+    is unavailable or also hedges. Emits its own start / delta / sources /
+    done WS sequence so the user sees a clean second reply with citation
+    chips. Returns the synthesized reply text (empty string on any failure
+    — caller falls back to whatever reply they already had).
+
+    The caller is responsible for pushing the returned text to history and
+    triggering TTS; this helper only handles the WS streaming + sources.
+    """
+    if not query:
+        return ""
+    try:
+        results = await asyncio.to_thread(web_search, query, 5)
+    except RuntimeError as e:
+        # Most commonly BRAVE_API_KEY not set — log and bail quietly.
+        print(f"[chloe] brave fallback skipped: {e}", flush=True)
+        return ""
+    except Exception as e:
+        print(f"[chloe] brave search failed: {e}", flush=True)
+        return ""
+    if not results:
+        return ""
+
+    await _ws_send(websocket, {
+        "type": "tool_start",
+        "text": f"Searching the web: {query}",
+    })
+    ctx_block = format_for_context(results, query)
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    search_system = (
+        f"Today's date is {today}.\n\n"
+        "You just performed a web search for the user. Answer their query "
+        "using ONLY the numbered search results in the next message. Cite "
+        "specific facts with bracketed numbers like [1] or [2] matching the "
+        "result list. Keep your answer to 2-4 sentences in your normal "
+        "conversational voice. If the results don't actually answer the "
+        "question, say so honestly — don't fabricate."
+    )
+    search_user = f"{ctx_block}\n\nQuery: {query}"
+    search_msgs = [
+        {"role": "system", "content": search_system},
+        {"role": "user", "content": search_user},
+    ]
+    await _ws_send(websocket, {"type": "start"})
+    full_reply = ""
+    try:
+        if _async_groq is not None:
+            stream = await _async_groq.chat.completions.create(
+                model=MODEL_TEXT,
+                messages=search_msgs,
+                max_tokens=400,
+                temperature=0.5,
+                stream=True,
+            )
+            async for chunk in stream:
+                try:
+                    delta = chunk.choices[0].delta.content
+                except (AttributeError, IndexError):
+                    delta = None
+                if delta:
+                    full_reply += delta
+                    await _ws_send(websocket,
+                                   {"type": "delta", "text": delta})
+        elif _ollama_available():
+            ollama_reply = await asyncio.to_thread(
+                _ollama_chat, search_msgs, 400
+            )
+            if ollama_reply:
+                full_reply = ollama_reply
+                await _ws_send(websocket,
+                               {"type": "delta", "text": ollama_reply})
+        if not full_reply:
+            full_reply = ctx_block
+            await _ws_send(websocket,
+                           {"type": "delta", "text": ctx_block})
+    except Exception as e:
+        print(f"[chloe] brave-fallback synthesis error: {e}", flush=True)
+        full_reply = ctx_block
+        await _ws_send(websocket, {"type": "delta", "text": ctx_block})
+
+    await _ws_send(websocket, {
+        "type": "sources",
+        "items": [
+            {
+                "n": i + 1,
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "domain": r.get("domain", ""),
+            }
+            for i, r in enumerate(results)
+        ],
+    })
+    await _ws_send(websocket, {"type": "done"})
+    return full_reply
+
+
+def _brave_voice_synth(query):
+    """Sync Brave search + Groq synthesis for the voice path.
+
+    Voice's final fallback when local qwen / Groq compound both hedge.
+    No citation markers in the synthesized reply — TTS reading "open
+    bracket one close bracket" is unlistenable. Returns the synthesized
+    reply text, or empty string on any failure (caller falls back to
+    whatever reply they already had).
+    """
+    if not query:
+        return ""
+    try:
+        results = web_search(query, count=5)
+    except RuntimeError as e:
+        # Most commonly BRAVE_API_KEY not set — log and bail quietly.
+        print(f"[voice] brave fallback skipped: {e}", flush=True)
+        return ""
+    except Exception as e:
+        print(f"[voice] brave search failed: {e}", flush=True)
+        return ""
+    if not results:
+        return ""
+    if not _sync_groq:
+        # Deep failure mode — return the best single result as a one-liner
+        # so the user gets *something* spoken instead of dead air.
+        first = results[0]
+        title = (first.get("title") or "").strip()
+        domain = (first.get("domain") or "the web").strip()
+        if title:
+            return f"From {domain}: {title}."
+        return ""
+    ctx_block = format_for_context(results, query)
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    search_system = (
+        f"Today's date is {today}.\n\n"
+        "You just performed a web search for the user. Answer their question "
+        "using ONLY the numbered results below. Keep your reply to one or "
+        "two sentences for a voice response — no citation brackets, no "
+        "markdown, no lists. Plain conversational speech. If the results "
+        "don't actually answer the question, say so honestly.\n\n"
+        + ctx_block
+    )
+    try:
+        resp = _sync_groq.with_options(timeout=30.0).chat.completions.create(
+            model=MODEL_TEXT,
+            messages=[
+                {"role": "system", "content": search_system},
+                {"role": "user", "content": query},
+            ],
+            max_tokens=250,
+            temperature=0.5,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        print(f"[voice] brave-fallback synthesis error: {e}", flush=True)
+        return ""
+
+
 _REALTIME_KEYWORDS = (
     # Time-sensitivity markers
     "current", "currently", "today", "tonight", "tomorrow", "yesterday",
@@ -989,6 +1150,29 @@ async def handle_chat(data, websocket):
                     hud_server.broadcast_sync("idle")
             return
 
+    # Bare acknowledgements ("thanks", "got it", "goodnight") — short-circuit
+    # the LLM entirely. The model occasionally hallucinates a grep_source call
+    # on contextless input and we end up speaking 'function nil grep_source'
+    # at Ed. See _try_handle_acknowledgement docstring.
+    if messages:
+        _last_user_a = _user_text_from_message(messages[-1]) or ""
+        ack_reply = _try_handle_acknowledgement(_last_user_a)
+        if ack_reply is not None:
+            _push_history("user", _last_user_a, modality="chat")
+            _push_history("assistant", ack_reply, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            await _ws_send(websocket, {"type": "delta", "text": ack_reply})
+            await _ws_send(websocket, {"type": "done"})
+            if not data.get("no_tts"):
+                hud_server.broadcast_sync("speaking")
+                try:
+                    await _reply_audio_or_speak(ack_reply, data, label="chat-ack")
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on ack reply: {e}")
+                finally:
+                    hud_server.broadcast_sync("idle")
+            return
+
     # Brain commands: /ingest, /query, /lint, /fact, /brain, /podcast, /add
     if messages:
         _last_user = _user_text_from_message(messages[-1]) or ""
@@ -1028,6 +1212,130 @@ async def handle_chat(data, websocket):
                     print(f"[chloe] chat TTS error on brain reply: {e}")
                     # Backstop: unexpected exception — force idle so the HUD
                     # doesn't get stuck in speaking/thinking.
+                    hud_server.broadcast_sync("idle")
+                else:
+                    if not _hud_via_audio:
+                        hud_server.broadcast_sync("idle")
+            return
+
+    # Explicit /search /lookup /web slash commands — Brave Search backend.
+    # Independent of Groq compound-mini's built-in browsing: survives Groq
+    # quota outages, gives the user a deterministic search trigger, and emits
+    # structured citations the HUD can render as clickable sources.
+    if messages:
+        _last_user_s = _user_text_from_message(messages[-1]) or ""
+        search_result = await asyncio.to_thread(
+            try_handle_search_command, _last_user_s
+        )
+        if search_result is not None:
+            _q = search_result.get("query", "")
+            _err = search_result.get("error")
+            _results = search_result.get("results", []) or []
+            if _err:
+                _push_history("user", _last_user_s, modality="chat")
+                _push_history("assistant", _err, modality="chat")
+                await _ws_send(websocket, {"type": "start"})
+                await _ws_send(websocket, {"type": "delta", "text": _err})
+                await _ws_send(websocket, {"type": "done"})
+                return
+            if not _results:
+                _msg = f"Nothing came back for: {_q}"
+                _push_history("user", _last_user_s, modality="chat")
+                _push_history("assistant", _msg, modality="chat")
+                await _ws_send(websocket, {"type": "start"})
+                await _ws_send(websocket, {"type": "delta", "text": _msg})
+                await _ws_send(websocket, {"type": "done"})
+                return
+            # Synthesize a Chloe-voiced answer with [N] citation markers.
+            await _ws_send(websocket, {
+                "type": "tool_start",
+                "text": f"Searching the web: {_q}",
+            })
+            ctx_block = format_for_context(_results, _q)
+            today = datetime.now().strftime("%A, %B %d, %Y")
+            search_system = (
+                f"Today's date is {today}.\n\n"
+                "You just performed a web search for the user. Answer their "
+                "query using ONLY the numbered search results in the next "
+                "message. Cite specific facts with bracketed numbers like [1] "
+                "or [2] matching the result list. Keep your answer to 2-4 "
+                "sentences in your normal conversational voice. If the results "
+                "don't actually answer the question, say so honestly — "
+                "don't fabricate."
+            )
+            search_user = f"{ctx_block}\n\nQuery: {_q}"
+            search_msgs = [
+                {"role": "system", "content": search_system},
+                {"role": "user", "content": search_user},
+            ]
+            _push_history("user", _last_user_s, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            full_search_reply = ""
+            try:
+                if _async_groq is not None:
+                    stream = await _async_groq.chat.completions.create(
+                        model=MODEL_TEXT,
+                        messages=search_msgs,
+                        max_tokens=400,
+                        temperature=0.5,
+                        stream=True,
+                    )
+                    async for chunk in stream:
+                        try:
+                            delta = chunk.choices[0].delta.content
+                        except (AttributeError, IndexError):
+                            delta = None
+                        if delta:
+                            full_search_reply += delta
+                            await _ws_send(websocket,
+                                           {"type": "delta", "text": delta})
+                else:
+                    # No Groq — fall back to Ollama or just emit snippet block.
+                    if _ollama_available():
+                        ollama_reply = _ollama_chat(search_msgs, max_tokens=400)
+                        if ollama_reply:
+                            full_search_reply = ollama_reply
+                            await _ws_send(websocket,
+                                           {"type": "delta",
+                                            "text": ollama_reply})
+                    if not full_search_reply:
+                        full_search_reply = ctx_block
+                        await _ws_send(websocket,
+                                       {"type": "delta", "text": ctx_block})
+            except Exception as e:
+                print(f"[chloe] /search synthesis error: {e}", flush=True)
+                full_search_reply = ctx_block
+                await _ws_send(websocket,
+                               {"type": "delta", "text": ctx_block})
+            # Structured sources for the HUD to render as clickable citations.
+            await _ws_send(websocket, {
+                "type": "sources",
+                "items": [
+                    {
+                        "n": i + 1,
+                        "title": r.get("title", ""),
+                        "url": r.get("url", ""),
+                        "domain": r.get("domain", ""),
+                    }
+                    for i, r in enumerate(_results)
+                ],
+            })
+            await _ws_send(websocket, {"type": "done"})
+            if full_search_reply.strip():
+                _push_history("assistant", full_search_reply, modality="chat")
+            # Speak the synthesized reply, but strip [N] citation markers
+            # first — TTS reading "open bracket one close bracket" is awful.
+            if full_search_reply.strip() and not data.get("no_tts"):
+                tts_text = _re.sub(r"\[\d+\]", "", full_search_reply).strip()
+                _hud_via_audio = bool(data.get("reply_audio"))
+                if not _hud_via_audio:
+                    hud_server.broadcast_sync("speaking")
+                try:
+                    await _reply_audio_or_speak(
+                        tts_text, data, label="chat-search"
+                    )
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on /search reply: {e}")
                     hud_server.broadcast_sync("idle")
                 else:
                     if not _hud_via_audio:
@@ -1157,6 +1465,24 @@ async def handle_chat(data, websocket):
                 await _ws_send(websocket, {"type": "delta", "text": word + " "})
                 await asyncio.sleep(0.015)
             await _ws_send(websocket, {"type": "done"})
+
+            # Hedge-detection fallback for the Ollama path. If qwen replied
+            # "I don't have web browsing" / "I can\'t access live data",
+            # escalate to Brave search + Groq synthesis. The user sees the
+            # hedged Ollama reply first (already streamed), then a brief
+            # status notice, then the real answer with cited sources.
+            if _looks_like_hedge(ollama_reply):
+                print(f"[chloe] Ollama reply hedged — escalating to Brave",
+                      flush=True)
+                _user_text_for_search = _last_user_text(messages)
+                _brave_reply = await _brave_fallback_search(
+                    websocket, _user_text_for_search, data
+                )
+                if _brave_reply.strip():
+                    ollama_reply = _brave_reply  # use better answer downstream
+                    print(f"[chloe] Brave fallback succeeded "
+                          f"({len(_brave_reply)} chars)", flush=True)
+
             full_reply = ollama_reply
             last_user = messages[-1] if messages else None
             if last_user and last_user.get("role") == "user":
@@ -1348,6 +1674,20 @@ async def handle_chat(data, websocket):
                     full_reply = retry_full
                     print(f"[chloe] chat retry succeeded with web search ({len(retry_full)} chars)",
                           flush=True)
+                    # If the compound retry ALSO hedged (rare — usually
+                    # means Groq browsing is degraded or the query is truly
+                    # un-searchable), one last fallback through Brave.
+                    if _looks_like_hedge(retry_full):
+                        print("[chloe] compound retry also hedged — "
+                              "last-resort Brave fallback", flush=True)
+                        _user_text_for_search = _last_user_text(messages)
+                        _brave_reply = await _brave_fallback_search(
+                            websocket, _user_text_for_search, data
+                        )
+                        if _brave_reply.strip():
+                            full_reply = _brave_reply
+                            print(f"[chloe] Brave last-resort succeeded "
+                                  f"({len(_brave_reply)} chars)", flush=True)
             except Exception as e:
                 print(f"[chloe] chat hedge-retry failed: {e}", flush=True)
                 # Fall through with the original (hedged) reply — better than nothing.
@@ -1565,6 +1905,11 @@ async def _dispatch(data, websocket):
     elif t == "lights_preset_apply":    await handle_lights_preset_apply(data, websocket)
     elif t == "lights_preset_save":     await handle_lights_preset_save(data, websocket)
     elif t == "lights_preset_delete":   await handle_lights_preset_delete(data, websocket)
+    elif t == "social_drafts_list":     await handle_social_drafts_list(data, websocket)
+    elif t == "social_draft_now":       await handle_social_draft_now(data, websocket)
+    elif t == "social_draft_edit":      await handle_social_draft_edit(data, websocket)
+    elif t == "social_draft_approve":   await handle_social_draft_approve(data, websocket)
+    elif t == "social_draft_reject":    await handle_social_draft_reject(data, websocket)
     else: await _ws_send(websocket, {"type": "error", "text": f"unknown type: {t}"})
 
 
@@ -1862,6 +2207,84 @@ def _try_handle_remember(transcript: str) -> str | None:
         print(f"[memory] new fact: {fact!r}", flush=True)
         return f"Got it. I'll remember that {fact}."
     return "I tried to save that but couldn't write to the facts file."
+
+
+# Tokens allowed in a "pure acknowledgement" turn — nothing here carries
+# question content. The check below also requires at least one CORE token
+# (gratitude / affirmation / farewell), so plain filler like "you it that"
+# never qualifies on its own.
+_ACK_FILLER_TOKENS = frozenset({
+    "you", "it", "that", "chloe", "much", "so", "very", "a",
+    "lot", "bunch", "million", "for", "the", "help", "info", "and",
+    "to", "no", "problem", "really", "again",
+})
+_ACK_CORE_GRATITUDE = frozenset({
+    "thank", "thanks", "thx", "ty", "appreciate", "appreciated",
+})
+_ACK_CORE_AFFIRMATION = frozenset({
+    "ok", "okay", "kk", "cool", "nice", "great", "perfect",
+    "awesome", "alright", "got", "yeah", "yep", "yup", "sweet",
+    "gotcha", "understood", "noted", "roger",
+})
+_ACK_CORE_FAREWELL = frozenset({
+    "bye", "goodbye", "later", "cya", "night", "goodnight",
+})
+_ACK_CORE_TOKENS = _ACK_CORE_GRATITUDE | _ACK_CORE_AFFIRMATION | _ACK_CORE_FAREWELL
+_ACK_VOCAB = _ACK_CORE_TOKENS | _ACK_FILLER_TOKENS
+
+
+def _try_handle_acknowledgement(transcript: str) -> str | None:
+    """If `transcript` is a bare acknowledgement like 'thank you' / 'thanks
+    chloe' / 'got it' / 'cool, perfect' / 'goodnight', return a short
+    conversational reply. Otherwise return None and let the LLM path handle it.
+
+    Why this exists: every voice/chat turn arms `grep_source` (and the wallet
+    tools) on the model. The system prompt encourages calling grep_source
+    eagerly on questions about Chloe's own implementation, and qwen2.5:32b
+    occasionally fires it on contextless input like "Thank you" — the tool
+    output then gets read aloud as 'function nil grep_source...'. Bypass the
+    LLM entirely on inputs with no question content."""
+    if not transcript:
+        return None
+    # Strip punctuation, lowercase, tokenize. Keep apostrophes for contractions
+    # like "you're" → just drop the apostrophe to leave "youre" (won't be in
+    # vocab, so contractions naturally won't ack — that's fine; they're rare
+    # in pure thanks/affirmations).
+    cleaned = _re.sub(r"[^\w\s]", " ", transcript.lower()).strip()
+    if not cleaned:
+        return None
+    tokens = cleaned.split()
+    # Pure acknowledgements are short. Past 6 tokens we trust the LLM to
+    # interpret context — it could be "thanks for the help with the lights".
+    if not tokens or len(tokens) > 6:
+        return None
+    if not all(t in _ACK_VOCAB for t in tokens):
+        return None
+    if not any(t in _ACK_CORE_TOKENS for t in tokens):
+        return None
+
+    # Bucket the reply by intent so farewells don't get "Anytime."
+    if any(t in _ACK_CORE_FAREWELL for t in tokens):
+        return random.choice([
+            "Talk soon.",
+            "Catch you later.",
+            "Goodnight.",
+            "See you.",
+        ])
+    if any(t in _ACK_CORE_GRATITUDE for t in tokens):
+        return random.choice([
+            "Anytime.",
+            "Of course.",
+            "You got it.",
+            "Happy to help.",
+        ])
+    # Affirmation bucket: "ok", "cool", "perfect", "got it"
+    return random.choice([
+        "Cool.",
+        "Sounds good.",
+        "Alright.",
+    ])
+
 
 # ─── VOICE PATH ──────────────────────────────────────────────────────────────
 # Pattern: short-lived per-phase audio streams.
@@ -2374,6 +2797,20 @@ def _ptt_record_phase(sd, device):
         print("[voice] PTT lights-ack complete", flush=True)
         return
 
+    # Bare acknowledgements ("thanks", "got it", "goodnight") — short-circuit
+    # before the LLM ever sees the input. Otherwise grep_source can fire on
+    # contextless turns. See _try_handle_acknowledgement docstring.
+    ack_reply = _try_handle_acknowledgement(transcript)
+    if ack_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", ack_reply, modality="voice")
+        _broadcast_exchange(transcript, ack_reply)
+        hud_server.broadcast_sync("speaking")
+        _speak(ack_reply)
+        hud_server.broadcast_sync("idle")
+        print("[voice] PTT ack-reply complete", flush=True)
+        return
+
     reply = _ask_groq(transcript)
     if not reply:
         print("[voice] PTT got empty reply from Groq — aborting", flush=True)
@@ -2695,6 +3132,19 @@ def _process_voice_turn(audio, sd, device) -> bool:
         _broadcast_exchange(transcript, lights_reply)
         hud_server.broadcast_sync("speaking")
         _speak(lights_reply)
+        hud_server.broadcast_sync("idle")
+        return True
+
+    # Bare acknowledgements ("thanks", "got it", "goodnight") — short-circuit
+    # before the LLM ever sees the input. Otherwise grep_source can fire on
+    # contextless turns. See _try_handle_acknowledgement docstring.
+    ack_reply = _try_handle_acknowledgement(transcript)
+    if ack_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", ack_reply, modality="voice")
+        _broadcast_exchange(transcript, ack_reply)
+        hud_server.broadcast_sync("speaking")
+        _speak(ack_reply)
         hud_server.broadcast_sync("idle")
         return True
 
@@ -3910,11 +4360,31 @@ def _ask_groq(user_text: str) -> str:
         if not reply and _sync_groq:
             print("[voice] Ollama empty — falling back to Groq fast Llama", flush=True)
             reply = _groq_chat_attempt(user_text, MODEL_TEXT)
+        # Hedge fallback: if the local reply admitted it can't browse / has
+        # no current data, escalate to Brave search + Groq synthesis.
+        if reply and _looks_like_hedge(reply):
+            print("[voice] reply hedged — escalating to Brave web search",
+                  flush=True)
+            brave_reply = _brave_voice_synth(user_text)
+            if brave_reply:
+                reply = brave_reply
+                print(f"[voice] Brave fallback succeeded "
+                      f"({len(brave_reply)} chars)", flush=True)
 
     elif route == 'groq_search':
         # Real-time query — must go through Groq compound (only path with search)
         print(f"[voice] groq → {MODEL_SEARCH} [real-time]", flush=True)
         reply = _groq_chat_attempt(user_text, MODEL_SEARCH)
+        # If compound hedged (Groq browsing degraded, or query truly
+        # un-searchable), try Brave before giving up on web data.
+        if reply and _looks_like_hedge(reply):
+            print("[voice] compound reply hedged — escalating to Brave",
+                  flush=True)
+            brave_reply = _brave_voice_synth(user_text)
+            if brave_reply:
+                reply = brave_reply
+                print(f"[voice] Brave fallback succeeded "
+                      f"({len(brave_reply)} chars)", flush=True)
         if not reply and OLLAMA_FALLBACK_ENABLED and _ollama_available():
             # Groq compound failed (rate-limit, network). Use Ollama, but
             # Ollama can't web-search, so the answer may be stale — that's
@@ -3931,10 +4401,23 @@ def _ask_groq(user_text: str) -> str:
             new_reply = _groq_chat_attempt(user_text, MODEL_SEARCH)
             if new_reply:
                 if _looks_like_hedge(new_reply):
-                    print("[voice] retry also hedged — accepting compound reply anyway", flush=True)
+                    # Compound also hedged — try Brave as the last resort.
+                    print("[voice] retry also hedged — last-resort Brave fallback",
+                          flush=True)
+                    brave_reply = _brave_voice_synth(user_text)
+                    if brave_reply:
+                        reply = brave_reply
+                        print(f"[voice] Brave last-resort succeeded "
+                              f"({len(brave_reply)} chars)", flush=True)
+                    else:
+                        # Brave returned nothing — keep the hedged compound
+                        # reply (better than dead air).
+                        print("[voice] Brave also empty — accepting "
+                              "hedged compound", flush=True)
+                        reply = new_reply
                 else:
                     print("[voice] retry succeeded with web search", flush=True)
-                reply = new_reply
+                    reply = new_reply
         # Final fallback to Ollama if Groq is fully unavailable
         if not reply and OLLAMA_FALLBACK_ENABLED and _ollama_available():
             print("[voice] Groq returned empty — falling back to local Ollama", flush=True)
@@ -4664,10 +5147,227 @@ async def handle_lights_preset_delete(data, websocket):
     await _broadcast_lights_state()
 
 
+
+# ─── SOCIAL MEDIA WS ENDPOINTS ───────────────────────────────────────────────
+# Phase 2 wiring. PWA / HUD calls these to list pending drafts, ask the
+# composer for a new one, edit/approve/reject, and trigger a publish.
+# Approve is synchronous — we post to Bluesky inline and return the URI.
+# No scheduled-post worker yet (see SOCIAL_MEDIA_PLAN.md Phase 3).
+
+_SOCIAL_DAILY_CAPS = {"bluesky": 2, "linkedin": 999}   # 2/day cap locked
+
+
+async def handle_social_drafts_list(data, websocket):
+    status = data.get("status") or None        # None → all
+    platform = data.get("platform") or None
+    limit = int(data.get("limit", 50))
+    drafts = await asyncio.to_thread(
+        social_db.list_drafts, status=status, platform=platform, limit=limit
+    )
+    today_bsky = await asyncio.to_thread(social_db.todays_published_count, "bluesky")
+    await _ws_send(websocket, {
+        "type": "social_drafts_list_result",
+        "drafts": drafts,
+        "today": {"bluesky": today_bsky, "bluesky_cap": _SOCIAL_DAILY_CAPS["bluesky"]},
+    })
+
+
+async def handle_social_draft_now(data, websocket):
+    platform = (data.get("platform") or "bluesky").strip()
+    trigger = (data.get("trigger") or "manual").strip()
+    context = (data.get("context") or "").strip()
+    if not context:
+        await _ws_send(websocket, {
+            "type": "social_draft_now_result", "ok": False,
+            "error": "context required — describe what Chloe should post about",
+        })
+        return
+    try:
+        recent = await asyncio.to_thread(
+            social_db.recent_published_bodies, platform, 5
+        )
+        out = await asyncio.to_thread(
+            social_composer.compose_post,
+            platform=platform, trigger=trigger, context=context,
+            recent_bodies=recent,
+        )
+        did = await asyncio.to_thread(
+            social_db.create_draft,
+            platform=platform,
+            body=out["body"],
+            rationale=out["rationale"],
+            source_trigger=trigger,
+            source_ref="",
+            source_trace={
+                "model_used": out["model_used"],
+                "latency_ms": out["latency_ms"],
+                "context_preview": context[:240],
+            },
+        )
+        await _ws_broadcast({"type": "social_draft_created", "id": did})
+        await _ws_send(websocket, {
+            "type": "social_draft_now_result", "ok": True,
+            "id": did, "body": out["body"], "rationale": out["rationale"],
+            "model_used": out["model_used"], "latency_ms": out["latency_ms"],
+        })
+    except social_composer.ComposerError as e:
+        await _ws_send(websocket, {
+            "type": "social_draft_now_result", "ok": False,
+            "error": f"composer: {e}",
+        })
+    except Exception as e:
+        await _ws_send(websocket, {
+            "type": "social_draft_now_result", "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+        })
+
+
+async def handle_social_draft_edit(data, websocket):
+    try:
+        draft_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        await _ws_send(websocket, {"type": "social_draft_edit_result",
+                                    "ok": False, "error": "bad id"})
+        return
+    edited_body = (data.get("edited_body") or "").strip()
+    if not edited_body:
+        await _ws_send(websocket, {"type": "social_draft_edit_result",
+                                    "ok": False, "error": "empty edited_body"})
+        return
+    try:
+        row = await asyncio.to_thread(social_db.update_body, draft_id, edited_body)
+        await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+        await _ws_send(websocket, {
+            "type": "social_draft_edit_result", "ok": True, "draft": row,
+        })
+    except LookupError as e:
+        await _ws_send(websocket, {
+            "type": "social_draft_edit_result", "ok": False, "error": str(e),
+        })
+
+
+async def handle_social_draft_reject(data, websocket):
+    try:
+        draft_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        await _ws_send(websocket, {"type": "social_draft_reject_result",
+                                    "ok": False, "error": "bad id"})
+        return
+    reason = (data.get("reason") or "").strip()
+    try:
+        row = await asyncio.to_thread(social_db.reject_draft, draft_id, reason)
+        await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+        await _ws_send(websocket, {
+            "type": "social_draft_reject_result", "ok": True, "draft": row,
+        })
+    except LookupError as e:
+        await _ws_send(websocket, {
+            "type": "social_draft_reject_result", "ok": False, "error": str(e),
+        })
+
+
+async def handle_social_draft_approve(data, websocket):
+    """Approve and publish in one shot. Errors surface to the requester
+    via social_draft_approve_result; all clients see social_draft_updated
+    so they re-fetch.
+    """
+    try:
+        draft_id = int(data.get("id", 0))
+    except (TypeError, ValueError):
+        await _ws_send(websocket, {"type": "social_draft_approve_result",
+                                    "ok": False, "error": "bad id"})
+        return
+    edited_body_override = data.get("edited_body")
+    if edited_body_override is not None:
+        edited_body_override = edited_body_override.strip() or None
+
+    # Fetch draft
+    try:
+        draft = await asyncio.to_thread(social_db.get_draft, draft_id)
+    except LookupError as e:
+        await _ws_send(websocket, {"type": "social_draft_approve_result",
+                                    "ok": False, "error": str(e)})
+        return
+    platform = draft["platform"]
+
+    # Daily cap
+    posted_today = await asyncio.to_thread(
+        social_db.todays_published_count, platform
+    )
+    cap = _SOCIAL_DAILY_CAPS.get(platform, 2)
+    if posted_today >= cap:
+        await _ws_send(websocket, {
+            "type": "social_draft_approve_result", "ok": False,
+            "error": f"daily cap reached on {platform} ({posted_today}/{cap}) — try tomorrow",
+        })
+        return
+
+    # Approve in DB (also writes edited_body if provided)
+    try:
+        await asyncio.to_thread(
+            social_db.approve_draft, draft_id, edited_body_override
+        )
+    except LookupError as e:
+        await _ws_send(websocket, {"type": "social_draft_approve_result",
+                                    "ok": False, "error": str(e)})
+        return
+
+    # Re-read so final_body reflects the override
+    draft = await asyncio.to_thread(social_db.get_draft, draft_id)
+    final_body = draft["final_body"]
+
+    # LinkedIn: export draft file, do not call API.
+    if platform == "linkedin":
+        try:
+            path = await asyncio.to_thread(
+                social.linkedin_export_draft,
+                f"draft-{draft_id}", final_body
+            )
+            row = await asyncio.to_thread(
+                social_db.mark_published, draft_id,
+                post_uri=f"file://{path}", post_cid="linkedin-draft",
+            )
+            await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+            await _ws_send(websocket, {
+                "type": "social_draft_approve_result", "ok": True,
+                "draft": row, "post_uri": f"file://{path}",
+                "note": "linkedin draft exported — paste it into LinkedIn manually",
+            })
+        except Exception as e:
+            await asyncio.to_thread(social_db.mark_failed, draft_id, str(e))
+            await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+            await _ws_send(websocket, {
+                "type": "social_draft_approve_result", "ok": False,
+                "error": f"linkedin export failed: {e}",
+            })
+        return
+
+    # Bluesky: real post.
+    try:
+        client = await asyncio.to_thread(social.bluesky_from_secrets)
+        result = await asyncio.to_thread(client.create_post, final_body)
+        row = await asyncio.to_thread(
+            social_db.mark_published, draft_id,
+            post_uri=result["uri"], post_cid=result["cid"],
+        )
+        await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+        await _ws_send(websocket, {
+            "type": "social_draft_approve_result", "ok": True,
+            "draft": row, "post_uri": result["uri"],
+        })
+    except Exception as e:
+        await asyncio.to_thread(social_db.mark_failed, draft_id, str(e))
+        await _ws_broadcast({"type": "social_draft_updated", "id": draft_id})
+        await _ws_send(websocket, {
+            "type": "social_draft_approve_result", "ok": False,
+            "error": f"publish failed: {type(e).__name__}: {e}",
+        })
+
+
 hud_server.set_jarvis_handler(_dispatch)
 print(f"[chloe] handler registered  model={MODEL_TEXT}  vision={MODEL_VISION}")
 print(f"[chloe] groq key: {'set' if GROQ_API_KEY else 'MISSING (chat will fail)'}")
 
 # Kick off the voice loop in a daemon thread — chat path keeps working even
 # if the voice loop fails to initialize (e.g. no mic, missing libs, etc.)
-threading.Thread(target=_voice_thread_entry, daemon=True, name="chloe-voice").start()
+threading

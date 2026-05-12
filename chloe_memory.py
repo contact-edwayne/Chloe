@@ -367,7 +367,15 @@ class ChloeMemory:
             return []
 
         if not rows:
-            return []
+            # No embedded turns in the search window. Fall back to FTS5 —
+            # corpus may have NULL-embedding rows from before the 2026-05-11
+            # migration, or the embedding backfill may not have finished.
+            # Without this fallback, recall returns "no specific discussion"
+            # for queries whose actual answer predates the migration. See
+            # bug surfaced by 2026-05-12 weekly review (wiki cleanup recall).
+            print("[memory] no embedded turns in window, falling back to FTS5",
+                  flush=True)
+            return self._search_turns_fts5(query, limit, min_age_hours)
 
         # Stack BLOBs into a single (N, D) matrix and brute-force cosine.
         # Embeddings are pre-normalized so cosine == dot product. Validate
@@ -413,6 +421,20 @@ class ChloeMemory:
                          "content": content, "modality": modality})
             if len(hits) >= limit:
                 break
+
+        # Semantic search returned no above-threshold hits. Fall back to FTS5
+        # keyword search before giving up — the older actual discussion may
+        # exist with cosine just below the threshold (paraphrase mismatch),
+        # but FTS5 will surface it on shared keywords. This is the second of
+        # two FTS5 fallback paths added 2026-05-12 to fix the "wiki cleanup"
+        # recall bug surfaced by the weekly review.
+        if not hits:
+            fts_hits = self._search_turns_fts5(query, limit, min_age_hours)
+            if fts_hits:
+                print(f"[memory] semantic returned 0 above-threshold "
+                      f"({_RECALL_THRESHOLD:.2f}); FTS5 fallback found "
+                      f"{len(fts_hits)}", flush=True)
+                return fts_hits
         return hits
 
     def _search_turns_fts5(self, query: str, limit: int,
