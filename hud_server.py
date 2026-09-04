@@ -7,6 +7,14 @@ hud_clients = set()
 jarvis_handler = None
 server_loop = None
 
+# Boot-signal cache. When jarvis.py broadcasts a one-shot signal (boot_start,
+# boot_end) that newly-connecting clients also need to see, it should ALSO
+# call cache_for_replay() so any HUD/PWA opening later gets the same message
+# on connect. This closes the race where the HUD splash attaches its listener
+# after the backend has already broadcast (e.g. PWA reloaded mid-boot).
+# Kept tiny on purpose — only signals you'd want a late connection to receive.
+_replay_messages: list[str] = []
+
 # Bind host. Default "0.0.0.0" so the mobile PWA over Tailscale can connect.
 # Override with CHLOE_WS_HOST=localhost to restrict to the same machine.
 WS_HOST = os.environ.get("CHLOE_WS_HOST", "0.0.0.0")
@@ -16,6 +24,17 @@ async def handler(websocket):
     global jarvis_handler
     hud_clients.add(websocket)
     print(f"Client connected. Total: {len(hud_clients)}")
+    # Replay any cached one-shot signals so this client sees them even if
+    # the broadcast happened before it connected. Boot signals are the main
+    # use case — see cache_for_replay() comment.
+    if _replay_messages:
+        for msg in _replay_messages:
+            try:
+                await websocket.send(msg)
+            except Exception:
+                # Client disappeared between accept and replay; the finally
+                # block will clean up. Not fatal — silent.
+                break
     try:
         async for message in websocket:
             try:
@@ -28,7 +47,15 @@ async def handler(websocket):
                                         "lights_preset_save", "lights_preset_delete",
                                         "social_drafts_list", "social_draft_now",
                                         "social_draft_edit", "social_draft_approve",
-                                        "social_draft_reject"):
+                                        "social_draft_reject",
+                                        "jobs_state", "jobs_run",
+                                        "logs_tail",
+                                        "game_new", "game_move",
+                                        "game_state", "game_resign",
+                                        "game_watch_start", "game_watch_stop",
+                                        "sessions_list", "session_get",
+                                        "session_resume", "session_delete",
+                                        "session_new"):
                     if jarvis_handler:
                         await jarvis_handler(data, websocket)
                     else:
@@ -61,15 +88,25 @@ async def handler(websocket):
         print(f"Client disconnected. Total: {len(hud_clients)}")
 
 async def broadcast(message):
-    if not hud_clients:
+    clients = list(hud_clients)
+    if not clients:
         return
-    results = await asyncio.gather(
-        *[c.send(message) for c in hud_clients],
-        return_exceptions=True
-    )
-    for r in results:
-        if isinstance(r, Exception):
-            pass
+
+    async def _send_one(c):
+        # Bound each send so a half-open client (e.g. a phone that swapped
+        # Wi-Fi/cellular over Tailscale and left an orphaned server-side
+        # socket) can't stall broadcasts until the ~20s keepalive timeout.
+        # Drop the dead client; the PWA's auto-reconnect gives a fresh socket.
+        try:
+            await asyncio.wait_for(c.send(message), timeout=4)
+        except Exception:
+            hud_clients.discard(c)
+            try:
+                asyncio.create_task(c.close())
+            except Exception:
+                pass
+
+    await asyncio.gather(*[_send_one(c) for c in clients])
 
 async def start_server():
     global server_loop
@@ -97,3 +134,23 @@ def broadcast_sync(message):
 def set_jarvis_handler(fn):
     global jarvis_handler
     jarvis_handler = fn
+
+
+def cache_for_replay(message):
+    """Cache a JSON message string so any client connecting AFTER this call
+    receives it on connect. Use for one-shot boot signals that the splash
+    screen must see — current callers: _broadcast_boot_start /
+    _broadcast_boot_end in jarvis.py.
+
+    Idempotent on dict-vs-str input (accepts either). Safe to call from any
+    thread because the list-append is atomic in CPython."""
+    if isinstance(message, dict):
+        message = json.dumps(message)
+    _replay_messages.append(message)
+
+
+def clear_replay_cache():
+    """Forget all cached replay messages. Currently unused — left for future
+    callers that may want to invalidate the cache (e.g. on graceful
+    shutdown so a reconnecting client doesn't see stale boot signals)."""
+    _replay_messages.clear()

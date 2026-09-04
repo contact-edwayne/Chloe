@@ -1,0 +1,83 @@
+--- jarvis.py
++++ jarvis.py
+@@ -1130,6 +1130,70 @@
+     return any(kw in t for kw in _INTROSPECTION_KEYWORDS)
+ 
+ 
++# Ed (2026-08-27): "any and all searches I do" should try live data first,
++# not just ones that happen to match a _REALTIME_KEYWORDS trigger word.
++# _needs_realtime is a curated allowlist and misses plenty of genuine
++# informational questions ("how many moons does Jupiter have", "when did
++# the Golden Gate Bridge open") that have nothing to do with real-time
++# freshness but should still be answered from a search, not confabulated.
++#
++# This is deliberately over-inclusive: a false positive costs one extra
++# (harmless) Brave lookup before answering; a false negative means a
++# confident, possibly-wrong answer with no search at all — the failure
++# mode this exists to close. Conversational/personal questions directed AT
++# Chloe ("how are you", "can you help me") are excluded by name since
++# Brave has nothing useful to say about those, and _is_introspection_query
++# already owns "how does your code work"-style questions.
++_INFO_QUESTION_OPENERS = (
++    "who", "whose", "who's", "what", "what's", "when", "when's",
++    "where", "where's", "why", "how", "how's", "which",
++    "is", "isn't", "are", "aren't", "was", "wasn't", "were", "weren't",
++    "do", "don't", "does", "doesn't", "did", "didn't",
++    "can", "can't", "could", "couldn't",
++    "will", "won't", "would", "wouldn't", "should", "shouldn't",
++    "has", "hasn't", "have", "haven't", "had", "hadn't",
++)
++
++_CONVERSATIONAL_QUESTION_MARKERS = (
++    "how are you", "how you doing", "how're you", "how's it going",
++    "how are things", "how was your", "how is your day",
++    "what do you think", "what's your opinion", "what do you feel",
++    "do you like", "do you love", "do you want", "do you feel",
++    "do you know me", "do you remember", "do you dream",
++    "would you rather", "will you", "would you mind",
++    "can you help", "could you help", "can you please",
++    "are you okay", "are you ok", "are you there", "are you awake",
++    "are you real", "are you conscious", "are you alive",
++    "is that you", "did you sleep", "have you eaten", "have you missed",
++)
++
++
++def _looks_like_info_question(text: str) -> bool:
++    """Broad 'this is an information-seeking question' signal — a much
++    wider net than _needs_realtime's curated keyword list. See the
++    2026-08-27 comment above for why this exists.
++
++    Excludes introspection questions about Chloe's own code (those need
++    grep_source, not a web search) and conversational questions directed
++    at Chloe herself. Everything else that's phrased as a question, or
++    opens with a WH-word / question-auxiliary (contractions included),
++    counts."""
++    if not text:
++        return False
++    t = text.lower().strip()
++    if _is_introspection_query(t):
++        return False
++    if any(m in t for m in _CONVERSATIONAL_QUESTION_MARKERS):
++        return False
++    words = t.split()
++    if len(words) <= 2:
++        return False
++    if "?" in t:
++        return True
++    first_word = words[0].strip(",.!?")
++    return first_word in _INFO_QUESTION_OPENERS
++
++
+ def _select_chat_model(user_text: str) -> str:
+     """Pick MODEL_SEARCH (compound) when the user's question needs real-time
+     data, otherwise MODEL_TEXT (fast Llama). Falls back to fast model if
+@@ -1158,7 +1222,8 @@
+     if nsfw_mode.is_enabled() and nsfw_mode.looks_adult(user_text):
+         if OLLAMA_PRIMARY and _ollama_available():
+             return 'ollama'
+-    if USE_COMPOUND and _needs_realtime(user_text):
++    if USE_COMPOUND and (_needs_realtime(user_text)
++                          or _looks_like_info_question(user_text)):
+         return 'groq_search'
+     # Introspection questions about Chloe's own source — force Groq MODEL_TEXT.
+     # llama-3.3-70b emits structured tool_calls reliably; Ollama llama3.1:8b

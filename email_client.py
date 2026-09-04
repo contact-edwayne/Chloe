@@ -1,0 +1,618 @@
+"""
+email_client.py — Email (read + draft + confirm-gated send) for Chloe.
+
+Ed, 2026-09-02: flagged as a gap after the wallet/social-posting work --
+Chloe already drafts LinkedIn posts (social_composer.py) and moves real
+money (wallet.py) but has no email surface at all. Built on the same two
+house patterns already proven out elsewhere in this codebase:
+
+1. Config-driven contact aliasing (mirrors stocks.py's ticker aliases /
+   local_media.py's named folders): C:\\Chloe\\secrets\\email_contacts.json
+   maps a lowercased name to an address, so "email John" resolves without
+   Ed spelling out an address every time. An unresolved name returns None
+   -- "honest miss, never guess" -- same contract as every other resolver
+   in this codebase.
+
+2. A hard, code-enforced confirm gate before anything irreversible sends
+   -- mirrors wallet_send's PIN requirement and chloe_pending_confirms'
+   Stage-3 "announce, then a LITERAL yes/no reply resolves it" state
+   machine (though this is its own separate, simpler state file -- see
+   below for why it isn't just routed through chloe_pending_confirms).
+   `email_draft` is a normal LLM tool (composes + stores a pending draft,
+   never sends). Actually sending is NOT an LLM tool at all: it is only
+   reachable through try_handle_email_confirm_command, a deterministic
+   regex/phrase check run on the raw user text BEFORE the LLM sees it
+   (jarvis.py wires this the same way as lights/local_media). This means
+   an LLM cannot draft-and-send an email in one hallucinated turn no
+   matter what it's asked -- sending requires a real, separate human
+   utterance that a human, not a model, decides to make. Ollama's own
+   tool loop here runs multiple tool calls per turn (see
+   _ollama_chat's MAX_TOOL_ITERS), so if email_send were ALSO an LLM
+   tool the model could chain draft -> send inside a single request;
+   keeping send out of the tool set entirely closes that off structurally
+   rather than relying on prompting.
+
+   Why not just reuse chloe_pending_confirms.py? Its `resolve()` is
+   hard-wired to `chloe_proposals.apply_proposal(slug)` on "yes" -- it's
+   Stage-3 of the self-modification pipeline specifically, not a generic
+   confirm primitive, and bending it to also send emails would couple two
+   unrelated safety-critical systems. This module reuses its pure
+   `classify_reply()` phrase-matching (yes/no/neither from free text) but
+   keeps its own state file and its own resolution logic.
+
+Pending drafts live in C:\\Chloe\\brain\\pending_email.json (state, not a
+secret -- same root chloe_pending_confirms.py uses), single most-recent
+draft, 10-minute TTL. Credentials are IMAP/SMTP app-password auth (no
+OAuth dance) via four env vars -- see _configured() below. Gmail: enable
+2-Step Verification, then generate an App Password
+(myaccount.google.com/apppasswords) -- a regular account password will
+be rejected by Gmail's SMTP/IMAP.
+
+2026-09-02: added reading a message's full body (email_read) and
+replying to one (email_reply), on top of the original check/draft-new
+flow. Both address a specific email by its 1-based INDEX in the most
+recent email_check listing, not a raw IMAP id -- Ed says "read me the
+first one" / "reply to that", the model already has the ordinal from
+the listing it just showed him, and this module resolves that ordinal
+back to the actual message via a short-lived cache (last_email_list.json,
+30-min TTL, written every time email_check_tool runs) of that listing's
+IMAP UIDs -- UIDs rather than sequence numbers because sequence numbers
+shift as the mailbox changes between the check and the follow-up.
+`email_read` is a plain LLM tool (read-only). `email_reply` follows the
+exact same draft-then-confirm split as email_draft -- it only ever
+stores a pending draft, carrying the original message's Message-ID/
+References so the reply threads properly; actually sending still only
+happens through try_handle_email_confirm_command, never as an LLM tool.
+No body-content extraction beyond best-effort (prefers text/plain,
+falls back to a tag-stripped text/html) -- good enough to read aloud,
+not a MIME renderer.
+
+Public API
+----------
+resolve_contact(text) -> str | None
+add_contact(name, address) -> dict
+list_recent(n=5, unread_only=False) -> list[dict]         (raises on IMAP failure; each item carries a "uid")
+email_check_tool(n=5, unread_only=False) -> str            (LLM tool target, never raises; refreshes the index cache)
+read_email_body(uid) -> dict                                (raises on IMAP failure)
+email_read_tool(index) -> str                               (LLM tool target, never raises)
+draft_email(to, subject, body) -> dict
+email_draft_tool(to, subject, body) -> str                 (LLM tool target, never raises)
+draft_reply(index, body) -> dict
+email_reply_tool(index, body) -> str                        (LLM tool target, never raises)
+try_handle_email_confirm_command(text) -> str | None       (dispatcher contract: None = unclaimed)
+
+CLI:
+    python email_client.py --add-contact "John Smith" john@example.com
+    python email_client.py --check
+    python email_client.py --check-unread
+    python email_client.py --read 1
+    python email_client.py --draft "john@example.com" "Subject" "Body text"
+    python email_client.py --reply 1 "Reply body text"
+"""
+from __future__ import annotations
+
+import email as _email
+import email.mime.text
+import email.utils
+import html as _html
+import imaplib
+import json
+import os
+import re
+import secrets
+import smtplib
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+SECRETS_DIR = Path(r"C:\Chloe\secrets")
+CONTACTS_PATH = SECRETS_DIR / "email_contacts.json"
+
+_DRAFT_TTL_S = 600  # 10 minutes
+_LAST_LIST_TTL_S = 1800  # 30 minutes -- long enough to check email, get
+                          # distracted, then come back and say "read the
+                          # first one" without it going stale silently.
+
+
+def _brain_root() -> Path:
+    return Path(os.environ.get("CHLOE_BRAIN_ROOT", r"C:\Chloe\brain"))
+
+
+def _draft_state_path() -> Path:
+    p = _brain_root()
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "pending_email.json"
+
+
+def _last_list_path() -> Path:
+    p = _brain_root()
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "last_email_list.json"
+
+
+def _save_last_list(uids: list) -> None:
+    p = _last_list_path()
+    tmp = p.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    tmp.write_text(json.dumps({"uids": uids, "expires_at": time.time() + _LAST_LIST_TTL_S}),
+                    encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _load_last_list():
+    p = _last_list_path()
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not data or data.get("expires_at", 0) <= time.time():
+        return None
+    return data.get("uids")
+
+
+# --------------------------------------------------------------------------- #
+# Config                                                                       #
+# --------------------------------------------------------------------------- #
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+def _configured() -> bool:
+    return bool(_env("CHLOE_EMAIL_ADDRESS") and _env("CHLOE_EMAIL_APP_PASSWORD"))
+
+
+def _address() -> str:
+    return _env("CHLOE_EMAIL_ADDRESS")
+
+
+def _app_password() -> str:
+    # Google's UI displays a generated App Password grouped in 4s for
+    # readability ("abcd efgh ijkl mnop") but the actual credential has
+    # no spaces -- a literal copy-paste including them is a common real-
+    # world cause of "authentication failed" that has nothing to do with
+    # whether the password itself is right. Strip ALL whitespace, not
+    # just the leading/trailing whitespace _env() already handles.
+    return _env("CHLOE_EMAIL_APP_PASSWORD").replace(" ", "").replace("\t", "")
+
+
+def _imap_host() -> str:
+    return _env("CHLOE_EMAIL_IMAP_HOST", "imap.gmail.com")
+
+
+def _smtp_host() -> str:
+    return _env("CHLOE_EMAIL_SMTP_HOST", "smtp.gmail.com")
+
+
+def _smtp_port() -> int:
+    try:
+        return int(_env("CHLOE_EMAIL_SMTP_PORT", "587"))
+    except ValueError:
+        return 587
+
+
+# --------------------------------------------------------------------------- #
+# Contacts (same alias-file pattern as stocks.py / local_media.py)            #
+# --------------------------------------------------------------------------- #
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _load_contacts() -> dict:
+    if not CONTACTS_PATH.exists():
+        return {}
+    try:
+        return json.loads(CONTACTS_PATH.read_text(encoding="utf-8")).get("contacts", {})
+    except Exception:
+        return {}
+
+
+def add_contact(name: str, address: str) -> dict:
+    name = (name or "").strip().lower()
+    address = (address or "").strip()
+    if not name or not _EMAIL_RE.match(address):
+        return {"ok": False, "error": "need a name and a valid email address"}
+    SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    data = {"contacts": _load_contacts()}
+    data["contacts"][name] = address
+    CONTACTS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return {"ok": True, "name": name, "address": address}
+
+
+def resolve_contact(text: str) -> Optional[str]:
+    """Resolve `text` to an email address: as-is if it already looks like
+    one, else an exact/substring match against saved contacts. Honest
+    miss -- returns None rather than guessing, same contract as
+    stocks.resolve_ticker / lights._resolve_targets."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if _EMAIL_RE.match(text):
+        return text
+    low = text.lower()
+    contacts = _load_contacts()
+    if low in contacts:
+        return contacts[low]
+    matches = [addr for name, addr in contacts.items() if name in low or low in name]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Reading (IMAP)                                                              #
+# --------------------------------------------------------------------------- #
+
+def list_recent(n: int = 5, unread_only: bool = False) -> list[dict]:
+    """Most-recent-first list of {uid, from, subject, date, unread}. Raises
+    on any IMAP failure -- email_check_tool is the caller that turns that
+    into an honest spoken/chat error instead of crashing the turn. Uses
+    IMAP UIDs (not sequence numbers) so a follow-up email_read/email_reply
+    can address the same message even if the mailbox has changed since."""
+    n = max(1, min(int(n or 5), 25))
+    with imaplib.IMAP4_SSL(_imap_host()) as imap:
+        try:
+            imap.login(_address(), _app_password())
+        except imaplib.IMAP4.error as e:
+            print(f"[email_client] IMAP login failed for {_address()!r}: {e}",
+                  flush=True)
+            raise
+        imap.select("INBOX", readonly=True)
+        crit = "UNSEEN" if unread_only else "ALL"
+        status, data = imap.uid("search", None, crit)
+        if status != "OK":
+            raise RuntimeError(f"IMAP search failed: {status}")
+        uids = data[0].split()
+        uids = uids[-n:][::-1]  # most recent last in IMAP's numbering
+        out = []
+        for uid in uids:
+            status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] FLAGS)")
+            if status != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw_headers = msg_data[0][1]
+            flags_blob = str(msg_data[0][0])
+            msg = _email.message_from_bytes(raw_headers)
+            out.append({
+                "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
+                "from": msg.get("From", "(unknown)"),
+                "subject": msg.get("Subject", "(no subject)"),
+                "date": msg.get("Date", ""),
+                "unread": "\\Seen" not in flags_blob,
+            })
+        return out
+
+
+def email_check_tool(n: int = 5, unread_only: bool = False) -> str:
+    if not _configured():
+        return ("Email isn't configured yet -- Ed needs to set "
+                "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
+                "(a Gmail App Password, not the account password).")
+    try:
+        msgs = list_recent(n=n, unread_only=unread_only)
+    except Exception as e:
+        print(f"[email_client] email_check_tool failed: {type(e).__name__}: {e}",
+              flush=True)
+        return f"Couldn't check email: {type(e).__name__}: {e}"
+    _save_last_list([m["uid"] for m in msgs])
+    if not msgs:
+        return "No unread emails." if unread_only else "Your inbox looks empty."
+    lines = []
+    for i, m in enumerate(msgs, 1):
+        tag = "(unread) " if m["unread"] else ""
+        lines.append(f"{i}. {tag}From {m['from']}, subject: {m['subject']}")
+    header = f"You have {len(msgs)} unread email(s):" if unread_only else f"{len(msgs)} most recent email(s):"
+    trailer = ("\n\n(Sender + subject + date only -- no message body was "
+               "fetched. To read one aloud or reply to one, refer to it by "
+               "its number above -- I can call email_read or email_reply.)")
+    return header + "\n" + "\n".join(lines) + trailer
+
+
+# --------------------------------------------------------------------------- #
+# Reading a specific message's body, by ordinal index into the last check     #
+# --------------------------------------------------------------------------- #
+
+_BODY_MAX_CHARS = 1500
+
+
+def _decode_part(part) -> str:
+    try:
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return ""
+        charset = part.get_content_charset() or "utf-8"
+        return payload.decode(charset, errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_body_text(msg) -> str:
+    """Best-effort plain text extraction: prefers text/plain, falls back to
+    a tag-stripped text/html. Good enough to read aloud -- not a MIME
+    renderer."""
+    plain = None
+    html_part = None
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            disp = str(part.get("Content-Disposition") or "")
+            if "attachment" in disp:
+                continue
+            if ctype == "text/plain" and plain is None:
+                plain = _decode_part(part)
+            elif ctype == "text/html" and html_part is None:
+                html_part = _decode_part(part)
+    else:
+        ctype = msg.get_content_type()
+        if ctype == "text/plain":
+            plain = _decode_part(msg)
+        elif ctype == "text/html":
+            html_part = _decode_part(msg)
+    if plain:
+        return plain.strip()
+    if html_part:
+        text = re.sub(r"<[^>]+>", " ", html_part)
+        text = _html.unescape(text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+    return ""
+
+
+def read_email_body(uid) -> dict:
+    """Fetch one message's full body by IMAP UID. Raises on IMAP failure --
+    email_read_tool is the caller that turns that into an honest error."""
+    with imaplib.IMAP4_SSL(_imap_host()) as imap:
+        try:
+            imap.login(_address(), _app_password())
+        except imaplib.IMAP4.error as e:
+            print(f"[email_client] IMAP login failed for {_address()!r}: {e}",
+                  flush=True)
+            raise
+        imap.select("INBOX", readonly=True)
+        status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[] FLAGS)")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise RuntimeError(f"IMAP fetch failed for uid {uid}")
+        raw = msg_data[0][1]
+        msg = _email.message_from_bytes(raw)
+        body = _extract_body_text(msg)
+        truncated = len(body) > _BODY_MAX_CHARS
+        if truncated:
+            body = body[:_BODY_MAX_CHARS]
+        return {
+            "from": msg.get("From", "(unknown)"),
+            "subject": msg.get("Subject", "(no subject)"),
+            "date": msg.get("Date", ""),
+            "message_id": msg.get("Message-ID", ""),
+            "references": msg.get("References", ""),
+            "body": body,
+            "truncated": truncated,
+        }
+
+
+def email_read_tool(index) -> str:
+    if not _configured():
+        return ("Email isn't configured yet -- Ed needs to set "
+                "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
+                "(a Gmail App Password, not the account password).")
+    uids = _load_last_list()
+    if not uids:
+        return ("I don't have a recent email list -- check the inbox first "
+                "(email_check), then ask me to read one by number.")
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        return "Which one? Give me a number from the last inbox check."
+    if idx < 1 or idx > len(uids):
+        return f"I only have {len(uids)} email(s) from the last check -- pick a number in that range."
+    uid = uids[idx - 1]
+    try:
+        msg = read_email_body(uid)
+    except Exception as e:
+        print(f"[email_client] email_read_tool failed: {type(e).__name__}: {e}",
+              flush=True)
+        return f"Couldn't read that email: {type(e).__name__}: {e}"
+    body = msg["body"] or "(empty message)"
+    note = " (truncated -- long email)" if msg["truncated"] else ""
+    return f'From {msg["from"]}, subject "{msg["subject"]}":\n{body}{note}'
+
+
+# --------------------------------------------------------------------------- #
+# Drafting + confirm-gated sending                                            #
+# --------------------------------------------------------------------------- #
+
+def _load_pending() -> Optional[dict]:
+    p = _draft_state_path()
+    if not p.exists():
+        return None
+    try:
+        entry = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not entry or entry.get("expires_at", 0) <= time.time():
+        return None
+    return entry
+
+
+def _save_pending(entry: Optional[dict]) -> None:
+    p = _draft_state_path()
+    if entry is None:
+        p.unlink(missing_ok=True)
+        return
+    tmp = p.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
+    tmp.write_text(json.dumps(entry, indent=2), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def draft_email(to: str, subject: str, body: str) -> dict:
+    address = resolve_contact(to)
+    if not address:
+        return {"ok": False, "error": f'no email address for "{to}"'}
+    entry = {
+        "id": secrets.token_hex(3),
+        "to": address,
+        "to_raw": to,
+        "subject": (subject or "").strip() or "(no subject)",
+        "body": body or "",
+        "created_at": time.time(),
+        "expires_at": time.time() + _DRAFT_TTL_S,
+    }
+    _save_pending(entry)
+    return {"ok": True, **entry}
+
+
+def email_draft_tool(to: str, subject: str, body: str) -> str:
+    if not _configured():
+        return ("Email isn't configured yet -- Ed needs to set "
+                "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
+                "(a Gmail App Password, not the account password).")
+    r = draft_email(to, subject, body)
+    if not r["ok"]:
+        return (f'{r["error"]} -- give me the address, or add them as a '
+                f'contact first.')
+    preview = r["body"][:200] + ("..." if len(r["body"]) > 200 else "")
+    return (f'Drafted to {r["to"]} — subject: "{r["subject"]}". '
+            f'"{preview}" Say "send it" to send, or "cancel" to drop it. '
+            f'This will NOT send until you say so.')
+
+
+def draft_reply(index, body: str) -> dict:
+    """Same draft-then-confirm split as draft_email, but addresses the
+    sender of a prior email_check listing by 1-based index and carries
+    Message-ID/References so the reply threads properly."""
+    uids = _load_last_list()
+    if not uids:
+        return {"ok": False, "error": "no recent email list -- check the inbox first"}
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "invalid index"}
+    if idx < 1 or idx > len(uids):
+        return {"ok": False, "error": f"only {len(uids)} email(s) in the last check"}
+    uid = uids[idx - 1]
+    try:
+        original = read_email_body(uid)
+    except Exception as e:
+        return {"ok": False, "error": f"couldn't load that email: {type(e).__name__}: {e}"}
+    to_addr = email.utils.parseaddr(original["from"])[1]
+    if not to_addr:
+        return {"ok": False, "error": "couldn't find a reply address on that email"}
+    subj = original["subject"] or ""
+    if not subj.lower().startswith("re:"):
+        subj = f"Re: {subj}"
+    refs = (original.get("references") or "").strip()
+    msg_id = (original.get("message_id") or "").strip()
+    references = (refs + " " + msg_id).strip() if refs else msg_id
+    entry = {
+        "id": secrets.token_hex(3),
+        "to": to_addr,
+        "to_raw": original["from"],
+        "subject": subj,
+        "body": body or "",
+        "in_reply_to": msg_id or None,
+        "references": references or None,
+        "created_at": time.time(),
+        "expires_at": time.time() + _DRAFT_TTL_S,
+    }
+    _save_pending(entry)
+    return {"ok": True, **entry}
+
+
+def email_reply_tool(index, body: str) -> str:
+    if not _configured():
+        return ("Email isn't configured yet -- Ed needs to set "
+                "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
+                "(a Gmail App Password, not the account password).")
+    r = draft_reply(index, body)
+    if not r["ok"]:
+        return f'{r["error"]}.'
+    preview = r["body"][:200] + ("..." if len(r["body"]) > 200 else "")
+    return (f'Drafted a reply to {r["to"]} — subject: "{r["subject"]}". '
+            f'"{preview}" Say "send it" to send, or "cancel" to drop it. '
+            f'This will NOT send until you say so.')
+
+
+def _send_smtp(to: str, subject: str, body: str, *, in_reply_to: Optional[str] = None,
+               references: Optional[str] = None) -> dict:
+    try:
+        msg = email.mime.text.MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = _address()
+        msg["To"] = to
+        msg["Date"] = email.utils.formatdate(localtime=True)
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
+        with smtplib.SMTP(_smtp_host(), _smtp_port(), timeout=15) as s:
+            s.starttls()
+            s.login(_address(), _app_password())
+            s.send_message(msg)
+        return {"ok": True}
+    except Exception as e:
+        print(f"[email_client] SMTP send failed: {type(e).__name__}: {e}",
+              flush=True)
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def try_handle_email_confirm_command(text: str) -> Optional[str]:
+    """Deterministic (non-LLM) confirm/cancel gate for the one pending
+    email draft, if any. Returns None (unclaimed) whenever there's no
+    pending draft OR the text isn't a recognizable yes/no -- so ordinary
+    conversation never gets swallowed by this. See module docstring for
+    why sending lives here instead of as an LLM tool."""
+    pending = _load_pending()
+    if pending is None:
+        return None
+    try:
+        import chloe_pending_confirms as _cpc
+        decision = _cpc.classify_reply(text)
+    except Exception:
+        decision = ""
+    if not decision:
+        return None
+
+    _save_pending(None)  # single-resolution, same as chloe_pending_confirms
+
+    if decision == "no":
+        return "Okay, I won't send that."
+
+    if not _configured():
+        return "Email isn't configured -- can't actually send this."
+    r = _send_smtp(pending["to"], pending["subject"], pending["body"],
+                   in_reply_to=pending.get("in_reply_to"),
+                   references=pending.get("references"))
+    if r["ok"]:
+        return f'Sent to {pending["to"]}.'
+    return f'That didn\'t send -- {r["error"]}'
+
+
+def _cli() -> int:
+    args = sys.argv[1:]
+    if not args:
+        print(__doc__)
+        return 0
+    if args[0] == "--add-contact" and len(args) == 3:
+        print(add_contact(args[1], args[2]))
+        return 0
+    if args[0] == "--check":
+        print(email_check_tool())
+        return 0
+    if args[0] == "--check-unread":
+        print(email_check_tool(unread_only=True))
+        return 0
+    if args[0] == "--read" and len(args) == 2:
+        print(email_read_tool(args[1]))
+        return 0
+    if args[0] == "--draft" and len(args) == 4:
+        print(email_draft_tool(args[1], args[2], args[3]))
+        return 0
+    if args[0] == "--reply" and len(args) == 3:
+        print(email_reply_tool(args[1], args[2]))
+        return 0
+    print("unrecognized arguments; see module docstring for CLI usage")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

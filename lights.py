@@ -31,6 +31,7 @@ CLI:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import re
@@ -101,12 +102,59 @@ CT_RGB_FALLBACK = {
 
 def _load_config() -> dict:
     if not CONFIG_PATH.exists():
-        return {"bulbs": []}
+        return {"bulbs": [], "groups": {}}
     try:
-        return json.loads(CONFIG_PATH.read_text())
+        cfg = json.loads(CONFIG_PATH.read_text())
     except Exception as e:
         print(f"[lights] config load failed: {e}", file=sys.stderr)
-        return {"bulbs": []}
+        return {"bulbs": [], "groups": {}}
+
+    # Groups: optional {name: [bulb_name, ...]}. Validate permissively —
+    # drop invalid groups with a warning rather than refusing to start
+    # (spec called for strict refusal, but that's a daily-driver foot-gun:
+    # one typo would block lights entirely. Warn + drop matches Chloe's
+    # other config-loading patterns).
+    raw_groups = cfg.get("groups", {}) or {}
+    if not isinstance(raw_groups, dict):
+        print(f"[lights] groups must be a dict, got {type(raw_groups).__name__}; "
+              f"ignoring.", file=sys.stderr)
+        cfg["groups"] = {}
+        return cfg
+
+    bulb_names = {b.get("name", "").strip().lower(): True
+                  for b in cfg.get("bulbs", []) if b.get("name")}
+    cleaned_groups: dict[str, list[str]] = {}
+    for raw_name, raw_members in raw_groups.items():
+        gname = (raw_name or "").strip().lower()
+        if not gname:
+            print(f"[lights] skipping group with empty name", file=sys.stderr)
+            continue
+        if gname in bulb_names:
+            print(f"[lights] group name {gname!r} collides with a bulb name; "
+                  f"dropping group.", file=sys.stderr)
+            continue
+        if not isinstance(raw_members, list):
+            print(f"[lights] group {gname!r} members must be a list; "
+                  f"dropping.", file=sys.stderr)
+            continue
+        members = []
+        for m in raw_members:
+            mn = (m or "").strip().lower()
+            if not mn:
+                continue
+            if mn not in bulb_names:
+                print(f"[lights] group {gname!r} references unknown bulb "
+                      f"{mn!r}; skipping that member.", file=sys.stderr)
+                continue
+            if mn not in members:
+                members.append(mn)
+        if members:
+            cleaned_groups[gname] = members
+        else:
+            print(f"[lights] group {gname!r} has no valid members after "
+                  f"cleanup; dropping.", file=sys.stderr)
+    cfg["groups"] = cleaned_groups
+    return cfg
 
 
 def _save_config(cfg: dict) -> None:
@@ -196,15 +244,32 @@ def name_bulb(mac: str, name: str) -> bool:
 
 _bulb_cache: dict[str, WifiLedBulb] = {}
 
+# Dead-bulb backoff (Ed, 2026-08-31): four bulb IPs that never come back
+# online were being retried -- and timing out -- on every single
+# set_state()/list_bulbs() call, with the timeout landing mid-conversation.
+# _connect is the one choke point every lookup goes through, so track
+# unreachable IPs here with exponential backoff (start 60s, double each
+# consecutive failure, cap ~15min) and skip the connect attempt entirely
+# while an IP is backed off. Reset the moment a connect actually succeeds.
+_dead_bulb_backoff: dict[str, dict] = {}
+_BULB_BACKOFF_START_S = float(os.environ.get("CHLOE_LIGHTS_BACKOFF_START_S", "60"))
+_BULB_BACKOFF_CAP_S   = float(os.environ.get("CHLOE_LIGHTS_BACKOFF_CAP_S", "900"))
+
 
 def _connect(ip: str) -> Optional[WifiLedBulb]:
-    """Return a connected WifiLedBulb for `ip`, cached. None on failure."""
+    """Return a connected WifiLedBulb for `ip`, cached. None on failure
+    (including while `ip` is in its dead-bulb backoff window)."""
     if not HAVE_FLUX:
+        return None
+    now = time.time()
+    backoff = _dead_bulb_backoff.get(ip)
+    if backoff is not None and now < backoff["next_retry"]:
         return None
     bulb = _bulb_cache.get(ip)
     if bulb is not None:
         try:
             bulb.update_state()
+            _dead_bulb_backoff.pop(ip, None)
             return bulb
         except Exception:
             _bulb_cache.pop(ip, None)
@@ -212,9 +277,14 @@ def _connect(ip: str) -> Optional[WifiLedBulb]:
         bulb = WifiLedBulb(ip)
         bulb.update_state()
         _bulb_cache[ip] = bulb
+        _dead_bulb_backoff.pop(ip, None)
         return bulb
     except Exception as e:
-        print(f"[lights] connect {ip} failed: {e}", file=sys.stderr)
+        prev_backoff = backoff["backoff"] if backoff else _BULB_BACKOFF_START_S / 2
+        next_backoff = min(prev_backoff * 2, _BULB_BACKOFF_CAP_S)
+        _dead_bulb_backoff[ip] = {"next_retry": now + next_backoff, "backoff": next_backoff}
+        print(f"[lights] connect {ip} failed: {e} — backing off {next_backoff:.0f}s",
+              file=sys.stderr)
         return None
 
 
@@ -240,7 +310,18 @@ def list_bulbs() -> list[dict]:
 
 
 def _resolve_targets(name: str) -> list[dict]:
-    """Resolve a free-text target into a list of bulb config entries."""
+    """Resolve a free-text target into a list of bulb config entries.
+
+    Order of resolution:
+      1. "all"-shaped → every bulb.
+      2. Exact bulb name match → single bulb.
+      3. Exact group name match (from ``groups`` in lights.json) → every
+         bulb listed under that group, in declared order. Groups are
+         validated at config load — collisions with bulb names are
+         already dropped, so a name can't ambiguously mean both.
+      4. Substring match on bulb name → all bulbs whose name contains
+         the query.
+    """
     cfg = _load_config()
     bulbs = [b for b in cfg.get("bulbs", []) if b.get("name")]
     if not bulbs:
@@ -248,11 +329,24 @@ def _resolve_targets(name: str) -> list[dict]:
     n = (name or "").strip().lower()
     if not n or n in ("all", "everything", "everywhere", "house", "lights"):
         return bulbs
-    # exact match
+    # exact bulb match
     for b in bulbs:
         if b["name"] == n:
             return [b]
-    # substring
+    # exact group match — expand to all member bulb configs, preserving
+    # declared member order. Members are guaranteed to resolve because
+    # _load_config drops any group with dangling references.
+    groups = cfg.get("groups") or {}
+    if n in groups:
+        by_name = {b["name"]: b for b in bulbs}
+        members: list[dict] = []
+        for member in groups[n]:
+            entry = by_name.get(member)
+            if entry is not None and entry not in members:
+                members.append(entry)
+        if members:
+            return members
+    # substring fallback
     matches = [b for b in bulbs if n in b["name"]]
     return matches
 
@@ -291,7 +385,7 @@ def set_state(
     Returns {ok, target, results: [{bulb_name, ok, error?}]}."""
     targets = _resolve_targets(target)
     if not targets:
-        return {"ok": False, "error": f"no bulb matching {target!r} (have you named them?)"}
+        return {"ok": False, "error": f"no bulb or group matching {target!r} (have you named them?)"}
 
     # Resolve color/ct intent into the actual values we'll send
     rgb: Optional[tuple[int, int, int]] = None
@@ -410,11 +504,12 @@ DIM_WORDS    = {"dim", "dimmer", "lower"}
 BRIGHT_WORDS = {"brighter", "brighten", "bright", "boost"}
 
 FILLER = {"the", "a", "an", "to", "in", "of", "my", "please", "chloe",
-          "hey", "turn", "set", "make", "switch", "color", "colour",
+          "hey", "turn", "set", "make", "switch", "adjust", "change",
+          "color", "colour",
           "lights", "light", "lamp", "lamps", "bulb", "bulbs",
           "on", "off", "down", "up", "dim", "brighter", "brighten",
           "bright", "lower", "raise", "boost", "out", "stop", "kill",
-          "percent", "%"}
+          "percent", "%", "at"}
 
 
 def parse_intent(text: str) -> Optional[dict]:
@@ -423,7 +518,8 @@ def parse_intent(text: str) -> Optional[dict]:
         return None
     raw = text.strip().lower()
     has_light_word = any(w in raw for w in LIGHT_WORDS)
-    starts_with_action = re.match(r"^\s*(turn|set|make|switch|dim|brighten)\b", raw)
+    starts_with_action = re.match(
+        r"^\s*(turn|set|make|switch|dim|brighten|adjust|change)\b", raw)
     if not has_light_word and not starts_with_action:
         return None
 
@@ -439,7 +535,8 @@ def parse_intent(text: str) -> Optional[dict]:
             args["ct"] = tname
             break
 
-    m = re.search(r"(\d{1,3})\s*%", raw) or re.search(r"\bto\s+(\d{1,3})\b", raw)
+    m = (re.search(r"(\d{1,3})\s*(?:%|percent)\b", raw)
+         or re.search(r"\b(?:to|at)\s+(\d{1,3})\b", raw))
     if m:
         pct = int(m.group(1))
         if 0 <= pct <= 100:
@@ -501,12 +598,18 @@ def ensure_presets() -> None:
 
 
 def get_state_snapshot() -> dict:
-    """Full state dump for the HUD: bulbs (with live state) + presets."""
+    """Full state dump for the HUD: bulbs (with live state) + presets + groups.
+
+    ``groups`` is the validated map from lights.json (``{name: [members]}``).
+    Older HUD/PWA clients ignore unknown keys; the future CH02 Groups row
+    consumes it.
+    """
     ensure_presets()
     cfg = _load_config()
     return {
         "bulbs":   list_bulbs(),
         "presets": cfg.get("presets", []),
+        "groups":  cfg.get("groups", {}) or {},
     }
 
 
@@ -520,7 +623,7 @@ def apply_action(target: str, **kwargs) -> dict:
     # Raw RGB path — bypass color-name lookup, send setRgb directly.
     targets = _resolve_targets(target)
     if not targets:
-        return {"ok": False, "error": f"no bulb matching {target!r}"}
+        return {"ok": False, "error": f"no bulb or group matching {target!r}"}
     try:
         r, g, b = (int(x) for x in rgb)
         r = max(0, min(255, r)); g = max(0, min(255, g)); b = max(0, min(255, b))
@@ -693,7 +796,14 @@ def _format_status() -> str:
         else:
             on = "on" if b.get("on") else "off"
             lines.append(f"{b.get('name') or b['mac']}: {on}")
-    return " | ".join(lines)
+    bulb_line = " | ".join(lines)
+    cfg = _load_config()
+    groups = cfg.get("groups") or {}
+    if not groups:
+        return bulb_line
+    group_parts = [f"{g}=[{', '.join(members)}]"
+                   for g, members in groups.items()]
+    return f"bulbs: {bulb_line}\ngroups: {', '.join(group_parts)}"
 
 
 def try_handle_lights_command(text: str):
@@ -800,14 +910,21 @@ def _cli_list():
         print("no bulbs. run: python lights.py --discover")
         return 1
     print(f"config: {CONFIG_PATH}")
-    print(f"{'NAME':<16} {'MAC':<14} {'IP':<16} {'STATE'}")
+    print("Bulbs:")
+    print(f"  {'NAME':<16} {'MAC':<14} {'IP':<16} {'STATE'}")
     for b in list_bulbs():
         name = b.get("name") or "(unnamed)"
         if not b["online"]:
             state = "offline"
         else:
             state = ("ON " if b.get("on") else "off") + f"  bri={b.get('brightness', 0)}"
-        print(f"{name:<16} {b['mac']:<14} {b['ip']:<16} {state}")
+        print(f"  {name:<16} {b['mac']:<14} {b['ip']:<16} {state}")
+    groups = cfg.get("groups") or {}
+    if groups:
+        print()
+        print("Groups:")
+        for gname, members in groups.items():
+            print(f"  {gname:<16} -> {', '.join(members)}")
     return 0
 
 

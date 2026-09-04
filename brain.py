@@ -10,6 +10,7 @@ Routing rule (enforced via the llm_call mode parameter):
   - light: query, fact_add. Local Ollama is fine.
 """
 
+import os
 import re
 import json
 import datetime
@@ -18,6 +19,10 @@ from typing import Callable, Optional
 
 # llm_call signature: (prompt: str, mode: 'heavy' | 'light') -> str
 LlmCall = Callable[[str, str], str]
+
+# Files under facts/ that are NOT user facts. MEMORY.md is the index;
+# voice.md is the style guide pulled via Brain.voice_only().
+_FACTS_EXCLUDE = frozenset({'MEMORY.md', 'voice.md'})
 
 
 class Brain:
@@ -96,7 +101,7 @@ class Brain:
         if self.facts_dir.exists():
             facts = []
             for fact_file in sorted(self.facts_dir.glob('*.md')):
-                if fact_file.name == 'MEMORY.md':
+                if fact_file.name in _FACTS_EXCLUDE:
                     continue
                 facts.append(f'--- {fact_file.stem} ---')
                 facts.append(fact_file.read_text(encoding='utf-8'))
@@ -106,15 +111,36 @@ class Brain:
         return '\n'.join(parts)
 
     def facts_only(self) -> str:
-        """Just the user facts, no schema. Use this for lighter context loads."""
+        """Just the user facts, no schema. Use this for lighter context loads.
+
+        Excludes MEMORY.md (index) and voice.md (style guide — pulled via
+        ``voice_only()`` so it can be injected into prompts as a separate
+        ``{voice}`` slot rather than mixed into ``{facts}``).
+        """
         if not self.facts_dir.exists():
             return ''
         out = []
         for fact_file in sorted(self.facts_dir.glob('*.md')):
-            if fact_file.name == 'MEMORY.md':
+            if fact_file.name in _FACTS_EXCLUDE:
                 continue
             out.append(fact_file.read_text(encoding='utf-8'))
         return '\n\n'.join(out)
+
+    def voice_only(self) -> str:
+        """Chloe's voice/style guide (``facts/voice.md``).
+
+        Returned as a string ready to drop into a ``{voice}`` template slot.
+        Empty string if the file is missing.
+        """
+        if not self.facts_dir.exists():
+            return ''
+        voice_path = self.facts_dir / 'voice.md'
+        if not voice_path.exists():
+            return ''
+        try:
+            return voice_path.read_text(encoding='utf-8')
+        except Exception:
+            return ''
 
     # ========================================================================
     # Operations
@@ -149,12 +175,14 @@ class Brain:
             entities_status = []
             for entity in extraction.get('entities', [])[:10]:
                 entity_slug = self._slug(entity)
-                status = 'UPDATE' if self.exists(f'wiki/entities/{entity_slug}.md') else 'CREATE'
+                entity_rel = f'wiki/{self._wiki_dir_for_page_type("entity")}/{entity_slug}.md'
+                status = 'UPDATE' if self.exists(entity_rel) else 'CREATE'
                 entities_status.append((entity_slug, status))
             concepts_status = []
             for concept in extraction.get('concepts', [])[:10]:
                 concept_slug = self._slug(concept)
-                status = 'UPDATE' if self.exists(f'wiki/concepts/{concept_slug}.md') else 'CREATE'
+                concept_rel = f'wiki/{self._wiki_dir_for_page_type("concept")}/{concept_slug}.md'
+                status = 'UPDATE' if self.exists(concept_rel) else 'CREATE'
                 concepts_status.append((concept_slug, status))
             return {
                 'dry_run': True,
@@ -167,33 +195,24 @@ class Brain:
 
         # 2. Source page
         slug = self._slug(src.stem)
-        self.write(f'wiki/sources/{slug}.md', self._render_source_page(slug, source_title, extraction))
+        self.write(f'wiki/sources/{slug}.md',
+                  self._render_source_page(slug, source_title, extraction, source_text))
 
         # 3. Entity pages (cap at 10 to bound cost)
         entities_touched = []
         for entity in extraction.get('entities', [])[:10]:
-            entity_slug = self._slug(entity)
-            rel = f'wiki/entities/{entity_slug}.md'
-            existing = self.read(rel) if self.exists(rel) else None
-            new_content = self._update_page('entity', entity, existing, extraction, slug, source_title, source_text)
-            new_content = self._validate_and_clean_page(new_content)
-            if new_content is None:
-                continue
-            self.write(rel, new_content)
-            entities_touched.append(entity_slug)
+            touched = self._ingest_typed_page(
+                'entity', entity, extraction, slug, source_title, source_text)
+            if touched:
+                entities_touched.append(touched)
 
         # 4. Concept pages
         concepts_touched = []
         for concept in extraction.get('concepts', [])[:10]:
-            concept_slug = self._slug(concept)
-            rel = f'wiki/concepts/{concept_slug}.md'
-            existing = self.read(rel) if self.exists(rel) else None
-            new_content = self._update_page('concept', concept, existing, extraction, slug, source_title, source_text)
-            new_content = self._validate_and_clean_page(new_content)
-            if new_content is None:
-                continue
-            self.write(rel, new_content)
-            concepts_touched.append(concept_slug)
+            touched = self._ingest_typed_page(
+                'concept', concept, extraction, slug, source_title, source_text)
+            if touched:
+                concepts_touched.append(touched)
 
         # 5. Index + log
         self._update_index(slug, source_title, entities_touched, concepts_touched)
@@ -337,20 +356,73 @@ class Brain:
         return slug
 
     def fact_extract_and_add(self, statement: str) -> Optional[str]:
-        """Light-mode helper: extract a single fact from natural language and store it."""
+        """Extract a single fact from natural language and store it.
+
+        Pillar 2 of memory autopilot (2026-05-17):
+        - Few-shot examples in the prompt drive better, tighter `name` choices.
+        - Statements at or over CHLOE_FACT_HEAVY_THRESHOLD chars (default 200)
+          escalate to heavy mode for slug-pick quality on long inputs.
+        - LLM also returns a `category` field; when category is
+          biographical / preference / opinion the slug is namespaced as
+          ed_<category>_<name> so facts/ clusters by kind. Other / missing
+          falls back to the original flat slug.
+        """
+        try:
+            heavy_threshold = int(os.environ.get('CHLOE_FACT_HEAVY_THRESHOLD', '200'))
+        except ValueError:
+            heavy_threshold = 200
+        mode = 'heavy' if len(statement) >= heavy_threshold else 'light'
+
         prompt = (
             f"Edward said: \"{statement}\"\n\n"
-            f"If this statement contains a durable fact about Edward worth remembering "
-            f"(preference, identity, role, recurring context), return JSON: "
-            f'{{"name": "<short topic>", "description": "<one-line description>", "body": "<the fact in 1-3 sentences>"}}.\n'
-            f'If it does NOT contain a durable fact (just a passing comment), return: {{"skip": true}}.\n'
+            f"If this contains a DURABLE fact ABOUT EDWARD HIMSELF worth "
+            f"remembering long-term (his identity, family, work, location, "
+            f"history, preferences, opinions, goals, possessions, health), "
+            f"return JSON:\n"
+            f'{{"name": "<short topic, 2-5 specific words, no stopwords>", '
+            f'"description": "<one-line description>", '
+            f'"body": "<the fact in 1-3 sentences>", '
+            f'"category": "biographical|preference|opinion|other"}}.\n\n'
+            f"NAME EXAMPLES (short, specific, no stopwords):\n"
+            f'  "my dad is named Robert" -> name: "father name"\n'
+            f'  "I love Hans Zimmer" -> name: "favorite composer"\n'
+            f'  "I run covered calls on SLV" -> name: "SLV covered call strategy"\n'
+            f'  "I hate networking events" -> name: "networking opinion"\n'
+            f'  "I work in AI engineering" -> name: "profession"\n'
+            f'  "my birthday is May 17" -> name: "birthday"\n'
+            f'  "I live in the Pacific Northwest" -> name: "region"\n\n'
+            f"CATEGORY GUIDELINES:\n"
+            f'  biographical: name, family, age, role, identity, history, education, location\n'
+            f'  preference: likes, dislikes, favorites, habits, tools, aesthetics\n'
+            f'  opinion: views, beliefs, stances, judgments\n'
+            f'  other: another durable fact ABOUT EDWARD that fits none of the above\n\n'
+            f'Return {{"skip": true}} for anything that is NOT a durable fact '
+            f'about Edward, INCLUDING:\n'
+            f'  - instructions/preferences about how YOU (Chloe) should behave, '
+            f'respond, or interpret his words\n'
+            f'  - terminology or abbreviation clarifications\n'
+            f'  - statements about you (Chloe), the assistant, or your relationship\n'
+            f'  - passing comments, questions, commands, or transient/ephemeral state\n'
+            f'  - facts about other people that say nothing durable about Edward\n\n'
+            f"SKIP EXAMPLES:\n"
+            f'  "when I say mph I mean miles per hour" -> {{"skip": true}}\n'
+            f'  "respond more concisely from now on" -> {{"skip": true}}\n'
+            f'  "you\'re really helpful and I\'m attracted to you" -> {{"skip": true}}\n'
+            f'  "what\'s the weather today?" -> {{"skip": true}}\n\n'
             f"Return ONLY the JSON object."
         )
         try:
-            result = self._json_call(prompt, 'light')
+            result = self._json_call(prompt, mode)
             if not isinstance(result, dict) or result.get('skip'):
                 return None
-            return self.fact_add(result['name'], result['body'], result.get('description', ''))
+            name = result.get('name')
+            body = result.get('body')
+            if not name or not body:
+                return None
+            category = (result.get('category') or '').strip().lower()
+            if category in ('biographical', 'preference', 'opinion'):
+                name = f"ed_{category}_{name}"
+            return self.fact_add(name, body, result.get('description', ''))
         except Exception:
             return None
 
@@ -694,6 +766,171 @@ class Brain:
     # the frontmatter or has crossed into body content.
     _YAML_FIELD_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_\-]*\s*:')
 
+    # Used by _rewrite_sources_field / _extract_frontmatter_source_slugs.
+    # [^\]|]+ so "[[slug|display text]]" pipe-aliases still extract just the
+    # slug, matching how the rest of the wiki treats wikilinks.
+    _SOURCES_FIELD_RE = re.compile(
+        r'^sources:\s*(.*(?:\n[ \t]+\S.*)*)', re.MULTILINE)
+    _WIKILINK_SLUG_RE = re.compile(r'\[\[([^\]|]+)')
+    _POINT_IN_TIME_KIND_FIELD_RE = re.compile(r'^point_in_time_kind:\s*')
+
+    def _add_point_in_time_marking(self, page: str, source_text: str) -> str:
+        """Splice point-in-time frontmatter + body marker into an
+        already-generated page, via the same wiki_dedup.
+        build_point_in_time_metadata jarvis.py's _persist_brave_to_wiki
+        and this class's own _render_source_page use -- one
+        implementation, now three call sites.
+
+        2026-08-31 gap Ed caught: _render_source_page (wiki/sources/*.md)
+        was wired up, but entity/concept pages (built by _update_page,
+        via ingest()'s loops) were not -- so a /wiki_write run could
+        produce a correctly-labeled wiki/sources/silver.md sitting next
+        to an UNLABELED wiki/entities/silver.md carrying the same $59.93
+        claim, and the entity page is what recall actually surfaces.
+
+        Classifies `source_text` (the ingested source's own text, not
+        the LLM-summarized `page`) for the same reason _render_source_page
+        does: a summary can drop a figure the source actually stated.
+        Never supersedes -- an entity/concept page is mixed durable +
+        time-sensitive content by definition, same reasoning as
+        wiki/sources/ pages (see supersede_prior_point_in_time_page's
+        docstring). No-op if nothing point-in-time is detected, or if
+        the page is already labeled (idempotent across re-ingests of
+        entities/concepts shared by multiple sources, only some of which
+        may be point-in-time). `page` must already be through
+        _normalize_frontmatter.
+        """
+        lines = page.splitlines()
+        if not lines or lines[0].strip() != '---':
+            return page
+        close_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                close_idx = i
+                break
+        if close_idx is None:
+            return page
+        fm_lines = lines[1:close_idx]
+        if any(self._POINT_IN_TIME_KIND_FIELD_RE.match(l) for l in fm_lines):
+            return page  # already labeled -- don't re-stamp a fresh timestamp
+
+        import wiki_dedup as _wiki_dedup
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        pit = _wiki_dedup.build_point_in_time_metadata(source_text, ts)
+        if not pit["kind"]:
+            return page
+
+        fm_block = '\n'.join(['---'] + fm_lines) + '\n' + pit['frontmatter'] + '---\n'
+        body = '\n'.join(lines[close_idx + 1:]).lstrip('\n')
+        return fm_block + '\n' + pit['marker'] + body + ('' if body.endswith('\n') else '\n')
+
+    def _extract_frontmatter_source_slugs(self, page: str) -> list:
+        """Pull existing [[wikilink]] slugs out of a page's `sources:`
+        frontmatter field only -- never the body (e.g. a "## Related"
+        section legitimately has its own [[wikilinks]] that aren't
+        sources). Ignores any non-wikilink entries the model may have put
+        there (bare URLs, markdown links) -- sources: is internal-
+        wikilinks-only by design; external citations belong in a source
+        page's own source_urls/Citations, not here."""
+        if not page:
+            return []
+        lines = page.splitlines()
+        if not lines or lines[0].strip() != '---':
+            return []
+        close_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                close_idx = i
+                break
+        if close_idx is None:
+            return []
+        fm_text = '\n'.join(lines[1:close_idx])
+        m = self._SOURCES_FIELD_RE.search(fm_text)
+        if not m:
+            return []
+        return self._WIKILINK_SLUG_RE.findall(m.group(0))
+
+    def _rewrite_sources_field(self, page: str, page_rel: str,
+                               new_source_slug: str, existing_page: str = None) -> str:
+        """Deterministically set the frontmatter `sources:` field --
+        never left to the model (2026-08-31 bug: told to write
+        `sources: [[{source_slug}]]` itself, a /wiki_write-generated
+        concept page for "silver" sourced from a raw file ALSO slugged
+        "silver" produced a self-referential [[silver]] wikilink that
+        carried no information, and separately fabricated an invented
+        `/wiki_write/silver` "URL" alongside it -- same fabrication class
+        as a made-up citation, just emitted by our own prompt template
+        rather than the model working unprompted).
+
+        Merges any source slugs already present in `existing_page`'s own
+        sources field (the update-page case) with `new_source_slug`,
+        de-duplicates, and drops a genuine self-reference. `page` must
+        already be through _normalize_frontmatter (single well-formed
+        --- block) so frontmatter boundaries are reliable. Replaces
+        whatever `sources:` field the model wrote (single-line or
+        multi-line YAML-list, or none at all) with one clean
+        `sources: [[a]], [[b]]` line.
+
+        `page_rel` is the CURRENT page's own type-qualified relative path
+        (e.g. 'entities/silver' or 'concepts/silver'), used ONLY to
+        detect self-reference against the source being cited (always
+        'sources/{new_source_slug}', since this function is only ever
+        called for entity/concept pages citing the ONE wiki/sources/ page
+        they were derived from). 2026-08-31 bug #2: this used to compare
+        BARE slugs (page_slug == new_source_slug) -- wiki/sources/silver.md
+        and wiki/entities/silver.md are DIFFERENT pages that happen to
+        share a slug, so that comparison treated a real, legitimate
+        source citation as a self-reference and silently dropped it,
+        leaving `sources:` empty. Same mistake class the
+        wiki_dedup_report.py work already fixed once by keying on full
+        path instead of bare slug -- fixed here the same way: compare the
+        full type-qualified path, which can only be equal in the case
+        that's actually self-referential (a wiki/sources/ page's own
+        frontmatter citing itself, not reachable from this call path
+        today, but correct regardless of caller).
+        """
+        lines = page.splitlines()
+        if not lines or lines[0].strip() != '---':
+            return page
+        close_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == '---':
+                close_idx = i
+                break
+        if close_idx is None:
+            return page
+
+        prior_slugs = (self._extract_frontmatter_source_slugs(existing_page)
+                      if existing_page else [])
+        slugs = list(dict.fromkeys(prior_slugs + [new_source_slug]))  # de-dup, keep order
+        # Self-reference check: full type-qualified path, not bare slug
+        # (see docstring -- this is the 2026-08-31 fix for the bug where
+        # bare-slug comparison wrongly dropped a real source citation).
+        slugs = [s for s in slugs if f'sources/{s}' != page_rel]
+        sources_value = ', '.join(f'[[{s}]]' for s in slugs) if slugs else ''
+
+        fm_lines = lines[1:close_idx]
+        out_fm = []
+        i = 0
+        replaced = False
+        while i < len(fm_lines):
+            line = fm_lines[i]
+            if re.match(r'^sources:\s*', line):
+                replaced = True
+                out_fm.append(f'sources: {sources_value}')
+                i += 1
+                # Consume any YAML-list continuation lines the model wrote
+                # under its own `sources:` (indented "- ..." entries).
+                while i < len(fm_lines) and fm_lines[i][:1] in (' ', '\t') and fm_lines[i].strip().startswith('-'):
+                    i += 1
+                continue
+            out_fm.append(line)
+            i += 1
+        if not replaced:
+            out_fm.append(f'sources: {sources_value}')
+
+        return '\n'.join(['---'] + out_fm + lines[close_idx:])
+
     def _validate_and_clean_page(self, response: str):
         """Validate an LLM-generated wiki page response.
 
@@ -809,6 +1046,101 @@ class Brain:
         # trailing whitespace, so re-adding one here keeps output stable.
         return '\n'.join(rebuilt) + '\n'
 
+    def _ingest_typed_page(self, page_type: str, name: str, extraction: dict,
+                           source_slug: str, source_title: str,
+                           source_text: str) -> "str | None":
+        """Write (or merge into) the entity/concept page for `name`,
+        extracted from source `source_slug`. Returns the touched page's
+        slug, or None if the page was skipped (LLM declined / invalid
+        response). Shared by both the entity and concept loops in
+        ingest() -- was two near-identical copy-pasted loop bodies before
+        2026-08-31.
+
+        Two paths:
+          - Exact-slug match on this name's own slug -> the existing
+            LLM-mediated update flow (_update_page's "existing" branch),
+            unchanged behavior.
+          - No exact-slug match, but wiki_dedup.find_duplicate() finds a
+            semantically-equivalent page under a DIFFERENT name -- Ed,
+            2026-08-31: "different source documents extract the same
+            concept under slightly different LLM-chosen names," the
+            actual duplication source on this high-volume path (distinct
+            from chloe_jobs.py's _write_brain _v{n} sprawl, which is a
+            different bug on a different write path). Merges via
+            wiki_dedup.append_dated_revision -- deterministic append,
+            never an LLM full-page rewrite, and never a supersede (that
+            rule is for point-in-time quote pages specifically, see
+            supersede_prior_point_in_time_page's docstring; an
+            entity/concept page is durable reference material that
+            legitimately accumulates revisions over time).
+
+        Every decision (appended into an existing page under a different
+        name, or written fresh with nothing found) is logged via
+        wiki_dedup.log_dedup_decision so Ed can review what merged into
+        what -- this function never bulk-merges anything already on
+        disk, it only affects what happens to THIS source's newly
+        extracted entities/concepts as they're ingested.
+        """
+        import wiki_dedup as _wiki_dedup
+
+        name_slug = self._slug(name)
+        wiki_dir = self._wiki_dir_for_page_type(page_type)
+        rel = f'wiki/{wiki_dir}/{name_slug}.md'
+        existing = self.read(rel) if self.exists(rel) else None
+
+        if existing is None:
+            match = None
+            try:
+                import wiki_embedding as _wiki_embedding
+                _store = _wiki_embedding.get_store()
+                match = _wiki_dedup.find_duplicate(
+                    name, _store, scoped_dirs=(wiki_dir,))
+            except Exception as e:
+                print(f"[brain] dedup check failed for {page_type} {name!r} "
+                      f"(non-fatal, writing new page anyway): {e}", flush=True)
+            if match:
+                dup_rel = f"wiki/{match['path']}"
+                try:
+                    dup_existing = self.read(dup_rel)
+                except Exception:
+                    dup_existing = None
+                if dup_existing is not None:
+                    new_content = self._update_page(
+                        page_type, name, None, extraction, source_slug,
+                        source_title, source_text)
+                    new_content = self._validate_and_clean_page(new_content)
+                    if new_content is None:
+                        return None
+                    dup_slug = Path(match['path']).stem
+                    dup_rel_type = match['path'].replace('.md', '')
+                    merged = _wiki_dedup.append_dated_revision(
+                        dup_existing, new_content, date=self._today(),
+                        source_label=source_slug)
+                    merged = self._rewrite_sources_field(
+                        merged, dup_rel_type, source_slug, dup_existing)
+                    merged = self._add_point_in_time_marking(merged, source_text)
+                    self.write(dup_rel, merged)
+                    _wiki_dedup.log_dedup_decision(
+                        'appended', name, match, target_path=dup_rel,
+                        caller='Brain.ingest')
+                    return dup_slug
+            else:
+                _wiki_dedup.log_dedup_decision(
+                    'new_page', name, None, target_path=rel,
+                    caller='Brain.ingest')
+
+        new_content = self._update_page(
+            page_type, name, existing, extraction, source_slug,
+            source_title, source_text)
+        new_content = self._validate_and_clean_page(new_content)
+        if new_content is None:
+            return None
+        new_content = self._rewrite_sources_field(
+            new_content, f'{wiki_dir}/{name_slug}', source_slug, existing)
+        new_content = self._add_point_in_time_marking(new_content, source_text)
+        self.write(rel, new_content)
+        return name_slug
+
     def _update_page(self, page_type: str, name: str, existing,
                      extraction: dict, source_slug: str, source_title: str,
                      source_text: str = '') -> str:
@@ -842,10 +1174,13 @@ class Brain:
                 f"Source key points: {json.dumps(extraction.get('key_points', []))}"
                 f"{source_excerpt}\n\n"
                 f"Integrate any NEW information about '{name}' from this source. "
-                f"Update the 'updated' date in frontmatter to {self._today()}. Add this "
-                f"source to the sources list. Add new content ONLY if the source "
-                f"actually adds something specific about '{name}'. Preserve existing "
-                f"content unless directly contradicted. Return the COMPLETE updated page."
+                f"Update the 'updated' date in frontmatter to {self._today()}. Leave "
+                f"the 'sources:' frontmatter field exactly as it already is in the "
+                f"existing page above -- do NOT add, remove, or rewrite it yourself; "
+                f"that field is maintained by code, not by you. Add new content ONLY "
+                f"if the source actually adds something specific about '{name}'. "
+                f"Preserve existing content unless directly contradicted. Return the "
+                f"COMPLETE updated page."
                 f"{guardrail}"
             )
         else:
@@ -858,7 +1193,10 @@ class Brain:
                 f"{source_excerpt}\n\n"
                 f"Write a wiki page with:\n"
                 f"  - YAML frontmatter (title, type={page_type}, created={self._today()}, "
-                f"updated={self._today()}, tags, sources: [[{source_slug}]])\n"
+                f"updated={self._today()}, tags). Do NOT include a 'sources:' field "
+                f"yourself -- that gets added automatically after your output, from "
+                f"the actual source this page is generated from. Anything you write "
+                f"there would be fabricated, since you don't have the real source list.\n"
                 f"  - One-paragraph TL;DR specifically about '{name}' (NOT a paraphrase "
                 f"of the source-wide TLDR)\n"
                 f"  - Body sections covering what the source actually says about '{name}'\n"
@@ -868,11 +1206,31 @@ class Brain:
             )
         return self.llm(instruction, 'heavy')
 
-    def _render_source_page(self, slug: str, title: str, extraction: dict) -> str:
+    def _render_source_page(self, slug: str, title: str, extraction: dict,
+                            source_text: str = '') -> str:
         today = self._today()
         tags = extraction.get('tags', [])
         entities = extraction.get('entities', [])
         concepts = extraction.get('concepts', [])
+
+        # Point-in-time labeling (2026-08-31, Ed): every ingested source
+        # -- /wiki_write, /ingest, /ingest_screen, /add -- goes through
+        # this one render path, so classifying `source_text` here (rather
+        # than just extraction['tldr'], which can drop a figure the
+        # summary omitted) catches point-in-time content regardless of
+        # entry point. Uses the same wiki_dedup.build_point_in_time_metadata
+        # jarvis.py's _persist_brave_to_wiki calls -- one implementation.
+        # Deliberately NOT paired with a supersede check here: a general
+        # ingested source is typically mixed durable+time-sensitive
+        # content (a /wiki_write concept page has background/mechanics
+        # sections alongside one current-price paragraph), so replacing
+        # the WHOLE page over one aged number would be wrong. Labeled for
+        # staleness only -- see supersede_prior_point_in_time_page's
+        # docstring for the full reasoning.
+        import wiki_dedup as _wiki_dedup
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        pit = _wiki_dedup.build_point_in_time_metadata(source_text, ts)
+
         return (
             f"---\n"
             f"title: {title}\n"
@@ -880,7 +1238,9 @@ class Brain:
             f"created: {today}\n"
             f"updated: {today}\n"
             f"tags: {json.dumps(tags)}\n"
+            f"{pit['frontmatter']}"
             f"---\n\n"
+            f"{pit['marker']}"
             f"## TL;DR\n\n{extraction.get('tldr', '')}\n\n"
             f"## Key points\n\n"
             + '\n'.join(f"- {p}" for p in extraction.get('key_points', []))
@@ -957,22 +1317,21 @@ class Brain:
         else:
             log_path.write_text(f"# Wiki Log\n{entry}", encoding='utf-8')
 
-    def _json_call(self, prompt: str, mode: str):
-        """Call LLM, parse JSON. Robust to common LLM tics: code fences,
-        preamble like 'Here is the JSON:', trailing commentary, and
-        Python-repr quirks (None/True/False, single quotes)."""
-        raw = self.llm(prompt, mode).strip()
-        # Find the JSON region by scanning for the first { or [ and the
-        # last matching close. This handles preamble/postamble that ignore
-        # the "Return ONLY the JSON" instruction.
+    def _try_parse_json(self, raw: str):
+        """Extract and parse JSON from raw LLM output. Returns parsed object or None.
+
+        Handles: preamble prose, code fences, trailing commentary,
+        Python-repr quirks (None/True/False, single quotes).
+        Returns None (never raises) so callers can retry cleanly.
+        """
         m_start = re.search(r'[\{\[]', raw)
         if m_start is None:
-            raise ValueError(f"No JSON in response: {raw[:200]}")
+            return None
         open_char = raw[m_start.start()]
         close_char = '}' if open_char == '{' else ']'
         m_end = raw.rfind(close_char)
         if m_end == -1 or m_end < m_start.start():
-            raise ValueError(f"Malformed JSON in response: {raw[:200]}")
+            return None
         candidate = raw[m_start.start():m_end + 1]
         try:
             return json.loads(candidate)
@@ -983,14 +1342,79 @@ class Brain:
         loose = re.sub(r"(?<![\\\w])'([^']*?)'(?!\w)", r'"\1"', loose)
         try:
             return json.loads(loose)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Could not parse JSON: {raw[:200]}") from e
+        except json.JSONDecodeError:
+            return None
+
+    def _log_parse_failure(self, raw1: str, raw2: str) -> None:
+        """Append a JSON parse failure record to raw/_ingest_parse_failures.log."""
+        log_path = self.raw_dir / '_ingest_parse_failures.log'
+        now = self._now()
+        entry = (
+            f"\n## [{now}] JSON parse failure\n"
+            f"### Attempt 1\n```\n{raw1[:500]}\n```\n"
+            f"### Attempt 2 (retry)\n```\n{raw2[:500]}\n```\n"
+        )
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(entry)
+
+    def _json_call(self, prompt: str, mode: str):
+        """Call LLM, parse JSON. Robust to common LLM tics: code fences,
+        preamble like 'Here is the JSON:', trailing commentary, and
+        Python-repr quirks (None/True/False, single quotes).
+
+        On first-attempt failure, retries once with a stripped-down prompt
+        that prefaces the original with a hard JSON-only instruction. If
+        both attempts fail, logs the raw outputs to raw/_ingest_parse_failures.log
+        and raises ValueError with the retry's snippet.
+        """
+        raw = self.llm(prompt, mode).strip()
+        result = self._try_parse_json(raw)
+        if result is not None:
+            return result
+
+        # First attempt failed — retry with an explicit JSON-only preamble
+        retry_prompt = (
+            "Return ONLY raw valid JSON — no preamble, no commentary, "
+            "no markdown fences. Do not write any text before or after the JSON.\n\n"
+            + prompt
+        )
+        raw2 = self.llm(retry_prompt, mode).strip()
+        result2 = self._try_parse_json(raw2)
+        if result2 is not None:
+            return result2
+
+        # Both failed — log for post-mortem and raise
+        self._log_parse_failure(raw, raw2)
+        raise ValueError(f"Could not parse JSON after retry: {raw2[:200]}")
 
     @staticmethod
     def _slug(text: str) -> str:
         s = re.sub(r'[^\w\s-]', '', text.lower())
         s = re.sub(r'[-\s]+', '_', s).strip('_')
         return s or 'untitled'
+
+    # page_type -> wiki/ subdirectory. NEVER derive this by naive
+    # pluralization (f'{page_type}s') -- 'entity' is an irregular plural
+    # ('entities', not 'entitys'); that exact bug shipped for real
+    # 2026-09-01/09-02 and silently wrote every new/updated entity page
+    # to wiki/entitys/ instead of wiki/entities/ until an audit caught it
+    # 2026-09-03 (recovered via a Cowork merge -- see brain/log.md
+    # 2026-09-03 16:30 and brain/dedup_reports/entitys_*_2026-09-03/).
+    # One lookup table, used by every write path in this class below --
+    # don't reintroduce a second, independently-pluralizing copy.
+    _PAGE_TYPE_DIRS = {"entity": "entities", "concept": "concepts"}
+
+    @staticmethod
+    def _wiki_dir_for_page_type(page_type: str) -> str:
+        """Canonical wiki/ subdirectory for `page_type` ('entity' or
+        'concept'). Raises ValueError on anything else rather than
+        guessing -- see _PAGE_TYPE_DIRS above for why this exists."""
+        try:
+            return Brain._PAGE_TYPE_DIRS[page_type]
+        except KeyError:
+            raise ValueError(
+                f"unknown page_type {page_type!r}; expected one of "
+                f"{sorted(Brain._PAGE_TYPE_DIRS)}") from None
 
     @staticmethod
     def _now() -> str:

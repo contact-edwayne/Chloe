@@ -1,0 +1,48 @@
+    if use_ollama:
+        ollama_msgs = _trim_messages_for_model(groq_messages, MODEL_TEXT)
+        ollama_reply = ""
+        ollama_started = False  # have we sent the {"type":"start"} event yet?
+        try:
+            # Real token streaming: forward deltas to the HUD as Ollama
+            # generates them, so the first word lands in ~1-2s instead of
+            # after the whole reply finishes. _ollama_chat_stream bridges
+            # Ollama's threaded requests stream onto this event loop.
+            async for _delta in _ollama_chat_stream(ollama_msgs, max_tok):
+                if not ollama_started:
+                    await _ws_send(websocket, {"type": "start"})
+                    ollama_started = True
+                ollama_reply += _delta
+                await _ws_send(websocket, {"type": "delta", "text": _delta})
+        except _OllamaToolCallNeeded:
+            # Model wants a tool (rare on this route — introspection is
+            # routed to Groq). Run the non-streaming tool loop instead;
+            # no deltas were streamed yet, so the HUD state is clean.
+            try:
+                ollama_reply = await asyncio.to_thread(
+                    _ollama_chat, ollama_msgs, max_tok
+                )
+            except Exception as e:
+                print(f"[chloe] Ollama tool-loop errored: {e}", flush=True)
+                traceback.print_exc()
+                ollama_reply = ""
+        except Exception as e:
+            print(f"[chloe] Ollama stream errored: {e}", flush=True)
+            traceback.print_exc()
+            # Keep any partial text already streamed; fall back only if empty.
+        if not ollama_reply and _sync_groq:
+            # Ollama daemon hiccup — fall back to Groq fast Llama (cloud)
+            print("[chloe] Ollama empty — falling back to Groq fast Llama",
+                  flush=True)
+            await _ws_send(websocket, {
+                "type": "tool_start",
+                "text": "Ollama unreachable — using Groq fast path…",
+            })
+            use_ollama = False  # let the Groq stream block below run
+        else:
+            if not ollama_started:
+                # Tool-loop fallback produced text without streaming — emit
+                # it now so the HUD still gets a start/delta/done cycle.
+                await _ws_send(websocket, {"type": "start"})
+                await _ws_send(websocket, {"type": "delta",
+                                           "text": ollama_reply})
+            await _ws_send(websocket, {"type": "done"})

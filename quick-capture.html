@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drop into Chloe's brain</title>
+<style>
+:root {
+  --bg-0: #03040a;
+  --bg-1: #08081a;
+  --ink: #cfeef8;
+  --ink-dim: #6b8c9c;
+  --cyan: #58e6ff;
+  --cyan-bright: #b8f5ff;
+  --warn: #ffb35a;
+  --err: #ff9a9a;
+  --rule: rgba(88, 230, 255, 0.18);
+  --rule-strong: rgba(88, 230, 255, 0.42);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%;
+  background: radial-gradient(900px 600px at 50% 30%, rgba(20, 80, 140, 0.32), transparent 65%), var(--bg-0);
+  color: var(--ink);
+  font-family: "Share Tech Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 24px; min-height: 100vh;
+  display: flex; align-items: flex-start; justify-content: center; }
+.card {
+  width: 100%; max-width: 480px;
+  background: linear-gradient(180deg, rgba(8,14,28,.96), rgba(4,8,18,.96));
+  border: 1px solid var(--rule-strong);
+  box-shadow: 0 0 60px rgba(88,230,255,.18), 0 0 120px rgba(20,40,80,.4);
+  padding: 22px 24px 26px; border-radius: 4px;
+}
+h1 { margin: 0 0 4px; font-size: 16px; letter-spacing: 0.22em;
+  text-transform: uppercase; color: var(--cyan); }
+.sub { margin: 0 0 16px; font-size: 11px; color: var(--ink-dim);
+  letter-spacing: 0.08em; }
+label { display: block; margin-bottom: 4px; font-size: 10px;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-dim); }
+input[type=text], input[type=url], textarea {
+  width: 100%; background: rgba(2,4,12,.6); border: 1px solid var(--rule);
+  color: var(--ink); padding: 10px 12px; margin-bottom: 14px;
+  font: 12px/1.5 inherit; outline: none; border-radius: 2px;
+  caret-color: var(--cyan);
+}
+input:focus, textarea:focus { border-color: var(--cyan); }
+textarea { min-height: 110px; resize: vertical; }
+.row { display: flex; gap: 10px; align-items: center; }
+.row > * { flex: 1; }
+.submit {
+  background: var(--cyan); color: #02040a; border: 0; padding: 12px 18px;
+  font: 11px/1 inherit; letter-spacing: 0.18em; text-transform: uppercase;
+  cursor: pointer; border-radius: 2px; flex: 1;
+}
+.submit:hover { background: var(--cyan-bright); }
+.submit[disabled] { opacity: 0.5; cursor: wait; }
+.secondary {
+  background: transparent; color: var(--ink-dim);
+  border: 1px solid var(--rule); padding: 12px 14px;
+  font: 11px/1 inherit; letter-spacing: 0.14em; text-transform: uppercase;
+  cursor: pointer; border-radius: 2px;
+}
+.secondary:hover { color: var(--ink); border-color: var(--rule-strong); }
+.status {
+  margin-top: 14px; padding: 10px 12px; font-size: 11px;
+  border: 1px solid var(--rule); border-radius: 2px;
+  background: rgba(2,4,12,.5); color: var(--ink-dim); display: none;
+  white-space: pre-wrap; max-height: 280px; overflow: auto;
+  letter-spacing: 0.04em;
+}
+.status.show { display: block; }
+.status.ok { border-color: rgba(88,230,255,.5); color: var(--cyan); }
+.status.err { border-color: rgba(255,120,120,.5); color: var(--err); }
+.status.work { border-color: rgba(255,179,90,.5); color: var(--warn); }
+.similar { margin-top: 12px; font-size: 11px; color: var(--ink-dim); }
+.similar b { color: var(--cyan); font-weight: 500; }
+.similar ul { margin: 6px 0 0; padding-left: 18px; }
+.similar li { margin: 2px 0; }
+.kbd {
+  display: inline-block; padding: 1px 5px; font-size: 10px;
+  border: 1px solid var(--rule); border-radius: 2px; color: var(--ink-dim);
+}
+.foot { margin-top: 14px; font-size: 10px; color: var(--ink-dim);
+  letter-spacing: 0.04em; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Drop into Chloe's brain</h1>
+  <p class="sub">Quick capture &middot; sends to <code>/api/brain/ingest</code></p>
+
+  <label for="u">URL</label>
+  <input id="u" type="url" placeholder="https://..." autocomplete="off">
+
+  <label for="t">Title (optional)</label>
+  <input id="t" type="text" placeholder="defaults to the page &lt;title&gt; or URL" autocomplete="off">
+
+  <label for="n">Notes (optional, ingested as text body instead of fetching)</label>
+  <textarea id="n" placeholder="Paste selection / notes here. If filled, the URL is recorded as provenance and Chloe ingests THIS text directly (faster, more accurate than fetching)."></textarea>
+
+  <div class="row">
+    <button id="submit" class="submit">Ingest</button>
+    <button id="close" class="secondary" type="button" title="Close window">Close</button>
+  </div>
+
+  <div class="status" id="status"></div>
+  <div class="similar" id="similar"></div>
+  <div class="foot">Tip: select text on the page before clicking the bookmarklet &mdash; the selection lands in Notes automatically. <span class="kbd">&#8984;Enter</span> / <span class="kbd">Ctrl+Enter</span> to submit.</div>
+</div>
+
+<script>
+(function(){
+  const q = new URLSearchParams(location.search);
+  const $ = (id) => document.getElementById(id);
+  $('u').value = q.get('u') || q.get('url') || '';
+  $('t').value = q.get('t') || q.get('title') || '';
+  $('n').value = q.get('n') || q.get('notes') || '';
+  if ($('u').value && !$('t').value) $('t').focus();
+  else if (!$('u').value) $('u').focus();
+  else $('n').focus();
+
+  const status = $('status');
+  const similar = $('similar');
+  function setStatus(kind, text) {
+    if (!text) { status.className = 'status'; status.textContent = ''; return; }
+    status.className = 'status show ' + kind;
+    status.textContent = text;
+  }
+  function setSimilar(items) {
+    if (!items || !items.length) { similar.innerHTML = ''; return; }
+    const lis = items.map(s => '<li>' + (s.title || s.id || '?') +
+      ' <span style="opacity:.6">&middot; ' + Number(s.score||0).toFixed(2) + '</span></li>').join('');
+    similar.innerHTML = '<b>Similar pages already in the brain:</b><ul>' + lis + '</ul>';
+  }
+
+  async function submit() {
+    const url = $('u').value.trim();
+    const title = $('t').value.trim();
+    const notes = $('n').value.trim();
+    if (!url && !notes) { setStatus('err', 'enter a URL, notes, or both.'); return; }
+    setStatus('work', 'ingesting...');
+    setSimilar([]);
+    $('submit').disabled = true;
+    try {
+      let body;
+      if (notes) {
+        // Notes mode: ingest the text directly, record URL as provenance.
+        body = { text: notes };
+        if (title) body.title = title;
+        if (url) body.url = url;
+      } else {
+        // URL mode: backend fetches.
+        body = { url };
+        if (title) body.title = title;
+      }
+      const r = await fetch('/api/brain/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      let data; try { data = await r.json(); } catch (_) { data = { error: 'non-json (status ' + r.status + ')' }; }
+      if (!r.ok) {
+        setStatus('err', 'Ingest failed (' + r.status + '): ' + (data.error || JSON.stringify(data)));
+        return;
+      }
+      const slug = data.slug || title || '(unknown)';
+      const ents = (data.entities_touched || []).length;
+      const cons = (data.concepts_touched || []).length;
+      const msg = [
+        '✓ ingested as: ' + slug,
+        'entities touched: ' + ents,
+        'concepts touched: ' + cons,
+        data.tldr ? ('\nTL;DR: ' + data.tldr) : '',
+        '\nraw: ' + (data.raw_path || '?'),
+      ].filter(Boolean).join('\n');
+      setStatus('ok', msg);
+      setSimilar(data.similar || []);
+      // Auto-close after 1.5s if launched in a popup (opener present).
+      if (window.opener) setTimeout(() => window.close(), 1500);
+    } catch (err) {
+      setStatus('err', 'network error: ' + (err.message || err));
+    } finally {
+      $('submit').disabled = false;
+    }
+  }
+
+  $('submit').addEventListener('click', submit);
+  $('close').addEventListener('click', () => {
+    if (window.opener) window.close();
+    else history.back();
+  });
+  // Submit on Cmd/Ctrl+Enter from any input.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); }
+    if (e.key === 'Escape') { e.preventDefault(); $('close').click(); }
+  });
+})();
+</script>
+</body>
+</html>

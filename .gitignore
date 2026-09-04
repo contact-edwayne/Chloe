@@ -13,10 +13,14 @@ C:/Chloe/secrets/
 chloe_memory.db
 chloe_memory.db-journal
 chloe_memory.db-wal
+chloe_memory.db-shm
+chloe_social.db
+finance_watchlist.md
 breez_data/
 wallet_data/
 chloe.log
 *.log
+logs/
 
 # ─── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
@@ -51,6 +55,7 @@ sounds/
 # ─── Editor / OS noise ───────────────────────────────────────────────────────
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -100,6 +105,12 @@ MOBILE_SETUP.md
 COMMANDS.md
 WALLET_PLAN.md
 WALLET_SETUP.md
+# NSFW/permissive-mode toggle — personal-mode content, not for public consumption.
+chloe_nsfw.md
+nsfw_mode.py
+apply_nsfw_patch.py
+# Internal scratch/working notes, not for public consumption.
+raw_pending_chloe_capabilities.md
 # Empty junk file at repo root.
 python
 # Old face-asset directory; review and add back selectively if needed.

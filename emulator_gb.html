@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<!--
+  Chloe mobile arcade — WasmBoy edition (GB / GBC only).
+  Built 2026-06-06 to sidestep EmulatorJS's iOS WebKit force-close: WasmBoy
+  renders to a Canvas2D context (no WebGL texture churn), which is the thing
+  that was killing the web-content process ~30s into play on iPhone.
+  This is a STANDALONE test harness — the EmulatorJS emulator_mobile.html is
+  left untouched as the desktop/fallback path. Reachable at
+  /brain-api/emulator-gb.html. ROMs + savestate endpoints are shared with the
+  existing arcade (api/roms, roms/<file>, api/tmprom).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Chloe // GB</title>
+<style>
+  :root{ --cyan:#39f6ff; --cyan-2:#7fe7ef; --bg:#05080c; --panel:#0b1118; --edge:#16323b; --pink:#ff5ca8; --red:#ff5b6e; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; -webkit-user-select:none; user-select:none; touch-action:none; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--cyan-2);
+    font-family:"Share Tech Mono",ui-monospace,monospace; overflow:hidden; }
+  #app{ position:fixed; inset:0; display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+  header{ display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--edge); }
+  header .dot{ width:9px; height:9px; border-radius:50%; background:#444; box-shadow:0 0 6px #000; }
+  header .dot.on{ background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
+  header .title{ font-size:13px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase; }
+  header .sys{ margin-left:auto; font-size:11px; color:var(--cyan-2); opacity:.8; }
+
+  /* screen */
+  #screenWrap{ flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+    background:#000; padding:8px 6px; }
+  canvas#screen{ width:100%; max-width:min(100vw,calc((100vh - 360px) * 1.1111));
+    aspect-ratio:160/144; image-rendering:pixelated; image-rendering:crisp-edges;
+    background:#0c1216; border:1px solid var(--edge); border-radius:6px; display:block; }
+
+  .says{ min-height:18px; text-align:center; font-size:12px; padding:4px 10px; color:var(--cyan-2); opacity:.85; }
+
+  /* launch menu */
+  #menu{ flex:1; overflow:auto; padding:10px 12px; }
+  #menu h2{ font-size:12px; letter-spacing:2px; color:var(--cyan); text-transform:uppercase; margin:4px 0 8px; }
+  .rom{ display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:11px 12px; margin-bottom:7px; background:var(--panel); border:1px solid var(--edge);
+    border-radius:7px; font-size:14px; color:var(--cyan-2); }
+  .rom .sy{ font-size:10px; color:var(--cyan); opacity:.75; }
+  .rom:active{ border-color:var(--cyan); }
+  .empty{ opacity:.6; font-size:12px; text-align:center; padding:18px 8px; line-height:1.5; }
+  .menu-actions{ display:flex; gap:8px; margin-top:8px; }
+  .menu-actions button{ flex:1; }
+
+  button{ font-family:inherit; font-size:12px; letter-spacing:1px; color:var(--cyan);
+    background:var(--panel); border:1px solid var(--edge); border-radius:7px; padding:10px;
+    text-transform:uppercase; }
+  button:active{ border-color:var(--cyan); }
+  button[disabled]{ opacity:.4; }
+
+  /* controls */
+  #controls{ display:none; flex:1; flex-direction:column; justify-content:flex-end; padding:6px 12px 12px; }
+  body.playing #controls{ display:flex; }
+  body.playing #menu{ display:none; }
+
+  .savebar{ display:flex; gap:8px; margin-bottom:14px; }
+  .savebar button{ flex:1; padding:8px; font-size:11px; }
+
+  .pads{ display:flex; align-items:center; justify-content:space-between; }
+  .dpad{ position:relative; width:150px; height:150px; }
+  .dpad .k{ position:absolute; background:#10212a; border:1px solid var(--edge);
+    display:flex; align-items:center; justify-content:center; color:var(--cyan); font-size:18px; }
+  .dpad .k:active,.dpad .k.active{ background:#15333c; border-color:var(--cyan); }
+  .dpad .up{ left:50px; top:0; width:50px; height:52px; border-radius:8px 8px 0 0; }
+  .dpad .down{ left:50px; bottom:0; width:50px; height:52px; border-radius:0 0 8px 8px; }
+  .dpad .left{ left:0; top:50px; width:52px; height:50px; border-radius:8px 0 0 8px; }
+  .dpad .right{ right:0; top:50px; width:52px; height:50px; border-radius:0 8px 8px 0; }
+  .dpad .mid{ left:50px; top:50px; width:50px; height:50px; background:#10212a; border:1px solid var(--edge); }
+
+  .ab{ display:flex; gap:20px; align-items:center; }
+  .ab .btn{ width:74px; height:74px; border-radius:50%; background:#1a0f18; border:2px solid var(--pink);
+    color:var(--pink); font-size:26px; display:flex; align-items:center; justify-content:center; }
+  .ab .btn:active,.ab .btn.active{ background:#2a1424; box-shadow:0 0 14px rgba(255,92,168,.5); }
+  .ab .btn.b{ margin-top:34px; }
+
+  .startsel{ display:flex; gap:18px; justify-content:center; margin-top:16px; }
+  .startsel button{ padding:8px 18px; font-size:11px; border-radius:14px; }
+
+  #build{ position:fixed; bottom:2px; right:6px; font-size:10px; color:var(--cyan); opacity:.5; pointer-events:none; z-index:50; }
+  #boot{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--cyan); font-size:13px; letter-spacing:1px; z-index:40; }
+  #boot.hide{ display:none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <span class="dot" id="dot"></span>
+    <span class="title">chloe // gb</span>
+    <span class="sys" id="sysTag"></span>
+  </header>
+
+  <div id="screenWrap"><canvas id="screen" width="160" height="144"></canvas></div>
+  <div class="says" id="says">pick a game</div>
+
+  <div id="menu">
+    <h2>library</h2>
+    <div id="romList"><div class="empty">loading…</div></div>
+    <div class="menu-actions">
+      <button id="btnRefresh">refresh</button>
+      <button id="btnLoad">load file…</button>
+    </div>
+    <input type="file" id="fileInput" accept=".gb,.gbc,.zip" style="display:none">
+  </div>
+
+  <div id="controls">
+    <div class="savebar">
+      <button id="btnSave">save state</button>
+      <button id="btnLoadState">load state</button>
+      <button id="btnPause">pause</button>
+      <button id="btnExit">exit</button>
+    </div>
+    <div class="pads">
+      <div class="dpad">
+        <div class="k up"    data-btn="up">▲</div>
+        <div class="k down"  data-btn="down">▼</div>
+        <div class="k left"  data-btn="left">◀</div>
+        <div class="k right" data-btn="right">▶</div>
+        <div class="mid"></div>
+      </div>
+      <div class="ab">
+        <div class="btn b" data-btn="b">B</div>
+        <div class="btn a" data-btn="a">A</div>
+      </div>
+    </div>
+    <div class="startsel">
+      <button data-btn="select">select</button>
+      <button data-btn="start">start</button>
+    </div>
+  </div>
+</div>
+
+<div id="build">build GB-WasmBoy v2 · keys</div>
+<div id="boot">loading emulator core…</div>
+
+<script src="https://cdn.jsdelivr.net/npm/wasmboy@0.7.1/dist/wasmboy.wasm.umd.js"></script>
+<script>
+(function(){
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const says = t => { $('says').textContent = t; };
+  const setDot = on => $('dot').classList.toggle('on', !!on);
+
+  // ── resolve the WasmBoy singleton from whatever shape the UMD global took ──
+  function resolveWB(){
+    const g = window.WasmBoy;
+    if(!g) return null;
+    if(typeof g.config === 'function' && typeof g.loadROM === 'function') return g;
+    if(g.WasmBoy && typeof g.WasmBoy.config === 'function') return g.WasmBoy;
+    if(g.default && typeof g.default.config === 'function') return g.default;
+    return null;
+  }
+  const WB = resolveWB();
+  if(!WB){
+    $('boot').textContent = 'failed to load emulator core (WasmBoy global not found)';
+    return;
+  }
+
+  let configured = false, curGame = '', audioUnlocked = false;
+
+  const OPTIONS = {
+    headless:false,
+    useGbcWhenOptional:true,   // Pokémon G/S/C run in GBC color
+    isAudioEnabled:true,
+    frameSkip:0,
+    audioBatchProcessing:true,
+    timersBatchProcessing:false,
+    audioAccumulateSamples:true,
+    graphicsBatchProcessing:false,
+    graphicsDisableScanlineRendering:false,
+    tileRendering:true,
+    tileCaching:true,
+    gameboyFPSCap:60,
+    updateGraphicsCallback:false,
+    updateAudioCallback:false,
+    saveStateCallback:false
+  };
+
+  async function ensureConfigured(){
+    if(configured) return;
+    await WB.config(OPTIONS, $('screen'));
+    configured = true;
+  }
+
+  // iOS won't start audio without a user gesture — unlock on first touch.
+  function unlockAudio(){
+    if(audioUnlocked) return;
+    audioUnlocked = true;
+    try{ WB.resumeAudioContext && WB.resumeAudioContext(); }catch(_){}
+  }
+  document.addEventListener('touchend', unlockAudio, {once:false, passive:true});
+  document.addEventListener('click', unlockAudio, {once:false});
+
+  // ── input: drive WasmBoy's built-in joypad via synthetic key events ──
+  // WasmBoy reads keyboard through responsive-gamepad, which matches on
+  // KeyboardEvent.code. The default joypad already works for a real keyboard,
+  // so rather than fight setJoypadState we keep it ENABLED and synthesize the
+  // keys our on-screen buttons map to. Multiple candidate codes per button
+  // (arrows + WASD, X/Z, etc.) — unmapped ones are harmlessly ignored.
+  const KEY_CODES = {
+    up:['ArrowUp','KeyW'], down:['ArrowDown','KeyS'],
+    left:['ArrowLeft','KeyA'], right:['ArrowRight','KeyD'],
+    a:['KeyX','Semicolon'], b:['KeyZ','KeyM'],
+    start:['Enter'], select:['ShiftRight','ShiftLeft']
+  };
+  const KEY_INFO = {
+    ArrowUp:{k:'ArrowUp',c:38}, ArrowDown:{k:'ArrowDown',c:40},
+    ArrowLeft:{k:'ArrowLeft',c:37}, ArrowRight:{k:'ArrowRight',c:39},
+    KeyW:{k:'w',c:87}, KeyA:{k:'a',c:65}, KeyS:{k:'s',c:83}, KeyD:{k:'d',c:68},
+    KeyX:{k:'x',c:88}, KeyZ:{k:'z',c:90}, Semicolon:{k:';',c:186}, KeyM:{k:'m',c:77},
+    Enter:{k:'Enter',c:13}, ShiftRight:{k:'Shift',c:16}, ShiftLeft:{k:'Shift',c:16}
+  };
+  function dispatchKey(type, code){
+    const i = KEY_INFO[code] || {k:code, c:0};
+    const opts = {code, key:i.k, keyCode:i.c, which:i.c, bubbles:true, cancelable:true};
+    try{ window.dispatchEvent(new KeyboardEvent(type, opts)); }catch(_){}
+    try{ document.dispatchEvent(new KeyboardEvent(type, opts)); }catch(_){}
+  }
+  const heldButtons = {};
+  function setBtn(name, on){
+    const codes = KEY_CODES[name]; if(!codes) return;
+    if(!!heldButtons[name] === on) return;
+    heldButtons[name] = on;
+    codes.forEach(c => dispatchKey(on ? 'keydown' : 'keyup', c));
+    const anyHeld = Object.keys(heldButtons).some(k => heldButtons[k]);
+    if(on) says('▣ ' + name); else if(!anyHeld) says(curGame);
+  }
+  function bindButton(el){
+    const name = el.dataset.btn; if(!name) return;
+    const down = e => { e.preventDefault(); el.classList.add('active'); unlockAudio(); setBtn(name, true); };
+    const up   = e => { if(e) e.preventDefault(); el.classList.remove('active'); setBtn(name, false); };
+    el.addEventListener('touchstart', down, {passive:false});
+    el.addEventListener('touchend',   up,   {passive:false});
+    el.addEventListener('touchcancel',up,   {passive:false});
+    el.addEventListener('mousedown',  down);
+    el.addEventListener('mouseup',    up);
+    el.addEventListener('mouseleave', up);
+  }
+  document.querySelectorAll('[data-btn]').forEach(bindButton);
+
+  // ── ROM loading ──
+  async function loadAndPlay(romBytes, name){
+    try{
+      $('boot').classList.remove('hide'); $('boot').textContent = 'starting ' + (name||'game') + '…';
+      await ensureConfigured();
+      await WB.loadROM(romBytes);
+      await WB.play();
+      curGame = name || 'game';
+      document.body.classList.add('playing');
+      $('sysTag').textContent = 'GB/GBC';
+      setDot(true); says(curGame);
+      $('boot').classList.add('hide');
+    }catch(e){
+      console.error('load/play failed', e);
+      $('boot').textContent = 'could not start that game (' + (e && e.message || e) + ')';
+    }
+  }
+
+  async function loadLibraryRom(file, name){
+    try{
+      says('loading ' + (name||file) + '…');
+      const r = await fetch('roms/' + encodeURIComponent(file), {cache:'no-store'});
+      if(!r.ok) throw new Error('rom fetch ' + r.status);
+      const buf = await r.arrayBuffer();
+      await loadAndPlay(new Uint8Array(buf), name || file.replace(/\.[^.]+$/,''));
+    }catch(e){ console.error(e); says('failed to load that rom'); }
+  }
+
+  // ── library list (GB/GBC only) ──
+  async function loadLibrary(){
+    const list = $('romList');
+    list.innerHTML = '<div class="empty">loading…</div>';
+    let roms = [];
+    try{
+      const r = await fetch('api/roms', {cache:'no-store'});
+      const j = await r.json();
+      roms = (j.roms || []).filter(x => x.system === 'gb');
+    }catch(e){ roms = []; }
+    if(!roms.length){
+      list.innerHTML = '<div class="empty">no GB/GBC roms found.<br>drop .gb/.gbc files in C:\\Chloe\\roms,<br>or use “load file…”.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for(const rom of roms){
+      const el = document.createElement('div');
+      el.className = 'rom';
+      const nm = document.createElement('span'); nm.textContent = rom.name.replace(/\.[^.]+$/,'');
+      const sy = document.createElement('span'); sy.className = 'sy'; sy.textContent = 'GB/GBC';
+      el.appendChild(nm); el.appendChild(sy);
+      el.addEventListener('click', () => loadLibraryRom(rom.file, rom.name.replace(/\.[^.]+$/,'')));
+      list.appendChild(el);
+    }
+  }
+
+  $('btnRefresh').addEventListener('click', loadLibrary);
+  $('btnLoad').addEventListener('click', () => $('fileInput').click());
+  $('fileInput').addEventListener('change', async e => {
+    const f = e.target.files[0]; if(!f) return;
+    const ext = (f.name.split('.').pop()||'').toLowerCase();
+    if(!['gb','gbc','zip'].includes(ext)){ says("that's not a GB/GBC file"); return; }
+    try{
+      const buf = await f.arrayBuffer();
+      await loadAndPlay(new Uint8Array(buf), f.name.replace(/\.[^.]+$/,''));
+    }catch(err){ console.error(err); says('could not read that file'); }
+  });
+
+  // ── save state / load state (WasmBoy's own IndexedDB-backed states) ──
+  // Pokémon's in-game SAVE writes cartridge RAM, which WasmBoy persists
+  // automatically — these buttons are for anywhere-snapshots on top of that.
+  let paused = false;
+  $('btnSave').addEventListener('click', async () => {
+    try{ await WB.saveState(); await WB.play(); says('state saved'); }
+    catch(e){ console.error(e); says('save failed'); }
+  });
+  $('btnLoadState').addEventListener('click', async () => {
+    try{
+      const states = await WB.getSaveStates();
+      if(!states || !states.length){ says('no saved state'); return; }
+      await WB.loadState(states[states.length - 1]);
+      await WB.play();
+      says('state loaded');
+    }catch(e){ console.error(e); says('load failed'); }
+  });
+  $('btnPause').addEventListener('click', async () => {
+    try{
+      if(paused){ await WB.play(); paused=false; $('btnPause').textContent='pause'; setDot(true); says(curGame); }
+      else{ await WB.pause(); paused=true; $('btnPause').textContent='resume'; setDot(false); says('paused'); }
+    }catch(_){}
+  });
+  $('btnExit').addEventListener('click', async () => {
+    try{ await WB.pause(); }catch(_){}
+    paused=false; $('btnPause').textContent='pause';
+    document.body.classList.remove('playing');
+    setDot(false); says('pick a game'); loadLibrary();
+  });
+
+  // ── boot ──
+  $('boot').classList.add('hide');
+  loadLibrary();
+
+  // Auto-start from URL params (?g=<file>&sys=gb), matching the existing arcade.
+  (function autoStart(){
+    const p = new URLSearchParams(location.search);
+    const g = p.get('g'), sys = p.get('sys');
+    if(g && (sys === 'gb' || !sys)) loadLibraryRom(g, g.replace(/\.[^.]+$/,''));
+  })();
+})();
+</script>
+</body>
+</html>

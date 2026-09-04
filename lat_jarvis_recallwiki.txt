@@ -1,0 +1,32 @@
+    recall_block = ""
+    wiki_block = ""
+    user_text_for_recall = _last_user_text(messages)
+    if user_text_for_recall:
+        # Recall (conversation history) and wiki auto-inject each need an
+        # embedding round-trip. Run them in worker threads via gather so the
+        # two lookups overlap AND don't block the event loop while they wait.
+        async def _recall_lookup():
+            if not looks_like_recall_query(user_text_for_recall):
+                return ""
+            try:
+                hits = await asyncio.to_thread(
+                    _memory.search_turns, user_text_for_recall, 5)
+                if hits:
+                    print(f"[memory] chat recall: {len(hits)} hit(s)",
+                          flush=True)
+                return format_recall_block(hits)
+            except Exception as e:
+                print(f"[memory] chat recall failed: {e}", flush=True)
+                return ""
+
+        async def _wiki_lookup():
+            try:
+                from wiki_embedding import wiki_context_for_query
+                return await asyncio.to_thread(
+                    wiki_context_for_query, user_text_for_recall, 2)
+            except Exception as e:
+                print(f"[wiki] chat inject failed: {e}", flush=True)
+                return ""
+
+        recall_block, wiki_block = await asyncio.gather(
+            _recall_lookup(), _wiki_lookup())

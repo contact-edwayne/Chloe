@@ -75,9 +75,12 @@
     height: 100dvh;
     min-height: 100%;
     overflow: hidden;
-    /* Honor iOS safe areas (notch / home indicator) */
-    padding: env(safe-area-inset-top) env(safe-area-inset-right)
-             env(safe-area-inset-bottom) env(safe-area-inset-left);
+    /* Honor iOS safe areas (notch / home indicator). Bottom inset is handled
+       on .controls instead (with a floor): some iOS standalone contexts report
+       env(safe-area-inset-bottom) as 0, which let the home indicator clip the
+       PTT hint. Keeping it only on .controls avoids double-spacing. */
+    padding: max(env(safe-area-inset-top) - 16px, 8px) env(safe-area-inset-right)
+             0 env(safe-area-inset-left);
   }
 
   /* Subtle backdrop matching the desktop HUD aesthetic */
@@ -103,15 +106,21 @@
   /* ── HEADER ─────────────────────────────────────────────────────────── */
   header {
     flex: 0 0 auto;
-    display: flex; align-items: center; gap: 10px;
-    padding: 14px 16px 10px;
+    display: flex; align-items: center; gap: 6px;
+    /* Tight top padding so the CHLOE/wallet/connected row sits just under the
+       status-bar safe area rather than floating low. */
+    padding: 4px 16px 10px;
     border-bottom: 1px solid var(--border);
   }
   .logo {
+    /* Shrinks + truncates ("// MOBILE" goes first) so the control cluster
+       (sessions / wallet / connection) is always fully visible. */
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
     font-family: 'Orbitron', monospace;
     font-weight: 700;
-    font-size: 18px;
-    letter-spacing: 4px;
+    font-size: 16px;
+    letter-spacing: 2px;
     color: var(--cyan);
     text-shadow: 0 0 8px var(--cyan-d);
   }
@@ -124,10 +133,11 @@
     margin-left: 6px;
   }
   .conn {
-    margin-left: auto;
+    flex: 0 0 auto;
     display: flex; align-items: center; gap: 6px;
     font-size: 10px; letter-spacing: 1px;
     opacity: 0.85;
+    white-space: nowrap;
   }
   .conn-dot {
     width: 8px; height: 8px; border-radius: 50%;
@@ -145,20 +155,23 @@
   .orb-wrap {
     flex: 0 0 auto;
     display: flex; flex-direction: column; align-items: center;
-    padding: 6px 0 2px;
+    /* Top padding clears the outermost ring (ring-3 sits at inset -8px) from
+       the header divider above. */
+    padding: 16px 0 2px;
   }
   /* The frame holds room for the outer rings without affecting the
      canvas itself (canvas size is driven by .scene only). */
   .orb-frame {
     position: relative;
-    width: 200px; height: 200px;
+    width: 168px; height: 168px;
     display: flex; align-items: center; justify-content: center;
+    cursor: pointer;  /* tap the orb to open recent chats */
   }
   /* Inner disc that crops the WebGL canvas to a circle and carries the
      cyan border + glow. Sized smaller than the frame so the rings sit
      around it. */
   .scene {
-    width: 168px; height: 168px;
+    width: 140px; height: 140px;
     position: relative;
     border-radius: 50%;
     overflow: hidden;
@@ -183,6 +196,9 @@
     border-radius: 50%;
     pointer-events: none;
     box-sizing: border-box;
+    /* Toned down so the cockpit rings frame the orb without competing with
+       its detail. */
+    opacity: 0.5;
   }
   /* Ring 1: thin dashed circle just outside the disc (radar sweep). */
   .ring-1 {
@@ -282,9 +298,51 @@
     0%, 100% { transform: scale(1);   opacity: 0.7; }
     50%      { transform: scale(1.6); opacity: 0.2; }
   }
+  /* CSS galaxy orb shown while the WebGL orb's context is released for the
+     arcade (iOS WebKit can't host EmulatorJS + the Three.js orb at once). Pure
+     CSS/compositor — no GPU WebGL context. The surrounding rings/sweep/glow
+     keep animating, so the frame still reads as "alive" during play. */
+  .orb-css {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    display: none;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 45%,
+      rgba(150, 235, 255, 0.95) 0%,
+      rgba(40, 150, 230, 0.55) 28%,
+      rgba(10, 45, 95, 0.60) 55%,
+      rgba(2, 6, 16, 0.92) 80%);
+  }
+  .orb-css::before {
+    content: ''; position: absolute; inset: -25%;
+    border-radius: 50%;
+    background: conic-gradient(from 0deg,
+      rgba(0, 247, 255, 0.00) 0deg,   rgba(0, 247, 255, 0.35) 60deg,
+      rgba(120, 180, 255, 0.05) 130deg, rgba(0, 247, 255, 0.30) 210deg,
+      rgba(0, 247, 255, 0.00) 300deg, rgba(0, 247, 255, 0.00) 360deg);
+    mix-blend-mode: screen;
+    animation: orb-css-spin 9s linear infinite;
+  }
+  .orb-css::after {
+    content: ''; position: absolute; inset: 18%;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      rgba(190, 245, 255, 0.90) 0%,
+      rgba(60, 170, 240, 0.25) 45%,
+      transparent 70%);
+    animation: orb-css-pulse 3.2s ease-in-out infinite;
+  }
+  .scene.orb-css-on .orb-css { display: block; }
+  .scene.orb-css-on canvas   { display: none; }
+  @keyframes orb-css-spin  { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes orb-css-pulse {
+    0%, 100% { transform: scale(0.92); opacity: 0.75; }
+    50%      { transform: scale(1.06); opacity: 1.00; }
+  }
 
   .state-label {
-    margin-top: 6px;
+    /* Sits clear of ring-3 (inset -8px below the orb frame). */
+    margin-top: 16px;
     font-size: 11px; letter-spacing: 3px;
     text-transform: uppercase;
     opacity: 0.7;
@@ -301,8 +359,11 @@
     border-top: 1px solid var(--border);
     margin-top: 6px;
     /* Minimum visible chat area so the most recent reply isn't clipped
-       behind the controls when only one or two messages are visible. */
-    min-height: 140px;
+       behind the controls when only one or two messages are visible.
+       Kept modest so the fixed layout (orb + controls + this min) stays under
+       100dvh on shorter iPhones — otherwise the surplus pushes the PTT button
+       and hint below the fold (body is overflow:hidden). */
+    min-height: 88px;
   }
   .msg {
     display: flex; gap: 8px;
@@ -336,15 +397,46 @@
   .msg.chloe .msg-bubble { color: #d8f6ff; }
   .msg-bubble.error      { color: var(--red); border-color: #ff335555; }
 
+  /* Citation block under a Chloe reply (emitted by /search + Brave fallback). */
+  .msg-sources {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed #00f7ff33;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .msg-sources a {
+    color: #aef0ff;
+    text-decoration: none;
+    opacity: 0.85;
+    transition: opacity 0.15s ease-out;
+  }
+  .msg-sources a:hover {
+    opacity: 1;
+    text-decoration: underline;
+  }
+  .msg-sources .src-n {
+    color: var(--cyan);
+    font-weight: 700;
+  }
+  .msg-sources .src-domain {
+    color: #00f7ff77;
+    font-size: 10px;
+  }
+
   /* ── CONTROLS ───────────────────────────────────────────────────────── */
-  /* Sits at the bottom; padding tuned to keep PTT visible above the home
-     indicator on iPhone. Tighter than before so the button isn't pushed
-     past the bottom safe area. The body already applies
-     env(safe-area-inset-bottom) so we don't need to double-up here. */
+  /* Sits at the bottom. The bottom padding carries the home-indicator
+     clearance with a floor — max(inset, 30px) — because some iOS standalone
+     contexts report env(safe-area-inset-bottom) as 0, which clipped the PTT
+     hint. Body no longer applies inset-bottom, so this is the single source of
+     bottom clearance (no double-up, nothing overlaps). */
   .controls {
     flex: 0 0 auto;
     border-top: 1px solid var(--border);
-    padding: 10px 14px 12px;
+    padding: 8px 14px max(env(safe-area-inset-bottom), 48px);
     display: flex; flex-direction: column; gap: 10px;
     background: linear-gradient(180deg, transparent 0%, #00050c 50%);
   }
@@ -375,7 +467,7 @@
 
   .ptt-btn {
     width: 100%;
-    height: 72px;
+    height: 64px;
     background: linear-gradient(180deg, #001a26 0%, #000d14 100%);
     border: 2px solid var(--border2);
     border-radius: 12px;
@@ -403,6 +495,26 @@
     opacity: 0.5;
     letter-spacing: 1px;
   }
+  /* ── always-listen toggle (hands-free VAD) ── */
+  .ptt-row { display: flex; gap: 8px; align-items: stretch; }
+  .ptt-row .ptt-btn { flex: 1; width: auto; }
+  .auto-btn {
+    flex: 0 0 72px; height: 64px;
+    background: linear-gradient(180deg, #001a26 0%, #000d14 100%);
+    border: 2px solid var(--border2);
+    border-radius: 12px;
+    color: var(--cyan);
+    font-family: 'Orbitron', monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 2px;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
+  .auto-btn.on {
+    background: linear-gradient(180deg, #2b0033 0%, #14001a 100%);
+    color: #ff6ec7; border-color: #ff6ec7;
+    box-shadow: 0 0 16px rgba(255, 110, 199, .5);
+    animation: autopulse 2.2s ease-in-out infinite;
+  }
+  @keyframes autopulse { 50% { box-shadow: 0 0 5px rgba(255, 110, 199, .2); } }
 
   /* ── EMPTY STATE ────────────────────────────────────────────────────── */
   .empty {
@@ -597,13 +709,14 @@
 
   /* ── WALLET ─────────────────────────────────────────────────────────── */
   .wallet-btn {
+    flex: 0 0 auto;
     background: transparent;
     border: 1px solid var(--border2);
     color: var(--amber);
     font-family: 'Share Tech Mono', monospace;
     font-size: 11px;
     letter-spacing: 1.5px;
-    padding: 6px 12px;
+    padding: 6px 10px;
     border-radius: 4px;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
@@ -788,6 +901,111 @@
     max-height: 80px; overflow-y: auto;
     margin-top: 6px;
   }
+
+  /* Drop-in (feed Chloe images / links / text) */
+  .dropin-btn {
+    flex: 0 0 auto;
+    width: 42px;
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    font-family: 'Orbitron', monospace; font-weight: 700;
+    font-size: 20px; line-height: 1;
+    border-radius: 4px; cursor: pointer;
+  }
+  .dropin-btn:active { background: rgba(0, 247, 255, 0.1); }
+  .dropin-tabs {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    margin-bottom: 4px;
+  }
+  .dropin-tab {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--cyan); opacity: 0.55;
+    font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 1.5px; font-size: 11px;
+    padding: 9px 4px; border-radius: 3px; cursor: pointer;
+  }
+  .dropin-tab.active {
+    opacity: 1; background: rgba(0, 247, 255, 0.12); border-color: var(--cyan);
+  }
+  .dropin-pane { display: none; }
+  .dropin-pane.active { display: block; }
+  .dropin-file-label {
+    display: block; text-align: center;
+    border: 1px dashed var(--border2); border-radius: 4px;
+    padding: 20px 12px; color: var(--cyan); opacity: 0.85;
+    cursor: pointer; font-size: 12px; letter-spacing: 1.5px;
+    margin-top: 10px;
+  }
+  .dropin-file-label:active { background: rgba(0, 247, 255, 0.06); }
+  .dropin-file-label input { display: none; }
+  .dropin-preview { margin-top: 10px; text-align: center; }
+  .dropin-preview img {
+    max-width: 100%; max-height: 180px;
+    border-radius: 4px; border: 1px solid var(--border2);
+  }
+  .dropin-actions .modal-btn {
+    font-size: 11px; letter-spacing: 0.5px; padding: 11px 4px;
+  }
+
+  /* Recent chats (session history) */
+  .sessions-title { color: var(--cyan) !important; }
+  .session-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .session-row .s-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+  .session-row .s-main:active { opacity: 0.7; }
+  .s-del {
+    flex: 0 0 auto;
+    background: transparent; border: 1px solid rgba(255, 51, 85, 0.4);
+    color: var(--red); font-size: 16px; line-height: 1;
+    width: 30px; height: 30px; border-radius: 4px; cursor: pointer;
+  }
+  .s-del:active { background: rgba(255, 51, 85, 0.12); }
+  .sessions-newchat {
+    width: 100%; margin-bottom: 12px;
+    background: rgba(0, 247, 255, 0.1); border: 1px solid var(--border2);
+    color: var(--cyan); font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 2px; font-size: 13px; padding: 12px; border-radius: 4px;
+    cursor: pointer;
+  }
+  .sessions-newchat:active { background: rgba(0, 247, 255, 0.18); }
+  #session-delete-btn {
+    margin-top: 8px;
+    color: var(--red) !important; border-color: rgba(255, 51, 85, 0.4) !important;
+  }
+  #session-delete-btn:active { background: rgba(255, 51, 85, 0.08); }
+  .session-row .s-title {
+    color: var(--cyan); font-size: 14px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-row .s-meta { opacity: 0.55; font-size: 11px; margin-top: 3px; }
+  .session-view-title {
+    color: var(--cyan); font-size: 15px; letter-spacing: 1px;
+    margin: 6px 0 12px;
+  }
+  .s-turn { margin-bottom: 10px; font-size: 13px; line-height: 1.45; }
+  .s-turn .s-role {
+    display: block; opacity: 0.6; font-size: 10px; letter-spacing: 1.5px;
+    margin-bottom: 2px;
+  }
+  .s-turn.user .s-role { color: var(--green); }
+  .s-turn .s-body { color: #d8f6ff; white-space: pre-wrap; word-break: break-word; }
+  #session-resume-btn { margin-top: 14px; width: 100%; }
+
+  /* Orb hub menu (opens on orb tap — recent chats + wallet) */
+  .orb-menu-btn {
+    display: block; width: 100%; margin-bottom: 10px;
+    background: rgba(0, 247, 255, 0.08); border: 1px solid var(--border2);
+    color: var(--cyan); font-family: 'Orbitron', monospace; font-weight: 600;
+    letter-spacing: 2px; font-size: 14px; padding: 16px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .orb-menu-btn:active { background: rgba(0, 247, 255, 0.16); }
+  .orb-menu-btn.wallet { color: var(--amber); border-color: rgba(255, 170, 0, 0.4); }
+  .orb-menu-btn.wallet:active { background: rgba(255, 170, 0, 0.1); }
 </style>
 </head>
 <body>
@@ -808,9 +1026,41 @@
 <div class="app">
   <header>
     <div class="logo">CHLOE<span class="sub">// MOBILE</span></div>
-    <button class="wallet-btn" id="wallet-open-btn" title="Open wallet">₿ WALLET</button>
     <div class="conn" id="conn"><span class="conn-dot"></span><span id="conn-text">CONNECTING</span></div>
   </header>
+
+  <div class="games-row">
+    <button class="game-launch" id="m-chess-btn" type="button">CHESS</button>
+    <button class="game-launch" id="m-arcade-btn" type="button">ARCADE</button>
+  </div>
+
+  <style>
+    .games-row { display: flex; gap: 8px; padding: 6px 12px 0; }
+    .game-launch {
+      flex: 1; background: rgba(0,247,255,0.06); border: 1px solid rgba(0,247,255,0.35);
+      color: #8cf0ff; font-family: inherit; font-size: 12px; letter-spacing: 0.22em;
+      text-transform: uppercase; padding: 9px 0; border-radius: 4px; cursor: pointer;
+    }
+    .game-launch:active { background: rgba(0,247,255,0.16); }
+    .game-overlay { position: fixed; inset: 0; z-index: 9000; background: #06070b;
+      display: none; flex-direction: column; }
+    .game-overlay.on { display: flex; }
+    .game-close {
+      flex: 0 0 auto; background: #0d0f16; color: #8cf0ff; border: none;
+      border-bottom: 1px solid rgba(0,247,255,0.3); font-family: inherit;
+      font-size: 13px; letter-spacing: 0.2em; cursor: pointer;
+      padding: 12px; padding-top: max(12px, env(safe-area-inset-top));
+    }
+    .game-overlay iframe { flex: 1 1 auto; width: 100%; border: 0; background: #06070b; }
+  </style>
+  <div class="game-overlay" id="m-chess-overlay">
+    <button class="game-close" type="button" id="m-chess-close">CLOSE</button>
+    <iframe id="m-chess-iframe" title="Chloe Chess" allow="autoplay"></iframe>
+  </div>
+  <div class="game-overlay" id="m-arcade-overlay">
+    <button class="game-close" type="button" id="m-arcade-close">CLOSE</button>
+    <iframe id="m-arcade-iframe" title="Chloe Arcade" allow="autoplay; gamepad; fullscreen; screen-wake-lock"></iframe>
+  </div>
 
   <div class="orb-wrap">
     <div class="orb-frame">
@@ -819,6 +1069,7 @@
       <div class="ring ring-1"></div>
       <div class="sweep"></div>
       <div id="scene" class="scene">
+        <div id="orb-css" class="orb-css"></div>
         <div id="orb-loader" class="orb-loader"></div>
       </div>
     </div>
@@ -828,16 +1079,21 @@
   <div class="chatlog" id="chatlog">
     <div class="empty" id="empty">
       Hold the button below to talk.<br>
-      Or type a message and tap SEND.
+      Or type a message and tap SEND.<br>
+      Tap the orb for chats &amp; wallet.
     </div>
   </div>
 
   <div class="controls">
     <div class="text-row">
+      <button class="dropin-btn" id="dropin-open-btn" title="Drop in a picture, link, or text">+</button>
       <input id="chat-input" type="text" placeholder="Message Chloe…" autocomplete="off" autocapitalize="sentences">
       <button id="send-btn">SEND</button>
     </div>
-    <button class="ptt-btn" id="ptt-btn">HOLD TO TALK</button>
+    <div class="ptt-row">
+      <button class="ptt-btn" id="ptt-btn">HOLD TO TALK</button>
+      <button class="auto-btn" id="auto-btn" title="always listening (hands-free)">AUTO</button>
+    </div>
     <div class="ptt-hint" id="ptt-hint">tap once to grant mic access</div>
   </div>
 </div>
@@ -913,6 +1169,82 @@
     <div class="modal-buttons">
       <button class="modal-btn"        id="send-cancel-btn">CANCEL</button>
       <button class="modal-btn danger" id="send-confirm-btn">SEND</button>
+    </div>
+  </div>
+</div>
+
+<!-- Drop-in modal: feed Chloe an image / link / text -->
+<div class="modal-backdrop" id="dropin-modal">
+  <div class="modal">
+    <div class="modal-title">DROP IN
+      <button class="wallet-close" id="dropin-close-btn" title="Close"
+              style="float:right;margin-top:-6px;">×</button>
+    </div>
+    <div class="dropin-tabs">
+      <button class="dropin-tab active" data-tab="image">IMAGE</button>
+      <button class="dropin-tab"        data-tab="link">LINK</button>
+      <button class="dropin-tab"        data-tab="text">TEXT</button>
+    </div>
+    <div class="dropin-pane active" data-pane="image">
+      <label class="dropin-file-label">
+        TAP TO CHOOSE A PHOTO
+        <input id="dropin-file" type="file" accept="image/*">
+      </label>
+      <div class="dropin-preview" id="dropin-preview"></div>
+    </div>
+    <div class="dropin-pane" data-pane="link">
+      <label for="dropin-url">URL</label>
+      <input id="dropin-url" type="url" inputmode="url" placeholder="https://…"
+             autocapitalize="off" autocomplete="off">
+    </div>
+    <div class="dropin-pane" data-pane="text">
+      <label for="dropin-text">TEXT</label>
+      <textarea id="dropin-text" placeholder="paste or type anything…"></textarea>
+    </div>
+    <label for="dropin-title">TITLE / NOTE / QUESTION (OPTIONAL)</label>
+    <input id="dropin-title" type="text" placeholder="optional label, or a question to ask Chloe">
+    <div class="modal-status" id="dropin-status"></div>
+    <div class="modal-buttons dropin-actions">
+      <button class="modal-btn"         id="dropin-cancel-btn">CANCEL</button>
+      <button class="modal-btn"         id="dropin-brain-btn">ADD TO BRAIN</button>
+      <button class="modal-btn primary" id="dropin-ask-btn">ASK CHLOE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── RECENT CHATS SHEET ───────────────────────────────────────────────── -->
+<div class="wallet-sheet" id="sessions-sheet">
+  <div class="wallet-header">
+    <div class="wallet-title sessions-title">⟲ RECENT CHATS</div>
+    <button class="wallet-close" id="sessions-close-btn" title="Close">×</button>
+  </div>
+  <div class="wallet-body">
+    <!-- list view -->
+    <div id="sessions-listview">
+      <button class="sessions-newchat" id="sessions-newchat-btn">＋ NEW CHAT</button>
+      <div class="history-empty" id="sessions-empty">loading…</div>
+      <div id="sessions-list"></div>
+    </div>
+    <!-- transcript view (one session, read-only + resume + delete) -->
+    <div id="session-view" style="display:none;">
+      <button class="balance-refresh" id="session-back-btn">← back to list</button>
+      <div class="session-view-title" id="session-view-title"></div>
+      <div id="session-view-turns"></div>
+      <button class="wallet-action" id="session-resume-btn">RESUME THIS CHAT</button>
+      <button class="wallet-action" id="session-delete-btn">DELETE THIS CHAT</button>
+      <div class="modal-status" id="session-resume-status"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ORB HUB MENU (opens on orb tap) ─────────────────────────────────── -->
+<div class="modal-backdrop" id="orb-menu">
+  <div class="modal">
+    <div class="modal-title">MENU</div>
+    <button class="orb-menu-btn" id="orb-menu-chats">⟲ RECENT CHATS</button>
+    <button class="orb-menu-btn wallet" id="orb-menu-wallet">₿ WALLET</button>
+    <div class="modal-buttons">
+      <button class="modal-btn" id="orb-menu-close">CLOSE</button>
     </div>
   </div>
 </div>
@@ -1193,6 +1525,39 @@ function handleStructured(data) {
       currentReplyEl.querySelector('.msg-bubble').textContent = currentReplyText;
       chatlog.scrollTop = chatlog.scrollHeight;
     }
+  } else if (data.type === 'sources') {
+    // Citation block emitted by /search and the Brave hedge-fallback. Append
+    // a small numbered link list inside the current reply bubble.
+    if (currentReplyEl && Array.isArray(data.items) && data.items.length) {
+      const bubble = currentReplyEl.querySelector('.msg-bubble');
+      if (bubble) {
+        // Defensive: clear an existing sources block in case backend re-emits.
+        const prev = bubble.querySelector('.msg-sources');
+        if (prev) prev.remove();
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-sources';
+        for (const it of data.items) {
+          const a = document.createElement('a');
+          a.href = it.url || '#';
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          const n = document.createElement('span');
+          n.className = 'src-n';
+          n.textContent = '[' + (it.n || '\u2022') + '] ';
+          const t = document.createTextNode(it.title || it.url || '(untitled)');
+          a.appendChild(n);
+          a.appendChild(t);
+          if (it.domain) {
+            const d = document.createElement('span');
+            d.className = 'src-domain';
+            d.textContent = ' \u00B7 ' + it.domain;
+            a.appendChild(d);
+          }
+          wrap.appendChild(a);
+        }
+        bubble.appendChild(wrap);
+      }
+    }
   } else if (data.type === 'done') {
     const reply = currentReplyText.trim();
     if (reply) { chatHistory.push({ role: 'assistant', content: reply }); trimHistory(); }
@@ -1235,6 +1600,14 @@ function handleStructured(data) {
     // speakers. The format is "mp3" (ElevenLabs/edge-tts) or "wav"
     // (Kokoro). Both are playable directly via a data URL.
     playReplyAudio(data.audio_b64, data.format || 'mp3');
+  } else if (data.type === 'tts_audio_chunk') {
+    // The Ollama-primary chat path (and the backend's CHLOE_TTS_STREAMING
+    // mode) streams Chloe's reply ONE SENTENCE AT A TIME as
+    // `tts_audio_chunk` messages rather than one big `tts_audio`. The
+    // desktop HUD has always handled these; the PWA didn't — which is the
+    // reason mobile replies came back text-only. Queue + play in order.
+    enqueueTtsChunk(data.audio_b64 || '', data.format || 'wav',
+                    data.chunk_id | 0, !!data.is_final);
   } else if (data.type === 'wallet_balance_result') {
     onWalletBalanceResult(data);
   } else if (data.type === 'wallet_invoice_result') {
@@ -1243,6 +1616,16 @@ function handleStructured(data) {
     onWalletSendResult(data);
   } else if (data.type === 'wallet_history_result') {
     onWalletHistoryResult(data);
+  } else if (data.type === 'sessions_result') {
+    onSessionsResult(data);
+  } else if (data.type === 'session_result') {
+    onSessionResult(data);
+  } else if (data.type === 'session_resumed') {
+    onSessionResumed(data);
+  } else if (data.type === 'session_deleted') {
+    onSessionDeleted(data);
+  } else if (data.type === 'session_new_done') {
+    onSessionNewDone(data);
   }
   // ptt_started / ptt_stopping / ptt_busy / ptt_idle: harmless, ignore on mobile
 }
@@ -1253,6 +1636,10 @@ function handleStructured(data) {
 let replyAudioEl = null;
 
 function playReplyAudio(b64, format) {
+  // Single-shot supersedes any in-flight chunk stream (a reply is one or the
+  // other, never both). Abandon chunk state so its onended chain can't fire
+  // after we re-point replyAudioEl below.
+  resetTtsChunkStream();
   setState('speaking');
   if (!replyAudioEl) {
     replyAudioEl = new Audio();
@@ -1274,6 +1661,81 @@ function playReplyAudio(b64, format) {
   replyAudioEl.play().catch((e) => {
     console.error('[chloe] play() rejected', e);
     appendMsg('chloe', '[autoplay blocked — tap PTT once and try again]', { error: true });
+    setState('idle');
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STREAMING TTS — tts_audio_chunk playback
+// ─────────────────────────────────────────────────────────────────────────────
+// The backend's primary (Ollama) chat path peels completed sentences off the
+// reply as the model generates them and broadcasts each as its own
+// `tts_audio_chunk` (base64 wav from Kokoro, or mp3 from ElevenLabs/edge-tts).
+// We queue them and play sequentially through the SAME <audio> element used by
+// the single-shot path, so the iOS unlock earned at the splash/PTT gesture
+// carries over and no fresh user gesture is needed mid-stream.
+let ttsChunkQueue = [];
+let ttsChunkPlaying = false;
+let ttsChunkStreamActive = false;
+let ttsChunkFinalReceived = false;
+
+function resetTtsChunkStream() {
+  ttsChunkQueue = [];
+  ttsChunkPlaying = false;
+  ttsChunkStreamActive = false;
+  ttsChunkFinalReceived = false;
+}
+
+function enqueueTtsChunk(b64, format, chunkId, isFinal) {
+  // chunk_id 0 — or any chunk arriving while no stream is active — starts a
+  // FRESH stream. Stop whatever's playing so a new reply can't queue behind
+  // the previous one (mirrors the HUD's new-stream guard for the
+  // user-sent-a-new-chat-mid-reply race).
+  if (chunkId === 0 || !ttsChunkStreamActive) {
+    if (replyAudioEl) { try { replyAudioEl.pause(); } catch (_) {} }
+    ttsChunkQueue = [];
+    ttsChunkPlaying = false;
+    ttsChunkStreamActive = true;
+    ttsChunkFinalReceived = false;
+  }
+  if (isFinal) ttsChunkFinalReceived = true;
+  if (b64) ttsChunkQueue.push({ b64, format: format || 'wav' });
+  // If playback already drained the queue and stalled waiting on synthesis,
+  // this arrival re-kicks it; otherwise the active onended chain pulls it.
+  if (!ttsChunkPlaying) playNextTtsChunk();
+}
+
+function playNextTtsChunk() {
+  if (ttsChunkQueue.length === 0) {
+    ttsChunkPlaying = false;
+    // Queue empty. If the final chunk has landed, the stream is done; else
+    // playback has genuinely stalled and the next enqueueTtsChunk re-kicks.
+    if (ttsChunkStreamActive && ttsChunkFinalReceived) {
+      ttsChunkStreamActive = false;
+      ttsChunkFinalReceived = false;
+      setState('idle');
+    }
+    return;
+  }
+  ttsChunkPlaying = true;
+  setState('speaking');
+  const next = ttsChunkQueue.shift();
+  if (!replyAudioEl) {
+    replyAudioEl = new Audio();
+    replyAudioEl.preload = 'auto';
+  }
+  replyAudioEl.src = `data:audio/${next.format};base64,${next.b64}`;
+  replyAudioEl.onended = () => { playNextTtsChunk(); };
+  replyAudioEl.onerror = (e) => {
+    console.error('[chloe] tts chunk audio error', e);
+    playNextTtsChunk();  // skip the bad chunk, keep the stream moving
+  };
+  replyAudioEl.play().catch((e) => {
+    // iOS autoplay refusal only happens if the element was never unlocked
+    // (user never dismissed the splash / never used PTT). Bail cleanly so the
+    // orb doesn't hang on 'speaking'.
+    console.error('[chloe] chunk play() rejected', e);
+    resetTtsChunkStream();
     setState('idle');
   });
 }
@@ -1396,7 +1858,8 @@ async function ensureMic() {
 
     workletNode = new AudioWorkletNode(audioCtx, 'mic-forwarder');
     workletNode.port.onmessage = (ev) => {
-      if (recording) pcmBuffer.push(ev.data);
+      if (recording) pcmBuffer.push(ev.data);          // manual PTT hold
+      else if (autoListen) vadFeed(ev.data);           // hands-free always-listen
     };
     const src = audioCtx.createMediaStreamSource(micStream);
     src.connect(workletNode);
@@ -1563,6 +2026,171 @@ document.addEventListener('keyup', (e) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ALWAYS LISTEN — hands-free VAD (iPhone, 2026-06-07)
+// ─────────────────────────────────────────────────────────────────────────────
+// Toggle AUTO next to the PTT button: the mic stays open and a lightweight RMS
+// voice-activity detector auto-records when Ed speaks (with a preroll so the
+// first word isn't clipped) and ships the utterance through the existing
+// ptt_audio pipeline when he stops. No wake word — any speech triggers her.
+// Capture is gated on window.__chloeState === 'idle', so it never triggers
+// while she's thinking or speaking (no self-trigger on her own TTS; the mic
+// constraints also request echoCancellation as a second guard), during a
+// manual PTT hold, or while the arcade/chess overlay is open. iOS realities:
+// the mic is gesture-gated, so re-arming needs one tap after each app launch,
+// and listening only runs while the PWA is foreground with the screen on.
+const autoBtn = $('auto-btn');
+let autoListen     = false;
+let vadCapturing   = false;
+let vadBuffer      = [];
+let vadPreroll     = [];
+let vadPrerollLen  = 0;   // ms of preroll currently held
+let vadVoicedMs    = 0;
+let vadStartTs     = 0;
+let vadLastVoiceTs = 0;
+let vadIdleSince   = 0;
+const VAD = {
+  thresh:        parseFloat(localStorage.getItem('chloe_vad_thresh') || '0.022'),
+  silenceHangMs: 1100,    // pause length that ends the utterance
+  minVoicedMs:   350,     // discard blips shorter than this
+  prerollMs:     400,     // audio kept from before the trigger
+  maxUtterMs:    30000,   // safety cap per utterance
+  resumeTailMs:  2000,    // HARD mute after she stops (was 600 — too short; iOS
+                          // echoCancellation is weak on speaker, so her TTS tail
+                          // was self-triggering). Nothing fires inside this window.
+  adaptiveMs:    2600,    // after the hard mute, stay desensitized for this long,
+  adaptiveMult:  2.2,     // peaking at thresh×this right as the mute lifts, then
+                          // decaying linearly back to the base threshold.
+};
+
+function vadAbort() {
+  vadCapturing = false;
+  vadBuffer = []; vadPreroll = []; vadPrerollLen = 0; vadVoicedMs = 0;
+}
+
+function sendCapturedPcm(frames) {
+  // Same encode+send as stopPtt — kept separate so the manual path is untouched.
+  const sr = audioCtx ? audioCtx.sampleRate : TARGET_SR;
+  const float16 = downsampleTo16k(frames, sr);
+  if (float16.length < TARGET_SR * 0.25) return false;
+  const wavBytes = encodeWav16kMono(float16);
+  ws.send(JSON.stringify({
+    type: 'ptt_audio',
+    wav_b64: bytesToBase64(wavBytes),
+    reply_audio: true,
+    auto: true,            // flags VAD captures for the server echo-loop backstop
+  }));
+  return true;
+}
+
+function vadFeed(frame) {
+  let sum = 0;
+  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+  const rms = Math.sqrt(sum / frame.length);
+  const now = performance.now();
+  const sr  = audioCtx ? audioCtx.sampleRate : 48000;
+  const frameMs = (frame.length / sr) * 1000;
+
+  if (!vadCapturing) {
+    // Rolling preroll so the trigger word's onset isn't clipped.
+    vadPreroll.push(frame);
+    vadPrerollLen += frameMs;
+    while (vadPrerollLen > VAD.prerollMs && vadPreroll.length > 1) {
+      vadPrerollLen -= (vadPreroll[0].length / sr) * 1000;
+      vadPreroll.shift();
+    }
+    // Trigger gates.
+    if (window.__chloeState !== 'idle') { vadIdleSince = now; return; }
+    const sinceIdle = now - vadIdleSince;
+    if (sinceIdle < VAD.resumeTailMs) return;          // hard mute after she speaks
+    if (document.querySelector('.game-overlay.on')) return;
+    if (!wsReady) return;
+    // Adaptive threshold: once the hard mute lifts, stay desensitized for a while
+    // so her own TTS tail / room echo (iOS echoCancellation is weak on speaker)
+    // can't self-trigger. Starts high and decays linearly to the base threshold.
+    let effThresh = VAD.thresh;
+    if (sinceIdle < VAD.adaptiveMs) {
+      const k = 1 - (sinceIdle / VAD.adaptiveMs);      // 1→0 across the window
+      effThresh = VAD.thresh * (1 + (VAD.adaptiveMult - 1) * k);
+    }
+    if (rms >= effThresh) {
+      vadCapturing   = true;
+      vadBuffer      = vadPreroll.slice();
+      vadVoicedMs    = frameMs;
+      vadStartTs     = now;
+      vadLastVoiceTs = now;
+      setState('listening');
+      pttHint.textContent = 'auto · hearing you…';
+    }
+    return;
+  }
+
+  // Capturing.
+  vadBuffer.push(frame);
+  if (rms >= VAD.thresh) { vadLastVoiceTs = now; vadVoicedMs += frameMs; }
+  if ((now - vadLastVoiceTs) > VAD.silenceHangMs || (now - vadStartTs) > VAD.maxUtterMs) {
+    const frames = vadBuffer;
+    const voiced = vadVoicedMs;
+    vadAbort();
+    pttHint.textContent = 'auto · listening';
+    if (voiced < VAD.minVoicedMs) { setState('idle'); return; }
+    setState('thinking');
+    try {
+      if (!sendCapturedPcm(frames)) setState('idle');
+    } catch (e) {
+      console.error('[chloe] auto-listen send failed', e);
+      setState('idle');
+    }
+  }
+}
+
+async function setAutoListen(on) {
+  if (on) {
+    unlockReplyAudio();
+    const ok = await ensureMic();
+    if (!ok) return;
+    autoListen = true;
+    if (autoBtn) { autoBtn.classList.add('on'); autoBtn.textContent = '● STOP';
+                   autoBtn.title = 'tap to stop always-listening'; }
+    pttHint.textContent = 'listening · tap STOP or 3-finger tap';
+    localStorage.setItem('chloe_auto_listen', '1');
+  } else {
+    autoListen = false;
+    vadAbort();
+    if (autoBtn) { autoBtn.classList.remove('on'); autoBtn.textContent = 'AUTO';
+                   autoBtn.title = 'always listening (hands-free)'; }
+    pttHint.textContent = micGranted ? 'hold to talk' : 'tap once to grant mic access';
+    localStorage.setItem('chloe_auto_listen', '0');
+    if (window.__chloeState === 'listening') setState('idle');
+  }
+}
+if (autoBtn) autoBtn.addEventListener('click', () => setAutoListen(!autoListen));
+// A manual PTT hold cancels any in-progress auto capture.
+pttBtn.addEventListener('pointerdown', vadAbort);
+// PANIC GESTURE — a 3-finger tap anywhere instantly kills always-listening AND
+// silences her current reply. Hard manual override if the VAD ever runs away
+// (echo loop, noisy room). Volume buttons aren't reachable from the browser, so
+// a multi-touch tap is the cheapest always-available kill switch.
+document.addEventListener('touchstart', (e) => {
+  if (!e.touches || e.touches.length < 3) return;
+  if (autoListen) setAutoListen(false);
+  vadAbort();
+  try { if (typeof replyAudioEl !== 'undefined' && replyAudioEl) replyAudioEl.pause(); } catch (_) {}
+  setState('idle');
+  pttHint.textContent = 'listening off · 3-finger tap';
+}, { passive: true });
+// Re-arm on the next launch: iOS gates the mic behind a user gesture, so if
+// always-listen was on last session, the first tap anywhere re-enables it.
+if (localStorage.getItem('chloe_auto_listen') === '1') {
+  pttHint.textContent = 'tap anywhere to resume always-listening';
+  const rearm = (e) => {
+    document.removeEventListener('pointerdown', rearm);
+    if (autoBtn && autoBtn.contains(e.target)) return; // their tap will toggle it
+    setAutoListen(true);
+  };
+  document.addEventListener('pointerdown', rearm);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SERVICE WORKER (offline shell)
 // ─────────────────────────────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
@@ -1596,523 +2224,25 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass }     from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass }     from 'three/addons/postprocessing/OutputPass.js';
 
-// ════════════════════════════════════════════════════════════════════════════
-// POSTFX
-// ════════════════════════════════════════════════════════════════════════════
-const ChromaScanlinePass = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uTime:    { value: 0 },
-    uChroma:  { value: 0.0018 },
-    uScan:    { value: 0.05 },
-    uVignette:{ value: 0.7 },
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: `
-    uniform sampler2D tDiffuse;
-    uniform float uTime;
-    uniform float uChroma;
-    uniform float uScan;
-    uniform float uVignette;
-    varying vec2 vUv;
-    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-    void main() {
-      vec2 uv = vUv;
-      vec2 dir = (uv - 0.5);
-      float dist = length(dir);
-      float ca = uChroma * (0.5 + dist * 1.5);
-      vec2 dN = normalize(dir + vec2(0.001));
-      float r = texture2D(tDiffuse, uv + dN * ca).r;
-      float g = texture2D(tDiffuse, uv).g;
-      float b = texture2D(tDiffuse, uv - dN * ca).b;
-      vec3 col = vec3(r, g, b);
-      float scan = sin(uv.y * 800.0 + uTime * 0.5) * 0.5 + 0.5;
-      col *= 1.0 - scan * uScan;
-      float noise = hash(vec2(uv.y * 200.0, floor(uTime * 24.0))) * 0.04;
-      col += vec3(noise * 0.3, noise * 0.5, noise) * 0.5;
-      float vig = smoothstep(0.95, 0.4, dist);
-      col *= mix(1.0, vig, uVignette);
-      col = mix(col, col * vec3(0.85, 0.95, 1.1), 0.25);
-      gl_FragColor = vec4(col, 1.0);
-    }
-  `,
-};
+// ── iPhone-client orb swap (2026-05-26) ──────────────────────────────────────
+// The orb geometry, particles, and chroma/scanline postfx now come from the
+// shared JarvisFace holographic-orb modules (the updated orb that
+// jarvis-mobile.html loads via holo-app.js) instead of the older inline copies
+// below. This is mobile-only — desktop hud.html is untouched. The inline
+// ChromaScanlinePass/buildOrb/buildParticles definitions further down are now
+// UNUSED dead code (kept to keep this swap surgical); the scene uses the
+// aliases below. Served from the static root over Tailscale at /JarvisFace/*.
+import { buildOrb as buildOrbHolo }                   from './JarvisFace/holo-orb.js?v=2';
+import { buildParticles as buildParticlesHolo }       from './JarvisFace/holo-particles.js?v=2';
+import { ChromaScanlinePass as ChromaScanlinePassHolo } from './JarvisFace/holo-postfx.js?v=2';
 
 // ════════════════════════════════════════════════════════════════════════════
-// GALAXY ORB SHADERS
+// (2026-06-04 cleanup) The inline postfx / orb-shader / particle definitions
+// that lived here were DEAD CODE — superseded 2026-05-26 by the shared
+// JarvisFace holo modules imported above (buildOrbHolo / buildParticlesHolo /
+// ChromaScanlinePassHolo). Excised in the Phase-5 pruning pass; recover from
+// git/backups if ever needed.
 // ════════════════════════════════════════════════════════════════════════════
-const orbVertex = `
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform float uTime;
-  uniform float uAmp;
-  uniform float uDeform;
-  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float noise(vec3 p) {
-    vec3 i = floor(p), f = fract(p);
-    f = f*f*(3.0-2.0*f);
-    return mix(
-      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
-      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
-      f.z);
-  }
-  void main() {
-    vec3 p = position;
-    vec3 N = normalize(p);
-    float n = noise(N * 2.5 + uTime * 0.4);
-    float n2 = noise(N * 5.0 - uTime * 0.6);
-    float deform = (n - 0.5) * 0.10 + (n2 - 0.5) * 0.04;
-    p += N * (deform * uDeform + uAmp * 0.06);
-    vLocalPos = p;
-    vec4 worldPos = modelMatrix * vec4(p, 1.0);
-    vWorldPos = worldPos.xyz;
-    vNormal = normalize(normalMatrix * N);
-    vViewDir = normalize(cameraPosition - worldPos.xyz);
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
-  }
-`;
-
-const orbFragment = `
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform float uTime;
-  uniform float uAmp;
-  uniform float uTurbulence;
-  uniform float uSpiralSpeed;
-  uniform vec3  uCoreColor;
-  uniform vec3  uMidColor;
-  uniform vec3  uEdgeColor;
-  uniform float uOpacity;
-  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float noise3(vec3 p) {
-    vec3 i = floor(p), f = fract(p);
-    f = f*f*(3.0-2.0*f);
-    return mix(
-      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
-      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
-      f.z);
-  }
-  float fbm(vec3 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 5; i++) { v += a * noise3(p); p *= 2.05; a *= 0.5; }
-    return v;
-  }
-  void main() {
-    vec3 N = normalize(vNormal);
-    vec3 V = normalize(vViewDir);
-    vec3 lp = normalize(vLocalPos);
-    float lat = asin(lp.y);
-    float lon = atan(lp.z, lp.x);
-    float spiral = lon + lat * 3.0 + uTime * uSpiralSpeed;
-    vec3 q = vec3(cos(spiral) * 1.6, lat * 1.8, sin(spiral) * 1.6);
-    float galaxy = fbm(q + uTime * 0.15);
-    float fineDetail = fbm(q * 3.5 - uTime * 0.25);
-    float arms = pow(0.5 + 0.5 * sin(spiral * 3.0 + galaxy * 4.0 + uTurbulence * 6.0 * sin(uTime * 0.7)), 2.5);
-    float density = arms * (galaxy * 0.7 + fineDetail * 0.3);
-    density = pow(density, 1.5);
-    density += 0.15 * fineDetail;
-    float starField = pow(noise3(lp * 50.0 + uTime * 0.05), 22.0) * 14.0;
-    vec3 col = mix(uEdgeColor, uMidColor, density);
-    col = mix(col, uCoreColor, pow(density, 2.5));
-    col += uCoreColor * starField;
-    col *= 1.0 + uAmp * 0.7;
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
-    col += uEdgeColor * fres * 0.9;
-    col += uMidColor  * pow(fres, 6.0) * 1.6;
-    float pulse = sin(length(vLocalPos) * 18.0 - uTime * 6.0) * 0.5 + 0.5;
-    pulse = pow(pulse, 8.0);
-    col += uCoreColor * pulse * uAmp * 0.6;
-    float scan = sin(vWorldPos.y * 240.0 + uTime * 1.5) * 0.5 + 0.5;
-    col += uEdgeColor * pow(scan, 6.0) * 0.04;
-    col = col / (1.0 + col * 0.35);
-    float alpha = clamp(density * 0.85 + fres * 0.6 + 0.22, 0.0, 1.0) * uOpacity;
-    gl_FragColor = vec4(col, alpha);
-  }
-`;
-
-const shellVertex = `
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform float uTime;
-  uniform float uAmp;
-  void main() {
-    vec3 p = position;
-    vec3 N = normalize(p);
-    p += N * (sin(uTime * 1.2) * 0.015 + uAmp * 0.10);
-    vLocalPos = p;
-    vec4 worldPos = modelMatrix * vec4(p, 1.0);
-    vNormal = normalize(normalMatrix * N);
-    vViewDir = normalize(cameraPosition - worldPos.xyz);
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
-  }
-`;
-const shellFragment = `
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform float uTime;
-  uniform float uAmp;
-  uniform vec3  uColor;
-  float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float noise3(vec3 p) {
-    vec3 i = floor(p), f = fract(p);
-    f = f*f*(3.0-2.0*f);
-    return mix(
-      mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
-      mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y),
-      f.z);
-  }
-  float fbm(vec3 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 4; i++) { v += a * noise3(p); p *= 2.0; a *= 0.5; }
-    return v;
-  }
-  void main() {
-    vec3 N = normalize(vNormal);
-    vec3 V = normalize(vViewDir);
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.0);
-    float wisp = fbm(vLocalPos * 2.5 + uTime * 0.3);
-    wisp = pow(wisp, 1.6);
-    vec3 col = uColor * (wisp * 1.2 + fres * 1.5);
-    col += uColor * pow(fres, 8.0) * 2.0;
-    col *= 1.0 + uAmp * 0.9;
-    float alpha = (fres * 0.7 + wisp * 0.4) * (0.55 + uAmp * 0.4);
-    gl_FragColor = vec4(col, alpha);
-  }
-`;
-
-const pulseVertex = `
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform float uTime;
-  uniform float uScale;
-  void main() {
-    vec3 p = position * uScale;
-    vLocalPos = p;
-    vec4 worldPos = modelMatrix * vec4(p, 1.0);
-    vNormal = normalize(normalMatrix * normalize(position));
-    vViewDir = normalize(cameraPosition - worldPos.xyz);
-    gl_Position = projectionMatrix * viewMatrix * worldPos;
-  }
-`;
-const pulseFragment = `
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  varying vec3 vLocalPos;
-  uniform vec3 uColor;
-  uniform float uOpacity;
-  void main() {
-    vec3 N = normalize(vNormal);
-    vec3 V = normalize(vViewDir);
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
-    fres = pow(fres, 1.5);
-    float alpha = fres * uOpacity;
-    if (alpha < 0.01) discard;
-    gl_FragColor = vec4(uColor * (1.0 + fres * 1.5), alpha);
-  }
-`;
-
-function buildOrb() {
-  const group = new THREE.Group();
-  const coreGeo = new THREE.SphereGeometry(0.78, 96, 96);
-  const coreUniforms = {
-    uTime:         { value: 0 },
-    uAmp:          { value: 0 },
-    uDeform:       { value: 1.0 },
-    uTurbulence:   { value: 0.3 },
-    uSpiralSpeed:  { value: 0.15 },
-    uCoreColor:    { value: new THREE.Color(0xffe8aa) },
-    uMidColor:     { value: new THREE.Color(0x4a9eff) },
-    uEdgeColor:    { value: new THREE.Color(0x1a3a66) },
-    uOpacity:      { value: 1.0 },
-  };
-  const coreMat = new THREE.ShaderMaterial({
-    vertexShader: orbVertex, fragmentShader: orbFragment,
-    transparent: true, side: THREE.FrontSide, depthWrite: false,
-    blending: THREE.AdditiveBlending, uniforms: coreUniforms,
-  });
-  group.add(new THREE.Mesh(coreGeo, coreMat));
-
-  const shellGeo = new THREE.SphereGeometry(0.95, 64, 64);
-  const shellUniforms = {
-    uTime:  { value: 0 }, uAmp: { value: 0 },
-    uColor: { value: new THREE.Color(0x88ccff) },
-  };
-  const shellMat = new THREE.ShaderMaterial({
-    vertexShader: shellVertex, fragmentShader: shellFragment,
-    transparent: true, side: THREE.FrontSide, depthWrite: false,
-    blending: THREE.AdditiveBlending, uniforms: shellUniforms,
-  });
-  group.add(new THREE.Mesh(shellGeo, shellMat));
-
-  const pulses = [];
-  const pulseGeo = new THREE.SphereGeometry(1.0, 48, 48);
-  for (let i = 0; i < 5; i++) {
-    const u = {
-      uScale:   { value: 1.0 },
-      uColor:   { value: new THREE.Color(0xaaddff) },
-      uOpacity: { value: 0.0 },
-    };
-    const m = new THREE.ShaderMaterial({
-      vertexShader: pulseVertex, fragmentShader: pulseFragment,
-      transparent: true, side: THREE.FrontSide, depthWrite: false,
-      blending: THREE.AdditiveBlending, uniforms: u,
-    });
-    const mesh = new THREE.Mesh(pulseGeo, m);
-    mesh.visible = false;
-    group.add(mesh);
-    pulses.push({ mesh, u, age: -1, life: 0 });
-  }
-
-  function makeRing(radius, tubeRadius, color, tilt) {
-    const g = new THREE.TorusGeometry(radius, tubeRadius, 16, 128);
-    const m = new THREE.MeshBasicMaterial({
-      color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(g, m);
-    mesh.rotation.x = tilt;
-    return mesh;
-  }
-  const ring1 = makeRing(1.10, 0.004, 0x66ccff, Math.PI * 0.42);
-  const ring2 = makeRing(1.22, 0.003, 0x99eeff, Math.PI * 0.55);
-  const ring3 = makeRing(1.35, 0.002, 0x4488cc, Math.PI * 0.48);
-  group.add(ring1); group.add(ring2); group.add(ring3);
-
-  let pulseTimer = 0;
-  let nextPulseSpawn = 0;
-
-  return {
-    group,
-    update({ t, dt, state, amp }) {
-      coreUniforms.uTime.value = t;
-      coreUniforms.uAmp.value = amp;
-      shellUniforms.uTime.value = t;
-      shellUniforms.uAmp.value = amp;
-      let turb = 0.25, spiral = 0.15, deform = 1.0;
-      if (state === 'listening') { turb = 0.15; spiral = 0.08; deform = 0.6; }
-      else if (state === 'thinking') { turb = 0.85; spiral = 0.45; deform = 1.4; }
-      else if (state === 'speaking') { turb = 0.55; spiral = 0.25; deform = 1.1 + amp * 0.6; }
-      coreUniforms.uTurbulence.value += (turb - coreUniforms.uTurbulence.value) * 0.08;
-      coreUniforms.uSpiralSpeed.value += (spiral - coreUniforms.uSpiralSpeed.value) * 0.08;
-      coreUniforms.uDeform.value += (deform - coreUniforms.uDeform.value) * 0.08;
-
-      const spinMul = state === 'thinking' ? 4.0 : state === 'speaking' ? 2.5 : state === 'listening' ? 0.6 : 1.0;
-      ring1.rotation.z += dt * 0.25 * spinMul;
-      ring2.rotation.z -= dt * 0.18 * spinMul;
-      ring3.rotation.z += dt * 0.32 * spinMul;
-      ring1.rotation.y += dt * 0.05 * spinMul;
-      ring2.rotation.x += dt * 0.04 * spinMul;
-
-      pulseTimer += dt;
-      if (state === 'speaking' && amp > 0.55 && pulseTimer > nextPulseSpawn) {
-        for (const p of pulses) {
-          if (p.age < 0) {
-            p.age = 0; p.life = 1.2; p.mesh.visible = true; break;
-          }
-        }
-        nextPulseSpawn = pulseTimer + 0.18 + Math.random() * 0.12;
-      }
-      for (const p of pulses) {
-        if (p.age >= 0) {
-          p.age += dt;
-          const k = Math.min(p.age / p.life, 1);
-          p.u.uScale.value = 0.95 + k * 1.55;
-          p.u.uOpacity.value = (1.0 - k) * 0.7;
-          if (p.age >= p.life) { p.age = -1; p.mesh.visible = false; }
-        }
-      }
-    },
-  };
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// PARTICLES
-// ════════════════════════════════════════════════════════════════════════════
-function buildParticles() {
-  const group = new THREE.Group();
-
-  const N1 = 120;
-  const inner = new THREE.BufferGeometry();
-  const innerPos = new Float32Array(N1 * 3);
-  const innerData = new Float32Array(N1 * 4);
-  const innerSize = new Float32Array(N1);
-  for (let i = 0; i < N1; i++) {
-    const r = 1.4 + Math.random() * 1.0;
-    const theta0 = Math.random() * Math.PI * 2;
-    const phi0 = (Math.random() - 0.5) * 0.6;
-    const speed = 0.15 + Math.random() * 0.4;
-    innerData.set([r, theta0, phi0, speed], i * 4);
-    innerSize[i] = 0.2 + Math.random() * 0.6;
-  }
-  inner.setAttribute('position', new THREE.BufferAttribute(innerPos, 3));
-  inner.setAttribute('aData',    new THREE.BufferAttribute(innerData, 4));
-  inner.setAttribute('aSize',    new THREE.BufferAttribute(innerSize, 1));
-
-  const innerMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    uniforms: {
-      uTime: { value: 0 },
-      uColor: { value: new THREE.Color(0x88ddff) },
-      uPxRatio: { value: window.devicePixelRatio || 1 },
-    },
-    vertexShader: `
-      attribute vec4 aData;
-      attribute float aSize;
-      uniform float uTime;
-      uniform float uPxRatio;
-      varying float vAlpha;
-      void main() {
-        float r = aData.x;
-        float theta = aData.y + uTime * aData.w;
-        float phi = aData.z + sin(uTime * 0.3 + aData.y) * 0.15;
-        vec3 p;
-        p.x = r * cos(theta) * cos(phi);
-        p.y = r * sin(phi);
-        p.z = r * sin(theta) * cos(phi);
-        vAlpha = 0.6 + 0.4 * sin(uTime * 2.0 + aData.y * 5.0);
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = aSize * uPxRatio * (180.0 / -mv.z);
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 uColor;
-      varying float vAlpha;
-      void main() {
-        vec2 uv = gl_PointCoord - 0.5;
-        float d = length(uv);
-        float core = smoothstep(0.5, 0.0, d);
-        float halo = smoothstep(0.5, 0.1, d);
-        vec3 col = uColor * (core * 1.5 + halo * 0.5);
-        gl_FragColor = vec4(col, halo * vAlpha);
-      }
-    `,
-  });
-  group.add(new THREE.Points(inner, innerMat));
-
-  const N2 = 800;
-  const outer = new THREE.BufferGeometry();
-  const outerPos = new Float32Array(N2 * 3);
-  const outerSize = new Float32Array(N2);
-  const outerSeed = new Float32Array(N2);
-  for (let i = 0; i < N2; i++) {
-    const r = 2.0 + Math.random() * 4.0;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = (Math.random() - 0.5) * Math.PI;
-    outerPos[i*3]   = r * Math.cos(theta) * Math.cos(phi);
-    outerPos[i*3+1] = r * Math.sin(phi);
-    outerPos[i*3+2] = r * Math.sin(theta) * Math.cos(phi);
-    outerSize[i] = 0.3 + Math.random() * 0.6;
-    outerSeed[i] = Math.random() * 100;
-  }
-  outer.setAttribute('position', new THREE.BufferAttribute(outerPos, 3));
-  outer.setAttribute('aSize',    new THREE.BufferAttribute(outerSize, 1));
-  outer.setAttribute('aSeed',    new THREE.BufferAttribute(outerSeed, 1));
-
-  const outerMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    uniforms: {
-      uTime: { value: 0 },
-      uColor: { value: new THREE.Color(0x4488cc) },
-      uPxRatio: { value: window.devicePixelRatio || 1 },
-    },
-    vertexShader: `
-      attribute float aSize;
-      attribute float aSeed;
-      uniform float uTime;
-      uniform float uPxRatio;
-      varying float vAlpha;
-      void main() {
-        vec3 p = position;
-        p.x += sin(uTime * 0.15 + aSeed) * 0.08;
-        p.y += cos(uTime * 0.12 + aSeed * 1.3) * 0.08;
-        p.z += sin(uTime * 0.10 + aSeed * 2.1) * 0.08;
-        vAlpha = 0.3 + 0.4 * sin(uTime * 0.5 + aSeed * 3.0);
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_Position = projectionMatrix * mv;
-        gl_PointSize = aSize * uPxRatio * (160.0 / -mv.z);
-      }
-    `,
-    fragmentShader: `
-      uniform vec3 uColor;
-      varying float vAlpha;
-      void main() {
-        vec2 uv = gl_PointCoord - 0.5;
-        float d = length(uv);
-        float halo = smoothstep(0.5, 0.0, d);
-        gl_FragColor = vec4(uColor * halo, halo * vAlpha * 0.5);
-      }
-    `,
-  });
-  group.add(new THREE.Points(outer, outerMat));
-
-  const ringGeo = new THREE.RingGeometry(1.55, 1.62, 128);
-  const ringMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-    uniforms: {
-      uTime: { value: 0 },
-      uColor: { value: new THREE.Color(0x66bbff) },
-    },
-    vertexShader: `
-      varying vec2 vUv;
-      void main() {
-        vUv = uv;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime; uniform vec3 uColor;
-      varying vec2 vUv;
-      void main() {
-        float a = atan(vUv.y - 0.5, vUv.x - 0.5);
-        float dash = step(0.6, sin(a * 60.0 + uTime * 1.5));
-        float pulse = step(0.7, sin(a * 6.0 - uTime * 2.0));
-        float alpha = (dash * 0.4 + pulse * 0.8);
-        gl_FragColor = vec4(uColor * (0.6 + pulse), alpha);
-      }
-    `,
-  });
-  const ring = new THREE.Mesh(ringGeo, ringMat);
-  ring.rotation.x = Math.PI * 0.42;
-  ring.position.y = -0.05;
-  group.add(ring);
-
-  const ring2 = new THREE.Mesh(
-    new THREE.RingGeometry(1.95, 1.99, 128),
-    ringMat.clone()
-  );
-  ring2.material.uniforms = {
-    uTime: ringMat.uniforms.uTime,
-    uColor: { value: new THREE.Color(0x3388cc) },
-  };
-  ring2.rotation.x = Math.PI * 0.55;
-  ring2.rotation.z = Math.PI * 0.3;
-  group.add(ring2);
-
-  return {
-    group,
-    update({ t }) {
-      innerMat.uniforms.uTime.value = t;
-      outerMat.uniforms.uTime.value = t;
-      ringMat.uniforms.uTime.value = t;
-      ring.rotation.z = t * 0.05;
-      ring2.rotation.y = -t * 0.03;
-    },
-  };
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 // SCENE SETUP
@@ -2122,73 +2252,139 @@ function getSize() {
   const r = sceneContainer.getBoundingClientRect();
   return { w: r.width || 220, h: r.height || 220 };
 }
-let { w, h } = getSize();
+// ── Re-buildable scene ───────────────────────────────────────────────────────
+// The orb's WebGL context must be fully RELEASED (not just shrunk) while the
+// arcade owns the GPU — iOS WebKit can't host EmulatorJS + this orb at once, and
+// the old __orbPause (renderer.setSize(1,1)) left the context, shaders, and
+// buffers allocated, so it still crashed ~1 min into play. teardownOrb() now
+// disposes everything and drops the context; initOrb() rebuilds it on close. A
+// CSS orb (.orb-css) covers the disc while WebGL is down.
+let arcadeSuspended = false;   // true while the arcade overlay owns the GPU
+let orbAlive = false;
+let renderer, scene, camera, avatar, orb, particles, halo, haloMat,
+    composer, bloom, chromaScan;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(w, h);
-renderer.setClearColor(0x000000, 0);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.95;
-sceneContainer.appendChild(renderer.domElement);
+function initOrb() {
+  if (orbAlive) return;
+  const { w, h } = getSize();
 
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000308, 0.015);
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(w, h);
+  renderer.setClearColor(0x000000, 0);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.85;
+  sceneContainer.appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera(28, w / h, 0.1, 100);
-camera.position.set(0, 0, 5.4);
-camera.lookAt(0, 0, 0);
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x000308, 0.015);
 
-const avatar = new THREE.Group();
-scene.add(avatar);
+  camera = new THREE.PerspectiveCamera(28, w / h, 0.1, 100);
+  camera.position.set(0, 0, 5.4);
+  camera.lookAt(0, 0, 0);
 
-const orb = buildOrb();
-avatar.add(orb.group);
+  avatar = new THREE.Group();
+  scene.add(avatar);
 
-const particles = buildParticles();
-scene.add(particles.group);
+  orb = buildOrbHolo();
+  avatar.add(orb.group);
 
-// Halo behind the orb
-const haloGeo = new THREE.PlaneGeometry(7, 7);
-const haloMat = new THREE.ShaderMaterial({
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  uniforms: {
-    uTime: { value: 0 }, uAmp: { value: 0 },
-    uColor: { value: new THREE.Color(0x3399ff) },
-  },
-  vertexShader: `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  particles = buildParticlesHolo();
+  // De-cloud the moving light tracers/dust on mobile: the JarvisFace particle
+  // shaders multiply a `uColor` uniform, so scaling it down dims the bright
+  // orbs of light without editing the shared module. Tune the factor to taste.
+  particles.group.traverse((o) => {
+    const u = o.material && o.material.uniforms;
+    if (u && u.uColor && u.uColor.value && u.uColor.value.multiplyScalar) {
+      u.uColor.value.multiplyScalar(0.5);
     }
-  `,
-  fragmentShader: `
-    uniform float uTime; uniform vec3 uColor; uniform float uAmp;
-    varying vec2 vUv;
-    void main() {
-      vec2 p = vUv - 0.5;
-      float d = length(p);
-      float glow = smoothstep(0.5, 0.05, d);
-      glow = pow(glow, 2.0);
-      float pulse = 0.7 + 0.3 * sin(uTime * 0.7) + uAmp * 0.6;
-      gl_FragColor = vec4(uColor * glow * pulse * 0.30, glow * 0.30);
+    // Thin the moving light orbs by ~60% (mobile-only): render only the first
+    // 40% of each Points cloud via drawRange — no edit to the shared module.
+    if (o.isPoints && o.geometry && o.geometry.attributes.position) {
+      const n = o.geometry.attributes.position.count;
+      o.geometry.setDrawRange(0, Math.floor(n * 0.4));
     }
-  `,
-});
-const halo = new THREE.Mesh(haloGeo, haloMat);
-halo.position.z = -1.4;
-scene.add(halo);
+  });
+  scene.add(particles.group);
 
-// Postprocessing
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.55, 0.5, 0.55);
-composer.addPass(bloom);
-const chromaScan = new ShaderPass(ChromaScanlinePass);
-composer.addPass(chromaScan);
-composer.addPass(new OutputPass());
+  // Halo behind the orb
+  const haloGeo = new THREE.PlaneGeometry(7, 7);
+  haloMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: {
+      uTime: { value: 0 }, uAmp: { value: 0 },
+      uColor: { value: new THREE.Color(0x3399ff) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform float uTime; uniform vec3 uColor; uniform float uAmp;
+      varying vec2 vUv;
+      void main() {
+        vec2 p = vUv - 0.5;
+        float d = length(p);
+        float glow = smoothstep(0.5, 0.05, d);
+        glow = pow(glow, 2.0);
+        float pulse = 0.7 + 0.3 * sin(uTime * 0.7) + uAmp * 0.6;
+        gl_FragColor = vec4(uColor * glow * pulse * 0.30, glow * 0.30);
+      }
+    `,
+  });
+  halo = new THREE.Mesh(haloGeo, haloMat);
+  halo.position.z = -1.4;
+  scene.add(halo);
+
+  // Postprocessing
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  // Lower strength + higher threshold than the desktop default so the orb's
+  // galaxy detail reads instead of blooming out into a white cloud on the small
+  // mobile disc (the orb layers are additive-blended, which stacks bright fast).
+  bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.32, 0.45, 0.72);
+  composer.addPass(bloom);
+  chromaScan = new ShaderPass(ChromaScanlinePassHolo);
+  composer.addPass(chromaScan);
+  composer.addPass(new OutputPass());
+
+  orbAlive = true;
+  sceneContainer.classList.remove('orb-css-on');   // hide the CSS fallback
+  // Start the render loop (animate is hoisted; clock/running declared below).
+  if (!running && !document.hidden && !arcadeSuspended) {
+    running = true; clock.getDelta(); requestAnimationFrame(animate);
+  }
+}
+
+function teardownOrb() {
+  // Stop the loop, dispose every GPU resource, and DROP the WebGL context so the
+  // emulator is the only context on the page. Never throws.
+  running = false; orbAlive = false;
+  sceneContainer.classList.add('orb-css-on');       // show the CSS fallback
+  try {
+    if (scene) scene.traverse((o) => {
+      if (o.geometry && o.geometry.dispose) o.geometry.dispose();
+      const m = o.material;
+      if (m) (Array.isArray(m) ? m : [m]).forEach((mm) => { if (mm && mm.dispose) mm.dispose(); });
+    });
+  } catch (_) {}
+  try { if (composer && composer.dispose) composer.dispose(); } catch (_) {}
+  try { if (bloom && bloom.dispose) bloom.dispose(); } catch (_) {}
+  try {
+    if (renderer) {
+      renderer.forceContextLoss();
+      renderer.dispose();
+      const el = renderer.domElement;
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    }
+  } catch (_) {}
+  renderer = scene = camera = avatar = orb = particles = halo = haloMat =
+    composer = bloom = chromaScan = null;
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // AMPLITUDE SIMULATION — drives orb visuals based on current state
@@ -2227,10 +2423,10 @@ function updateAmp(t, dt, state) {
 // ANIMATE — paused while the page is hidden (battery on mobile)
 // ════════════════════════════════════════════════════════════════════════════
 const clock = new THREE.Clock();
-let running = true;
+let running = false;   // initOrb() turns this on once the scene exists
 
 function animate() {
-  if (!running) return;
+  if (!running || !orbAlive) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   const t  = clock.getElapsedTime();
   const state = window.__jarvisState || 'idle';
@@ -2253,19 +2449,21 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-// Hide the loader on first frame
+// Build the orb (starts its own render loop), then hide the loader on the
+// first frame.
+initOrb();
 requestAnimationFrame(() => {
   const l = document.getElementById('orb-loader');
   if (l) {
     l.classList.add('hidden');
     setTimeout(() => l.remove(), 600);
   }
-  animate();
 });
 
 // Resize observer — keep orb sized to the .scene container if it ever
 // changes (e.g. iPhone rotation, dynamic Type changes, etc.)
 const ro = new ResizeObserver(() => {
+  if (!orbAlive || !renderer) return;   // no-op while the orb is torn down
   const s = getSize();
   if (s.w === 0 || s.h === 0) return;
   renderer.setSize(s.w, s.h);
@@ -2278,10 +2476,25 @@ ro.observe(sceneContainer);
 
 // Pause the render loop while the tab/PWA is backgrounded — saves a lot
 // of phone battery on a tile that's redrawing 60 times a second.
+// The arcade overlay can suspend the orb's WebGL loop so two WebGL contexts
+// don't run concurrently on the phone (a known renderer-crash trigger).
+// arcadeSuspended keeps a foreground/visibility event from un-pausing it
+// while the game is still open.
+window.__orbPause = () => {
+  // Arcade is opening: fully release the orb's WebGL context so EmulatorJS is
+  // the only WebGL context on the page. The CSS orb covers the disc meanwhile.
+  arcadeSuspended = true;
+  try { teardownOrb(); } catch (_) {}
+};
+window.__orbResume = () => {
+  // Arcade closed: rebuild the orb from scratch and resume the render loop.
+  arcadeSuspended = false;
+  try { initOrb(); } catch (_) {}
+};
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     running = false;
-  } else if (!running) {
+  } else if (!running && !arcadeSuspended && orbAlive) {
     running = true;
     clock.getDelta(); // reset so we don't burn an old long delta
     requestAnimationFrame(animate);
@@ -2571,7 +2784,7 @@ function onWalletSendResult(data) {
 }
 
 // ── WIRE UP ─────────────────────────────────────────────────────────────────
-walletOpenBtn.addEventListener('click',    openWallet);
+if (walletOpenBtn) walletOpenBtn.addEventListener('click', openWallet);  // header btn moved to the orb menu
 walletCloseBtn.addEventListener('click',   closeWallet);
 walletRefreshBtn.addEventListener('click', () => { refreshBalance(); refreshHistory(); });
 walletReceiveBtn.addEventListener('click', openReceive);
@@ -2590,6 +2803,475 @@ document.getElementById('send-confirm-btn').addEventListener('click', confirmSen
 [receiveModal, sendModal].forEach(m => {
   m.addEventListener('click', (e) => { if (e.target === m) m.classList.remove('active'); });
 });
+</script>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// DROP-IN — feed Chloe an image, link, or text. Two destinations:
+//   • ADD TO BRAIN → POST to brain_http's /api/brain/ingest (vision-describes
+//     images, fetches URLs, ingests text into the wiki). Reuses the desktop
+//     DROP IN backend verbatim. Reached over the Tailscale-serve path
+//     (/brain-api → localhost:6790) on HTTPS, or :6790 directly on local HTTP.
+//   • ASK CHLOE → send it straight into the chat. Images ride as a vision
+//     content-block the backend already routes to its vision model; links/text
+//     go as a normal chat turn. The reply streams + speaks like any other.
+// This script runs LAST, so every global from the earlier scripts (ws, busy,
+// chatHistory, appendMsg, setState, wsSendObj, CHAT_SYSTEM…) is initialized.
+// ─────────────────────────────────────────────────────────────────────────────
+const BRAIN_API = (() => {
+  const b = new URLSearchParams(location.search).get('brain');
+  if (b) return b.replace(/\/+$/, '');
+  // On HTTPS (the iPhone path) mixed-content blocks a direct :6790 call, so we
+  // go same-origin through the Tailscale-serve path. On local HTTP dev we can
+  // hit brain_http directly.
+  if (location.protocol === 'https:') return location.origin + '/brain-api';
+  return 'http://' + (location.hostname || 'localhost') + ':6790';
+})();
+
+// ─── Game panels (chess + arcade) — full-screen overlays served via BRAIN_API.
+// On HTTPS this loads /brain-api/<panel>.html (so the panel's relative calls and
+// the chess panel's wss://host/chloe-ws all resolve through the same proxy the
+// PWA already uses); on local HTTP it hits :6790 directly.
+function toggleMobileGame(which, open) {
+  const ov = document.getElementById(which === 'chess' ? 'm-chess-overlay' : 'm-arcade-overlay');
+  const f  = document.getElementById(which === 'chess' ? 'm-chess-iframe'  : 'm-arcade-iframe');
+  if (!ov || !f) return;
+  const file = which === 'chess' ? 'chess.html' : 'emulator-mobile.html';
+  if (open) {
+    try { window.__orbPause && window.__orbPause(); } catch (_) {}  // free the orb's WebGL while playing
+    f.src = BRAIN_API + '/' + file + '?t=' + Date.now(); ov.classList.add('on');
+  } else {
+    // Tell the backend to stop any running watch loop so Chloe's commentary
+    // (which plays on the desktop) doesn't keep going after we leave the arcade.
+    if (which === 'arcade') { try { wsSendObj({ type: 'game_watch_stop' }); } catch (_) {} }
+    ov.classList.remove('on'); f.src = 'about:blank';
+    try { window.__orbResume && window.__orbResume(); } catch (_) {}
+  }
+}
+(function wireGameButtons() {
+  const map = [
+    ['m-chess-btn',  () => toggleMobileGame('chess', true)],
+    ['m-arcade-btn', () => toggleMobileGame('arcade', true)],
+    ['m-chess-close',  () => toggleMobileGame('chess', false)],
+    ['m-arcade-close', () => toggleMobileGame('arcade', false)],
+  ];
+  for (const [id, fn] of map) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+  }
+})();
+
+// ─── Crash / suspend recovery ───────────────────────────────────────────────
+// EmulatorJS (WebGL) can get the iOS web-content process killed under memory
+// pressure — the PWA then reloads to the splash, and on a bfcache restore the
+// game overlay could otherwise stay "on" with a dead iframe, hiding the CHESS /
+// ARCADE launch buttons until a full app restart. This guarantees that any
+// return to the page closes the game overlays and frees the iframe, so the menu
+// is always reachable again without quitting the app.
+function recoverFromGame() {
+  document.querySelectorAll('.game-overlay').forEach((o) => o.classList.remove('on'));
+  document.querySelectorAll('.game-overlay iframe').forEach((f) => {
+    if (f.src && f.src !== 'about:blank') f.src = 'about:blank';
+  });
+  try { wsSendObj({ type: 'game_watch_stop' }); } catch (_) {}
+  try { window.__orbResume && window.__orbResume(); } catch (_) {}
+}
+// pageshow fires on every load AND on bfcache restore (persisted=true).
+window.addEventListener('pageshow', () => recoverFromGame());
+// Returning to the tab after the game's process died: tear the overlay down so
+// we land on the menu rather than a black/frozen iframe.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    const arcadeOpen = document.getElementById('m-arcade-overlay');
+    const f = document.getElementById('m-arcade-iframe');
+    // Only auto-recover the arcade if its iframe has been blanked/lost.
+    if (arcadeOpen && arcadeOpen.classList.contains('on') && f && (!f.src || f.src === 'about:blank')) {
+      recoverFromGame();
+    }
+  }
+});
+
+const dropinOpenBtn  = document.getElementById('dropin-open-btn');
+const dropinModal    = document.getElementById('dropin-modal');
+const dropinStatus   = document.getElementById('dropin-status');
+const dropinTitleEl  = document.getElementById('dropin-title');
+const dropinUrlEl    = document.getElementById('dropin-url');
+const dropinTextEl   = document.getElementById('dropin-text');
+const dropinFileEl   = document.getElementById('dropin-file');
+const dropinPreview  = document.getElementById('dropin-preview');
+const dropinBrainBtn = document.getElementById('dropin-brain-btn');
+const dropinAskBtn   = document.getElementById('dropin-ask-btn');
+
+let dropinTab = 'image';   // 'image' | 'link' | 'text'
+let dropinImage = null;    // { dataUrl, b64, mediaType, name }
+
+function setDropinTab(tab) {
+  dropinTab = tab;
+  document.querySelectorAll('.dropin-tab').forEach((t) =>
+    t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.dropin-pane').forEach((p) =>
+    p.classList.toggle('active', p.dataset.pane === tab));
+  setDropinStatus('');
+}
+
+function setDropinStatus(msg, kind) {
+  dropinStatus.textContent = msg || '';
+  dropinStatus.className = 'modal-status' + (kind ? ' ' + kind : '');
+}
+
+function openDropin() {
+  dropinTitleEl.value = '';
+  dropinUrlEl.value = '';
+  dropinTextEl.value = '';
+  dropinFileEl.value = '';
+  dropinImage = null;
+  dropinPreview.innerHTML = '';
+  setDropinStatus('');
+  setDropinTab('image');
+  dropinModal.classList.add('active');
+}
+function closeDropin() { dropinModal.classList.remove('active'); }
+
+// Downscale a picked image before sending. iPhone photos are ~4000px / several
+// MB; the WS frame cap is 8MB and vision is faster on smaller images. Returns
+// { dataUrl, b64, mediaType, name }.
+function loadAndDownscaleImage(file, maxDim) {
+  maxDim = maxDim || 1280;
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('file read failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image decode failed'));
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        w = Math.round(w * scale); h = Math.round(h * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        resolve({
+          dataUrl: dataUrl,
+          b64: dataUrl.split(',')[1] || '',
+          mediaType: 'image/jpeg',
+          name: file.name || 'photo.jpg',
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+dropinFileEl.addEventListener('change', async () => {
+  const file = dropinFileEl.files && dropinFileEl.files[0];
+  if (!file) { dropinImage = null; dropinPreview.innerHTML = ''; return; }
+  setDropinStatus('processing image…');
+  try {
+    dropinImage = await loadAndDownscaleImage(file);
+    dropinPreview.innerHTML = '';
+    const im = document.createElement('img');
+    im.src = dropinImage.dataUrl;
+    dropinPreview.appendChild(im);
+    setDropinStatus('');
+  } catch (e) {
+    dropinImage = null;
+    setDropinStatus("couldn't read that image: " + (e.message || e), 'error');
+  }
+});
+
+// base64 (no data: prefix) → Blob, for multipart upload to /api/brain/ingest.
+function b64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Blob([u8], { type: mime });
+}
+
+async function dropinToBrain() {
+  const title = dropinTitleEl.value.trim();
+  try {
+    let resp;
+    if (dropinTab === 'image') {
+      if (!dropinImage) { setDropinStatus('pick an image first', 'error'); return; }
+      const fd = new FormData();
+      fd.append('file', b64ToBlob(dropinImage.b64, dropinImage.mediaType), dropinImage.name);
+      if (title) fd.append('title', title);
+      setDropinStatus('describing + ingesting image…');
+      resp = await fetch(BRAIN_API + '/api/brain/ingest', { method: 'POST', body: fd });
+    } else if (dropinTab === 'link') {
+      const url = dropinUrlEl.value.trim();
+      if (!url) { setDropinStatus('enter a URL first', 'error'); return; }
+      setDropinStatus('fetching + ingesting link…');
+      resp = await fetch(BRAIN_API + '/api/brain/ingest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url, title: title }),
+      });
+    } else {
+      const text = dropinTextEl.value.trim();
+      if (!text) { setDropinStatus('enter some text first', 'error'); return; }
+      setDropinStatus('ingesting text…');
+      resp = await fetch(BRAIN_API + '/api/brain/ingest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, title: title }),
+      });
+    }
+    const out = await resp.json().catch(() => ({}));
+    if (!resp.ok || out.error) {
+      setDropinStatus('ingest failed: ' + (out.error || resp.status), 'error');
+      return;
+    }
+    const slug = out.slug || out.title || 'ok';
+    const sim = Array.isArray(out.similar) ? out.similar.length : 0;
+    setDropinStatus('added to brain → ' + slug + (sim ? ' (' + sim + ' related)' : ''), 'ok');
+    setTimeout(closeDropin, 1300);
+  } catch (e) {
+    // A failed HTTPS fetch here almost always means the /brain-api Tailscale
+    // path isn't configured yet — surface that hint rather than a bare error.
+    setDropinStatus("couldn't reach the brain server (" + (e.message || e) +
+      '). On HTTPS this needs the /brain-api Tailscale-serve path — see setup.', 'error');
+  }
+}
+
+function dropinAskChloe() {
+  if (busy) { setDropinStatus('Chloe is busy — wait for the current reply', 'error'); return; }
+  if (!wsReady) { setDropinStatus('not connected', 'error'); return; }
+  const caption = dropinTitleEl.value.trim();
+  let userMsg, histMsg, label;
+  if (dropinTab === 'image') {
+    if (!dropinImage) { setDropinStatus('pick an image first', 'error'); return; }
+    const captionText = caption || 'What is this? Describe what you see.';
+    userMsg = { role: 'user', content: [
+      { type: 'text', text: captionText },
+      { type: 'image', source: { type: 'base64',
+        media_type: dropinImage.mediaType, data: dropinImage.b64 } },
+    ] };
+    // Keep history light: don't retain the full base64 image across turns.
+    histMsg = { role: 'user', content: '[sent an image] ' + captionText };
+    label = '🖼 ' + (caption || 'image');
+  } else if (dropinTab === 'link') {
+    const url = dropinUrlEl.value.trim();
+    if (!url) { setDropinStatus('enter a URL first', 'error'); return; }
+    const body = caption ? (caption + '\n' + url) : url;
+    userMsg = { role: 'user', content: body };
+    histMsg = userMsg;
+    label = '🔗 ' + body;
+  } else {
+    const text = dropinTextEl.value.trim();
+    if (!text) { setDropinStatus('enter some text first', 'error'); return; }
+    const body = caption ? (caption + '\n' + text) : text;
+    userMsg = { role: 'user', content: body };
+    histMsg = userMsg;
+    label = body;
+  }
+  appendMsg('me', label);
+  const payload = chatHistory.concat([userMsg]);
+  chatHistory.push(histMsg);
+  trimHistory();
+  busy = true; sendBtn.disabled = true; setState('thinking');
+  const ok = wsSendObj({
+    type: 'chat', messages: payload, system: CHAT_SYSTEM,
+    max_tokens: 1024, reply_audio: true,
+  });
+  if (!ok) {
+    busy = false; sendBtn.disabled = false; setState('idle');
+    appendMsg('chloe', '[error] not connected', { error: true });
+    return;
+  }
+  closeDropin();
+}
+
+dropinOpenBtn.addEventListener('click', openDropin);
+document.getElementById('dropin-close-btn').addEventListener('click', closeDropin);
+document.getElementById('dropin-cancel-btn').addEventListener('click', closeDropin);
+dropinBrainBtn.addEventListener('click', dropinToBrain);
+dropinAskBtn.addEventListener('click', dropinAskChloe);
+document.querySelectorAll('.dropin-tab').forEach((t) =>
+  t.addEventListener('click', () => setDropinTab(t.dataset.tab)));
+dropinModal.addEventListener('click', (e) => { if (e.target === dropinModal) closeDropin(); });
+</script>
+
+<script>
+// ─────────────────────────────────────────────────────────────────────────────
+// RECENT CHATS — browse past conversation sessions over the WS.
+//   sessions_list  -> sessions_result {sessions:[{start_ts,title,preview,n_turns,modalities}]}
+//   session_get    -> session_result  {start_ts,title,turns:[{role,content}]}
+//   session_resume -> session_resumed {ok,n_turns}  (rehydrates Chloe's context)
+// ─────────────────────────────────────────────────────────────────────────────
+const sessionsSheet     = document.getElementById('sessions-sheet');
+const sessionsListEl    = document.getElementById('sessions-list');
+const sessionsEmptyEl   = document.getElementById('sessions-empty');
+const sessionsListView  = document.getElementById('sessions-listview');
+const sessionView       = document.getElementById('session-view');
+const sessionViewTitle  = document.getElementById('session-view-title');
+const sessionViewTurns  = document.getElementById('session-view-turns');
+const sessionResumeBtn  = document.getElementById('session-resume-btn');
+const sessionResumeStat = document.getElementById('session-resume-status');
+let _openSessionTs = null;
+
+function fmtSessionTime(ts) {
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.toDateString() === now.toDateString()) return 'Today ' + time;
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return 'Yesterday ' + time;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+}
+
+function openSessions() {
+  sessionView.style.display = 'none';
+  sessionsListView.style.display = '';
+  sessionsListEl.innerHTML = '';
+  sessionsEmptyEl.style.display = '';
+  sessionsEmptyEl.textContent = wsReady ? 'loading…' : 'not connected';
+  sessionsSheet.classList.add('active');
+  if (wsReady) wsSendObj({ type: 'sessions_list', limit: 40 });
+}
+function closeSessions() { sessionsSheet.classList.remove('active'); }
+
+function onSessionsResult(data) {
+  if (!data.ok) {
+    sessionsEmptyEl.style.display = '';
+    sessionsEmptyEl.textContent = "couldn't load sessions: " + (data.error || '?');
+    return;
+  }
+  const list = Array.isArray(data.sessions) ? data.sessions : [];
+  sessionsListEl.innerHTML = '';
+  if (!list.length) {
+    sessionsEmptyEl.style.display = '';
+    sessionsEmptyEl.textContent = 'no conversations yet';
+    return;
+  }
+  sessionsEmptyEl.style.display = 'none';
+  for (const s of list) {
+    const row = document.createElement('div');
+    row.className = 'session-row';
+    const main = document.createElement('div');
+    main.className = 's-main';
+    const title = document.createElement('div');
+    title.className = 's-title';
+    title.textContent = s.title || s.preview || '(untitled)';
+    const meta = document.createElement('div');
+    meta.className = 's-meta';
+    const mods = (s.modalities || []).join('/');
+    meta.textContent = fmtSessionTime(s.start_ts) + ' · ' + (s.n_turns || 0)
+                       + ' turns' + (mods ? ' · ' + mods : '');
+    main.appendChild(title); main.appendChild(meta);
+    main.addEventListener('click', () => openSessionView(s.start_ts));
+    const del = document.createElement('button');
+    del.className = 's-del'; del.textContent = '×'; del.title = 'delete chat';
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSession(s.start_ts, s.title || s.preview || '');
+    });
+    row.appendChild(main); row.appendChild(del);
+    sessionsListEl.appendChild(row);
+  }
+}
+
+function openSessionView(start_ts) {
+  _openSessionTs = start_ts;
+  sessionsListView.style.display = 'none';
+  sessionView.style.display = '';
+  sessionViewTitle.textContent = 'loading…';
+  sessionViewTurns.innerHTML = '';
+  sessionResumeStat.textContent = '';
+  if (wsReady) wsSendObj({ type: 'session_get', start_ts: start_ts });
+}
+
+function onSessionResult(data) {
+  if (!data.ok) {
+    sessionViewTitle.textContent = "couldn't load: " + (data.error || '?');
+    return;
+  }
+  sessionViewTitle.textContent = data.title || 'conversation';
+  sessionViewTurns.innerHTML = '';
+  for (const t of (data.turns || [])) {
+    const wrap = document.createElement('div');
+    wrap.className = 's-turn ' + (t.role === 'user' ? 'user' : 'chloe');
+    const role = document.createElement('span');
+    role.className = 's-role';
+    role.textContent = t.role === 'user' ? 'YOU' : 'CHLOE';
+    const body = document.createElement('div');
+    body.className = 's-body';
+    body.textContent = t.content || '';
+    wrap.appendChild(role); wrap.appendChild(body);
+    sessionViewTurns.appendChild(wrap);
+  }
+}
+
+function resumeSession() {
+  if (_openSessionTs == null) return;
+  if (!wsReady) {
+    sessionResumeStat.textContent = 'not connected';
+    sessionResumeStat.className = 'modal-status error';
+    return;
+  }
+  sessionResumeStat.textContent = 'resuming…';
+  sessionResumeStat.className = 'modal-status';
+  wsSendObj({ type: 'session_resume', start_ts: _openSessionTs });
+}
+
+function onSessionResumed(data) {
+  if (!data.ok) {
+    sessionResumeStat.textContent = 'resume failed: ' + (data.error || '?');
+    sessionResumeStat.className = 'modal-status error';
+    return;
+  }
+  closeSessions();
+  appendMsg('chloe', "↺ resumed this chat — I've got the thread back ("
+            + (data.n_turns || 0) + ' turns of context).');
+}
+
+function deleteSession(ts, label) {
+  if (!confirm('Delete this chat? This removes it permanently.'
+               + (label ? '\n\n' + label : ''))) return;
+  if (wsReady) wsSendObj({ type: 'session_delete', start_ts: ts });
+}
+function onSessionDeleted(data) {
+  if (!data.ok) {
+    sessionsEmptyEl.style.display = '';
+    sessionsEmptyEl.textContent = 'delete failed: ' + (data.error || '?');
+    return;
+  }
+  // If we were viewing the just-deleted session, drop back to the list.
+  sessionView.style.display = 'none';
+  sessionsListView.style.display = '';
+  if (wsReady) wsSendObj({ type: 'sessions_list', limit: 40 });  // refresh
+}
+function newChat() {
+  if (!wsReady) return;
+  wsSendObj({ type: 'session_new' });
+}
+function onSessionNewDone(data) {
+  closeSessions();
+  if (data.ok) appendMsg('chloe', "✦ fresh start — cleared the context. what's up?");
+}
+
+// Tapping the orb opens a small hub menu (Recent Chats + Wallet) — keeps the
+// header clear for the CHLOE // MOBILE wordmark.
+const orbMenu = document.getElementById('orb-menu');
+function openOrbMenu() { orbMenu.classList.add('active'); }
+function closeOrbMenu() { orbMenu.classList.remove('active'); }
+const _orbFrameEl = document.querySelector('.orb-frame');
+if (_orbFrameEl) _orbFrameEl.addEventListener('click', openOrbMenu);
+document.getElementById('orb-menu-chats').addEventListener('click', () => { closeOrbMenu(); openSessions(); });
+document.getElementById('orb-menu-wallet').addEventListener('click', () => { closeOrbMenu(); openWallet(); });
+document.getElementById('orb-menu-close').addEventListener('click', closeOrbMenu);
+orbMenu.addEventListener('click', (e) => { if (e.target === orbMenu) closeOrbMenu(); });
+document.getElementById('sessions-close-btn').addEventListener('click', closeSessions);
+document.getElementById('sessions-newchat-btn').addEventListener('click', newChat);
+document.getElementById('session-delete-btn').addEventListener('click', () => {
+  if (_openSessionTs != null) deleteSession(_openSessionTs, sessionViewTitle.textContent);
+});
+document.getElementById('session-back-btn').addEventListener('click', () => {
+  sessionView.style.display = 'none';
+  sessionsListView.style.display = '';
+});
+sessionResumeBtn.addEventListener('click', resumeSession);
+sessionsSheet.addEventListener('click', (e) => { if (e.target === sessionsSheet) closeSessions(); });
 </script>
 
 </body>

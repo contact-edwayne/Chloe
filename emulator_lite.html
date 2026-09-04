@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>chloe · arcade</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink-0:#06070b; --ink-1:#0a0b10; --ink-2:#0d0f16; --ink-3:#11141e;
+    --line:#1d2230; --line-2:#262c40; --fog:#5a6584; --fog-2:#8893b3;
+    --text:#d6deef; --text-dim:#97a1bf;
+    --cyan:#22d3ee; --cyan-1:#00e5ff; --cyan-2:#8cf0ff;
+    --violet:#b06cff; --violet-1:#d2a7ff; --pink:#ff6ec7; --gold:#f8d676; --red:#ff5d7a;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+    --sans:'Inter',system-ui,sans-serif;
+    --serif:'Cormorant Garamond',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(1100px 600px at 15% -10%,rgba(34,211,238,.06),transparent 60%),
+               radial-gradient(900px 600px at 110% 110%,rgba(176,108,255,.05),transparent 60%),var(--ink-0);
+    color:var(--text); font-family:var(--sans);
+    display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* ── header ── */
+  header{
+    display:flex; align-items:center; gap:16px; padding:10px 170px 10px 18px;
+    border-bottom:1px solid var(--line); flex:0 0 auto;
+  }
+  .orb{width:18px;height:18px;border-radius:50%;flex:0 0 auto;
+    background:radial-gradient(circle at 35% 30%,#f6fbff,#8cf0ff 22%,#22d3ee 50%,#0a2b3a 100%);
+    box-shadow:0 0 10px rgba(34,211,238,.7),0 0 22px rgba(34,211,238,.3)}
+  .orb.think{animation:pulse 1.3s ease-in-out infinite}
+  @keyframes pulse{50%{box-shadow:0 0 14px rgba(176,108,255,.85),0 0 34px rgba(255,110,199,.4)}}
+  .brand{font-family:var(--mono);font-size:13px;letter-spacing:.18em;color:var(--cyan-2);
+    text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.4);white-space:nowrap}
+  .sysfilter{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--fog-2);background:var(--ink-3);border:1px solid var(--line-2);padding:5px 9px;
+    cursor:pointer;border-radius:3px;transition:all .15s}
+  .chip.on{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.18),rgba(34,211,238,.04));
+    box-shadow:0 0 8px rgba(34,211,238,.3)}
+  .spacer{flex:1}
+  .btn{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--cyan-2);background:var(--ink-3);border:1px solid var(--line-2);padding:8px 12px;
+    cursor:pointer;border-radius:3px;transition:all .15s;white-space:nowrap}
+  .btn:hover{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.16),rgba(34,211,238,.03))}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .btn.watch-on{color:#fff;border-color:var(--violet);background:linear-gradient(180deg,rgba(176,108,255,.22),rgba(176,108,255,.05));box-shadow:0 0 10px rgba(176,108,255,.35)}
+  /* ── pulse strip: animated orb + flowing waveform reacting to Chloe's state ── */
+  .pulse{position:relative;display:flex;align-items:center;gap:14px;padding:6px 18px;
+    border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(34,211,238,.04),rgba(176,108,255,.04));
+    overflow:hidden;flex:0 0 auto;min-height:42px}
+  .pulse::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(220px 60px at 0% 50%,rgba(34,211,238,.10),transparent 70%),
+               radial-gradient(220px 60px at 100% 50%,rgba(176,108,255,.10),transparent 70%)}
+  .pulse-orb{position:relative;width:30px;height:30px;flex:0 0 auto;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#f6fbff,#8cf0ff 22%,#22d3ee 50%,#063543 100%);
+    box-shadow:0 0 14px rgba(34,211,238,.7),0 0 32px rgba(34,211,238,.35),inset 0 0 8px rgba(0,229,255,.55);
+    transition:box-shadow .4s ease, background .4s ease, transform .4s ease}
+  .pulse-orb::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:1px solid rgba(34,211,238,.4);
+    box-shadow:0 0 12px rgba(34,211,238,.4) inset; animation:orbRing 3.4s ease-in-out infinite}
+  .pulse-orb.thinking{background:radial-gradient(circle at 35% 30%,#fff,#d2a7ff 22%,#b06cff 55%,#1a0a35 100%);
+    box-shadow:0 0 16px rgba(176,108,255,.85),0 0 38px rgba(176,108,255,.45),inset 0 0 10px rgba(210,167,255,.6);
+    transform:scale(1.05); animation:orbThink 1.05s ease-in-out infinite}
+  .pulse-orb.speaking{background:radial-gradient(circle at 35% 30%,#fff,#ffc6e5 20%,#ff6ec7 55%,#350a26 100%);
+    box-shadow:0 0 18px rgba(255,110,199,.85),0 0 44px rgba(255,110,199,.5),inset 0 0 12px rgba(255,198,229,.6);
+    transform:scale(1.08); animation:orbSpeak 0.55s ease-in-out infinite}
+  @keyframes orbRing{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.18);opacity:.15}}
+  @keyframes orbThink{50%{transform:scale(1.12)}}
+  @keyframes orbSpeak{50%{transform:scale(1.16)}}
+  .pulse-canvas{flex:1 1 auto;height:34px;display:block}
+  .pulse-tag{position:relative;font-family:var(--mono);font-size:9.5px;letter-spacing:.26em;
+    color:var(--cyan-2);text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.5);flex:0 0 auto;
+    transition:color .3s}
+  .pulse-tag.thinking{color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.6)}
+  .pulse-tag.speaking{color:var(--pink);text-shadow:0 0 10px rgba(255,110,199,.6)}
+  /* ── body: library + stage ── */
+  .body{flex:1 1 auto;display:flex;min-height:0}
+  aside{width:280px;flex:0 0 auto;border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--ink-1)}
+  .lib-head{font-family:var(--mono);font-size:9.5px;letter-spacing:.24em;color:var(--fog);text-transform:uppercase;
+    padding:10px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .lib-list{flex:1 1 auto;overflow-y:auto;padding:6px;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+  .rom{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;border-radius:3px;border:1px solid transparent}
+  .rom:hover{background:rgba(34,211,238,.06);border-color:var(--line-2)}
+  .rom.active{background:rgba(34,211,238,.12);border-color:var(--cyan-1)}
+  .rom .nm{flex:1;font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rom .sy{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;color:var(--cyan-2);border:1px solid currentColor;padding:1px 4px;border-radius:2px}
+  .lib-empty{color:var(--fog);font-size:11px;letter-spacing:.04em;padding:18px 14px;line-height:1.6}
+  .stage{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+  #emu{flex:1 1 auto;min-height:200px;position:relative;background:#000}
+  .standby{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    color:var(--fog);font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase}
+  /* ── save bar ── */
+  .savebar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid var(--line);background:var(--ink-2)}
+  .savebar .st{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--fog);margin-left:auto}
+  /* ── memory viewer ── */
+  .memviewer{position:absolute;inset:0;display:none;flex-direction:column;
+    background:rgba(6,7,11,.96);backdrop-filter:blur(3px);z-index:50}
+  .memviewer.on{display:flex}
+  .memviewer-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(90deg,rgba(176,108,255,.08),rgba(34,211,238,.04))}
+  .memviewer-head .tag{font-family:var(--mono);font-size:10px;letter-spacing:.24em;
+    color:var(--pink);text-transform:uppercase;text-shadow:0 0 8px rgba(255,110,199,.4)}
+  .memviewer-head .gn{flex:1;font-family:var(--serif);font-style:italic;
+    font-size:18px;color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.25);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .memviewer-body{flex:1;overflow-y:auto;padding:18px 22px;font-family:var(--mono);
+    font-size:12.5px;line-height:1.65;color:var(--text-dim);white-space:pre-wrap;
+    scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+  .memviewer-body em{color:var(--fog);font-style:italic;font-family:var(--sans);font-size:13px}
+  /* ── talk ── */
+  .talk{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 14px;background:linear-gradient(180deg,transparent,rgba(176,108,255,.03))}
+  .talk-log{max-height:90px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px;scrollbar-width:thin}
+  .talk-log:empty{display:none}
+  .tmsg{font-size:13px;line-height:1.4}
+  .tmsg .who{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;margin-right:8px}
+  .tmsg.you .who{color:var(--cyan-2)} .tmsg.you{color:var(--text-dim)}
+  .tmsg.chloe .who{color:var(--pink)} .tmsg.chloe{color:var(--violet-1);font-family:var(--serif);font-style:italic;font-size:15px}
+  .talk-row{display:flex;gap:8px}
+  .talk-in{flex:1;background:var(--ink-3);border:1px solid var(--line-2);color:var(--text);font-family:var(--sans);
+    font-size:13px;padding:9px 11px;outline:none;border-radius:3px}
+  .talk-in:focus{border-color:var(--cyan-1);box-shadow:0 0 10px rgba(34,211,238,.2)}
+  .talk-in::placeholder{color:var(--fog)}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">CHLOE // ARCADE</div>
+    <div class="sysfilter" id="sysfilter">
+      <span class="chip on" data-sys="all">ALL</span>
+      <span class="chip" data-sys="nes">NES</span>
+      <span class="chip" data-sys="gb">GB/GBC</span>
+      <span class="chip" data-sys="gba">GBA</span>
+      <span class="chip" data-sys="snes">SNES</span>
+      <span class="chip" data-sys="segaMD">GENESIS</span>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" id="btnRefresh">↻ Refresh</button>
+    <button class="btn" id="btnLoad">⇧ Load ROM…</button>
+    <input type="file" id="fileInput" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin" style="display:none">
+  </header>
+
+  <div class="pulse" id="pulse">
+    <div class="pulse-orb" id="pulseOrb"></div>
+    <canvas class="pulse-canvas" id="pulseCanvas"></canvas>
+    <div class="pulse-tag" id="pulseTag">IDLE</div>
+  </div>
+
+  <div class="body">
+    <aside>
+      <div class="lib-head"><span>ROM LIBRARY</span><span id="libCount">0</span></div>
+      <div class="lib-list" id="libList"><div class="lib-empty">loading…</div></div>
+    </aside>
+    <div class="stage">
+      <div id="emu"><div class="standby" id="standby">— standby — pick a game</div></div>
+      <div class="savebar">
+        <button class="btn" id="btnSave" disabled>▢ Save State</button>
+        <button class="btn" id="btnLoadState" disabled>▣ Load State</button>
+        <span class="st" id="saveStatus"></span>
+        <button class="btn" id="btnMemory">✦ Memory</button>
+        <button class="btn" id="btnWatch">◉ Chloe: Watch</button>
+      </div>
+      <div class="memviewer" id="memviewer">
+        <div class="memviewer-head">
+          <span class="tag">CHLOE REMEMBERS</span>
+          <span class="gn" id="memGame">—</span>
+          <button class="btn" id="btnMemRefresh">↻</button>
+          <button class="btn" id="btnMemClose">✕ Close</button>
+        </div>
+        <div class="memviewer-body" id="memBody">loading…</div>
+      </div>
+      <div class="talk">
+        <div class="talk-log" id="talkLog"></div>
+        <form class="talk-row" id="talkForm" autocomplete="off">
+          <input class="talk-in" id="talkIn" type="text" placeholder="say something to chloe…" maxlength="500">
+          <button class="btn" id="talkSend" type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const SYS = {
+    nes:{label:'NES'}, gb:{label:'GB/GBC'}, gba:{label:'GBA'},
+    snes:{label:'SNES'}, segaMD:{label:'GENESIS'},
+  };
+  const EXT_CORE = {nes:'nes',fds:'nes',gb:'gb',gbc:'gb',sgb:'gb',gba:'gba',
+                    sfc:'snes',smc:'snes',md:'segaMD',gen:'segaMD',smd:'segaMD',bin:'segaMD'};
+
+  /* ── library ── */
+  let allRoms = [], filter = 'all', curGame = '', curFile = '';
+  function fmtSize(n){ return n>=1048576 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB'; }
+  async function loadLibrary(){
+    try{
+      const r = await fetch('api/roms', {cache:'no-store'});
+      const j = await r.json();
+      allRoms = j.roms || [];
+    }catch(e){ allRoms = []; }
+    renderLibrary();
+  }
+  function renderLibrary(){
+    const list = $('libList');
+    const roms = allRoms.filter(r => filter==='all' || r.system===filter);
+    $('libCount').textContent = roms.length;
+    if(!roms.length){
+      list.innerHTML = '<div class="lib-empty">no roms found.<br>drop files in C:\\Chloe\\roms,<br>or use Load ROM…</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for(const rom of roms){
+      const el = document.createElement('div');
+      el.className = 'rom'; el.dataset.file = rom.file;
+      const sy = (SYS[rom.system]||{}).label || rom.system;
+      el.innerHTML = `<span class="nm"></span><span class="sy">${sy}</span>`;
+      el.querySelector('.nm').textContent = rom.name.replace(/\.[^.]+$/,'');
+      if(rom.file === curFile) el.classList.add('active');
+      el.addEventListener('click', () => {
+        // Fresh page per game: EmulatorJS does not cleanly re-init in one document.
+        // Cache-buster `t` forces reload even when re-picking the same ROM.
+        location.replace('?g='+encodeURIComponent(rom.file)+'&sys='+encodeURIComponent(rom.system)+'&t='+Date.now());
+      });
+      list.appendChild(el);
+    }
+  }
+  $('sysfilter').addEventListener('click', e=>{
+    const c = e.target.closest('.chip'); if(!c) return;
+    filter = c.dataset.sys;
+    document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+    renderLibrary();
+  });
+  $('btnRefresh').addEventListener('click', loadLibrary);
+
+  /* ── file picker ── */
+  $('btnLoad').addEventListener('click', ()=> $('fileInput').click());
+  $('fileInput').addEventListener('change', async e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const ext = (f.name.split('.').pop()||'').toLowerCase();
+    const core = EXT_CORE[ext];
+    if(!core){ alert("i don't recognize that file type."); return; }
+    // Stash bytes on the backend, then load via a fresh page (reload-per-game).
+    try{
+      const buf = await f.arrayBuffer();
+      const r = await fetch('api/tmprom', {method:'POST', body:buf});
+      if(!r.ok) throw new Error('upload failed');
+      location.replace('?tmp=1&sys='+encodeURIComponent(core)+'&name='+encodeURIComponent(f.name.replace(/\.[^.]+$/,''))+'&t='+Date.now());
+    }catch(err){ console.error(err); alert('could not load that file.'); }
+  });
+
+  /* ── EmulatorJS lifecycle — it OWNS #emu (native bar/fullscreen/settings) ── */
+  const EJS_KEYS = ['EJS_player','EJS_core','EJS_gameUrl','EJS_pathtodata','EJS_startOnLoaded',
+    'EJS_gameName','EJS_ready','EJS_onGameStart','EJS_emulator','EJS_volume','EJS_color'];
+  let gameReady = false, blobUrl = null;
+  function teardown(){
+    try{ if(window.EJS_emulator && typeof window.EJS_emulator.exit==='function') window.EJS_emulator.exit(); }catch(_){}
+    $('emu').innerHTML = '<div id="emu-inner"></div>';
+    document.querySelectorAll('script[data-ejs]').forEach(s=>s.remove());
+    for(const k of EJS_KEYS){ try{ delete window[k]; }catch(_){ window[k]=undefined; } }
+    if(blobUrl){ try{ URL.revokeObjectURL(blobUrl); }catch(_){} blobUrl=null; }
+    gameReady = false;
+    $('btnSave').disabled = true; $('btnLoadState').disabled = true;
+    try{ stopAutoSave(); }catch(_){}
+  }
+  function startGame(core, url, name){
+    teardown();
+    curGame = name || 'game';
+    if(url.startsWith('blob:')) blobUrl = url;
+    window.EJS_player = '#emu-inner';
+    window.EJS_core = core;
+    window.EJS_gameUrl = url;
+    window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+    window.EJS_startOnLoaded = true;
+    window.EJS_gameName = name;
+    window.EJS_ready = onGameReady;
+    window.EJS_onGameStart = onGameReady;
+    // Disable EmulatorJS' IndexedDB ROM cache. Without this, a partial cache
+    // from a previous load can stick — second time you boot a game it hangs
+    // at "download game data" until Chloe restarts.
+    // We persist save states explicitly via /api/savestate, so we don't need
+    // EmulatorJS' database layer at all.
+    window.EJS_disableDatabases = true;
+    const s = document.createElement('script');
+    // Cache-bust loader.js so the iframe never reuses a stale loader from
+    // a partially-completed previous load (the root cause of the gray screen).
+    s.src = 'https://cdn.emulatorjs.org/stable/data/loader.js?v=' + Date.now();
+    s.dataset.ejs = '1';
+    document.body.appendChild(s);
+    setSays('booting ' + (SYS[core]||{label:core}).label + '…');
+  }
+  function onGameReady(){
+    gameReady = true;
+    $('btnSave').disabled = false; $('btnLoadState').disabled = false;
+    $('saveStatus').textContent = '';
+    // Auto-resume: if a save exists for this game, restore it transparently.
+    tryAutoResume();
+    // Auto-save: kick the periodic timer (cleared by teardown).
+    startAutoSave();
+    guardContextLoss();
+  }
+
+  /* ── auto-save / auto-resume — persisted server-side per game.
+        On game-ready: fetch any existing state and quietly load it (resume).
+        Then start a 30s loop that snapshots `gameManager.getState()` and
+        POSTs to /api/savestate?game=<name>. Manual Save/Load State still
+        work — they share the same single per-game slot. ── */
+  let autosaveTimer = null;
+  const AUTOSAVE_MS = 30000;
+  async function tryAutoResume(){
+    if(!curGame) return;
+    try{
+      const r = await fetch('api/savestate?game='+encodeURIComponent(curGame),
+                            {cache:'no-store'});
+      if(!r.ok) return;            // 404 = no save yet, fine.
+      const buf = await r.arrayBuffer();
+      if(!buf || !buf.byteLength) return;
+      const m = gm();
+      if(!m || typeof m.loadState!=='function') return;
+      // Wait a beat — EmulatorJS sometimes needs a frame before loadState
+      // is safe to call after onGameReady.
+      await new Promise(res => setTimeout(res, 500));
+      m.loadState(new Uint8Array(buf));
+      setSaveStatus('resumed where you left off');
+    }catch(e){ /* silent — first launch / no save is the common case */ }
+  }
+  async function autoSaveTick(){
+    if(!gameReady || !curGame) return;
+    const m = gm();
+    if(!m || typeof m.getState!=='function') return;
+    let state;
+    try{ state = m.getState(); }catch(_){ return; }
+    if(!state || !state.length) return;
+    try{
+      const r = await fetch('api/savestate?game='+encodeURIComponent(curGame),
+                            {method:'POST', body:state});
+      if(r.ok){
+        const t = new Date();
+        const hh = t.getHours()%12||12, mm = String(t.getMinutes()).padStart(2,'0');
+        const ap = t.getHours()<12?'am':'pm';
+        setSaveStatus(`autosaved · ${hh}:${mm}${ap}`);
+      }
+    }catch(_){}
+  }
+  function startAutoSave(){
+    stopAutoSave();
+    autosaveTimer = setInterval(autoSaveTick, AUTOSAVE_MS);
+  }
+  function stopAutoSave(){
+    if(autosaveTimer){ clearInterval(autosaveTimer); autosaveTimer=null; }
+  }
+
+  /* ── EXPLICIT save / load state → persisted on the backend per game ── */
+  function gm(){ return (window.EJS_emulator && window.EJS_emulator.gameManager) || null; }
+  $('btnSave').addEventListener('click', async ()=>{
+    const m = gm();
+    if(!m || typeof m.getState!=='function'){ setSaveStatus('save unavailable', true); return; }
+    let state;
+    try{ state = m.getState(); }catch(e){ console.error('getState failed', e); setSaveStatus('save failed', true); return; }
+    if(!state || !state.length){ setSaveStatus('nothing to save', true); return; }
+    try{
+      const r = await fetch('api/savestate?game='+encodeURIComponent(curGame), {method:'POST', body:state});
+      const j = await r.json().catch(()=>({}));
+      setSaveStatus(r.ok ? ('saved · '+Math.round((j.bytes||state.length)/1024)+'KB') : 'save failed', !r.ok);
+    }catch(e){ console.error('save POST failed', e); setSaveStatus('save failed', true); }
+  });
+  $('btnLoadState').addEventListener('click', async ()=>{
+    const m = gm();
+    if(!m || typeof m.loadState!=='function'){ setSaveStatus('load unavailable', true); return; }
+    try{
+      const r = await fetch('api/savestate?game='+encodeURIComponent(curGame), {cache:'no-store'});
+      if(!r.ok){ setSaveStatus('no saved state', true); return; }
+      const buf = await r.arrayBuffer();
+      m.loadState(new Uint8Array(buf));
+      setSaveStatus('loaded');
+    }catch(e){ console.error('load failed', e); setSaveStatus('load failed', true); }
+  });
+  function setSaveStatus(t, bad){ const e=$('saveStatus'); e.textContent=t; e.style.color = bad?'var(--red)':'var(--cyan-2)'; }
+
+  /* ── Chloe watch toggle → drives the screen-vision commentary loop ── */
+  let watching=false, frameTimer=null;
+  function syncWatchBtn(){
+    $('btnWatch').textContent = watching ? '◉ Watching' : '◉ Chloe: Watch';
+    $('btnWatch').classList.toggle('watch-on', watching);
+  }
+  // Find the EmulatorJS-injected <canvas> (it lives somewhere inside #emu).
+  function findGameCanvas(){
+    const root = $('emu'); if(!root) return null;
+    const cs = root.querySelectorAll('canvas');
+    let best=null, bestArea=0;
+    cs.forEach(c=>{ const a=(c.width||0)*(c.height||0); if(a>bestArea){ bestArea=a; best=c; } });
+    return best;
+  }
+  // Capture a frame WITHOUT preserveDrawingBuffer: read the live GL framebuffer
+  // inside a rAF (valid right after EmulatorJS paints), flip it (GL is bottom-up)
+  // into a 2D canvas, then toBlob. Falls back to a plain toBlob for 2D canvases.
+  function captureCanvasBlob(c){
+    return new Promise(resolve=>{
+      requestAnimationFrame(()=>{
+        try{
+          const gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+          if(gl && typeof gl.readPixels === 'function'){
+            const w=c.width, h=c.height;
+            const px=new Uint8Array(w*h*4);
+            gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,px);
+            const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h;
+            const tctx=tmp.getContext('2d'); const img=tctx.createImageData(w,h);
+            const row=w*4;
+            for(let y=0;y<h;y++){ const s=(h-1-y)*row, d=y*row; img.data.set(px.subarray(s,s+row), d); }
+            tctx.putImageData(img,0,0);
+            tmp.toBlob(b=>resolve(b),'image/png');
+            return;
+          }
+          c.toBlob(b=>resolve(b),'image/png');
+        }catch(_){ try{ c.toBlob(b=>resolve(b),'image/png'); }catch(__){ resolve(null); } }
+      });
+    });
+  }
+  // If the GL context is lost (the usual precursor to a renderer crash), reload
+  // the game cleanly instead of stranding a white canvas — autosave restores it.
+  function guardContextLoss(){
+    const c = findGameCanvas(); if(!c || c.__lossGuarded) return; c.__lossGuarded = true;
+    c.addEventListener('webglcontextlost', (e)=>{
+      try{ e.preventDefault(); }catch(_){}
+      try{ setSays('graphics reset — reloading…'); }catch(_){}
+      setTimeout(()=>{ try{ location.reload(); }catch(_){} }, 500);
+    }, false);
+  }
+  async function uploadGameFrame(){
+    if(!watching) return;
+    try{
+      const c = findGameCanvas();
+      if(!c || !c.width || !c.height) return;
+      const blob = await captureCanvasBlob(c);
+      if(!blob || !blob.size) return;
+      await fetch('api/arcade_frame', {method:'POST', body:blob,
+        headers:{'Content-Type':'image/png'}}).catch(()=>{});
+    }catch(_){}
+  }
+  function startFrameUploads(){
+    stopFrameUploads();
+    // Push once immediately so the first watch tick has a fresh frame,
+    // then every 12s — well under the backend's 30s freshness window.
+    uploadGameFrame();
+    frameTimer = setInterval(uploadGameFrame, 12000);
+  }
+  function stopFrameUploads(){
+    if(frameTimer){ clearInterval(frameTimer); frameTimer=null; }
+  }
+  $('btnWatch').addEventListener('click', ()=>{
+    watching=!watching;
+    wsSend({type: watching?'game_watch_start':'game_watch_stop', game: curGame});
+    syncWatchBtn();
+    if(watching) startFrameUploads(); else stopFrameUploads();
+  });
+
+  /* ── memory viewer (per-game brain page from /api/game_memory) ── */
+  async function openMemory(){
+    const game = curGame || (new URLSearchParams(location.search).get('name') || '');
+    $('memGame').textContent = game || '— pick a game —';
+    $('memviewer').classList.add('on');
+    $('memBody').innerHTML = '<em>loading…</em>';
+    if(!game){ $('memBody').innerHTML = '<em>start a game first, then come back to see what Chloe remembers about it.</em>'; return; }
+    try{
+      const r = await fetch('api/game_memory?game='+encodeURIComponent(game), {cache:'no-store'});
+      const txt = await r.text();
+      $('memBody').textContent = (txt||'').trim() || '(empty)';
+    }catch(e){
+      $('memBody').innerHTML = '<em>could not reach her memory right now.</em>';
+    }
+  }
+  function closeMemory(){ $('memviewer').classList.remove('on'); }
+  $('btnMemory').addEventListener('click', openMemory);
+  $('btnMemRefresh').addEventListener('click', openMemory);
+  $('btnMemClose').addEventListener('click', closeMemory);
+
+  /* ── chloe state pulse: flowing cyberpunk waveform + orb ── */
+  // States: 'idle' (slow cyan), 'thinking' (faster violet), 'speaking' (energetic pink).
+  // Driven from onChat (start/delta/done), game_comment, and game_watch_state.
+  const pulse = (function(){
+    const c = $('pulseCanvas'), orb = $('pulseOrb'), tag = $('pulseTag');
+    if(!c) return { set(){}, kick(){} };
+    const ctx = c.getContext('2d');
+    let state = 'idle', energy = 0, target = 0, t0 = performance.now(), raf = 0;
+    const PAL = {
+      idle:     { hue1: 188, hue2: 195, glow: 'rgba(34,211,238,0.55)',  amp: 6,  speed: 0.0010, label: 'IDLE' },
+      thinking: { hue1: 270, hue2: 290, glow: 'rgba(176,108,255,0.65)', amp: 11, speed: 0.0024, label: 'THINKING' },
+      speaking: { hue1: 320, hue2: 200, glow: 'rgba(255,110,199,0.7)',  amp: 16, speed: 0.0042, label: 'SPEAKING' },
+    };
+    function resize(){
+      const r = c.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio||1);
+      c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    const ro = new ResizeObserver(()=>resize()); ro.observe(c); resize();
+    function draw(now){
+      const p = PAL[state] || PAL.idle;
+      const w = c.clientWidth, h = c.clientHeight, mid = h/2;
+      // smooth energy decay toward target
+      energy += (target - energy) * 0.08;
+      target *= 0.94;
+      const baseAmp = p.amp + energy * 14;
+      ctx.clearRect(0,0,w,h);
+      // background scanline sheen
+      const grad = ctx.createLinearGradient(0,0,w,0);
+      grad.addColorStop(0,'rgba(0,0,0,0)');
+      grad.addColorStop(0.5, p.glow.replace(/[\d.]+\)$/,'0.10)'));
+      grad.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = grad; ctx.fillRect(0,0,w,h);
+      // three layered waves
+      for(let layer=0; layer<3; layer++){
+        const phase = (now - t0) * p.speed * (1 + layer*0.4);
+        const amp = baseAmp * (1 - layer*0.22);
+        const hue = layer===0 ? p.hue1 : (layer===1 ? p.hue2 : (p.hue1+p.hue2)/2);
+        ctx.beginPath();
+        for(let x=0; x<=w; x+=2){
+          const k = x / w * Math.PI * 4 + layer * 0.7;
+          const y = mid + Math.sin(k + phase) * amp * 0.6 + Math.sin(k*1.7 - phase*1.3) * amp * 0.4;
+          if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        }
+        ctx.lineWidth = layer===0 ? 1.8 : 1.0;
+        ctx.strokeStyle = `hsla(${hue}, 95%, ${65 - layer*8}%, ${0.85 - layer*0.22})`;
+        ctx.shadowBlur = 8 + layer*4; ctx.shadowColor = p.glow;
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      // particle dots streaming across
+      const nDots = 14;
+      for(let i=0;i<nDots;i++){
+        const tx = ((now - t0) * 0.06 * p.speed * 1000 + i * (w/nDots)) % (w + 40) - 20;
+        const ty = mid + Math.sin(((now - t0)*0.003) + i) * (baseAmp*0.7);
+        const r = 1.4 + (i%3===0 ? 0.8 : 0);
+        ctx.beginPath(); ctx.arc(tx, ty, r, 0, Math.PI*2);
+        ctx.fillStyle = `hsla(${p.hue1}, 95%, 75%, ${0.55 + (i%3===0?0.25:0)})`;
+        ctx.shadowBlur = 6; ctx.shadowColor = p.glow;
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+      raf = requestAnimationFrame(draw);
+    }
+    raf = requestAnimationFrame(draw);
+    function set(s){
+      if(!PAL[s]) s = 'idle';
+      if(s === state) return;
+      state = s;
+      orb.classList.remove('thinking','speaking');
+      tag.classList.remove('thinking','speaking');
+      if(s !== 'idle'){ orb.classList.add(s); tag.classList.add(s); }
+      tag.textContent = PAL[s].label;
+    }
+    function kick(amount){ target = Math.min(1.2, target + (amount || 0.35)); }
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.hidden){ cancelAnimationFrame(raf); }
+      else { t0 = performance.now(); raf = requestAnimationFrame(draw); }
+    });
+    return { set, kick };
+  })();
+
+  /* ── says + talk-back (shared conversation with watch commentary) ── */
+  function setSays(t){ const e=$('says'); if(e) e.textContent=(t||'').trim(); }
+  const talkLog=$('talkLog'); let hist=[], asstEl=null, buf='';
+  function appendTalk(who, text){
+    const row=document.createElement('div'); row.className='tmsg '+(who==='you'?'you':'chloe');
+    const w=document.createElement('span'); w.className='who'; w.textContent=who==='you'?'you':'chloe';
+    const t=document.createElement('span'); t.textContent=text;
+    row.appendChild(w); row.appendChild(t); talkLog.appendChild(row); talkLog.scrollTop=talkLog.scrollHeight;
+    return t;
+  }
+  let speakingTimer = null;
+  function markSpeaking(){
+    pulse.set('speaking'); pulse.kick(0.6);
+    if(speakingTimer) clearTimeout(speakingTimer);
+    speakingTimer = setTimeout(()=>{ pulse.set('idle'); speakingTimer=null; }, 4500);
+  }
+  function onChat(msg){
+    if(msg.type==='start'){ buf=''; asstEl=appendTalk('chloe',''); pulse.set('thinking'); pulse.kick(0.5); }
+    else if(msg.type==='delta'){ buf+=(msg.text||''); if(!asstEl) asstEl=appendTalk('chloe',''); asstEl.textContent=buf; talkLog.scrollTop=talkLog.scrollHeight; pulse.set('speaking'); pulse.kick(0.25); }
+    else if(msg.type==='done'){ if(buf){ hist.push({role:'assistant',content:buf}); hist=hist.slice(-12); } asstEl=null; buf=''; markSpeaking(); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='error' && msg.text){ appendTalk('chloe','['+msg.text+']'); pulse.set('idle'); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='game_comment' && msg.text){ appendTalk('chloe',msg.text); hist.push({role:'assistant',content:msg.text}); hist=hist.slice(-12); markSpeaking(); }
+    else if(msg.type==='game_watch_state'){ watching=!!msg.on; syncWatchBtn(); }
+  }
+  $('talkForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const text=($('talkIn').value||'').trim(); if(!text || $('talkIn').disabled) return;
+    // "/kb <url-or-text>" → ingest a walkthrough/wiki into this game's KB so it
+    // grounds Chloe's watch commentary (she'll confirm via a game_comment line).
+    const _kb=text.match(/^\/kb\s+(.+)$/i);
+    if(_kb){ appendTalk('you', text); $('talkIn').value=''; wsSend({type:'game_kb_ingest', game:curGame, url:_kb[1].trim()}); return; }
+    appendTalk('you', text); hist.push({role:'user',content:text}); hist=hist.slice(-12);
+    $('talkIn').value=''; $('talkIn').disabled=true; $('talkSend').disabled=true;
+    pulse.set('thinking'); pulse.kick(0.4);
+    wsSend({type:'chat', messages:hist.slice(), max_tokens:512});
+  });
+
+  /* ── WS (talk-back + watch commentary) ── */
+  let ws=null, didWatchReset=false;
+  function wsUrl(){ return location.protocol==='https:' ? `wss://${location.host}/chloe-ws` : `ws://${location.hostname||'localhost'}:6789`; }
+  function wsSend(o){ try{ if(ws && ws.readyState===1) ws.send(JSON.stringify(o)); }catch(_){} }
+  function connect(){
+    try{ ws=new WebSocket(wsUrl()); }catch(e){ return; }
+    ws.addEventListener('open', ()=>{
+      // Fresh page load = watch starts OFF; clear any lingering backend watch loop once.
+      if(!didWatchReset){ didWatchReset=true; watching=false; syncWatchBtn(); wsSend({type:'game_watch_stop'}); }
+    });
+    ws.addEventListener('message', ev=>{ try{ onChat(JSON.parse(ev.data)); }catch(_){} });
+    ws.addEventListener('close', ()=> setTimeout(connect, 3000));
+  }
+
+  /* ── STABILITY: do NOT force preserveDrawingBuffer globally. On QWebEngine it
+        roughly doubles the emulator's WebGL back-buffer memory and, alongside the
+        HUD's own WebGL orb, was crashing the renderer (white screen / shutdown).
+        Gameplay is unaffected. Frame capture for Chloe's watch now reads pixels
+        directly off the live GL context inside a rAF (captureCanvasBlob), which
+        works WITHOUT a retained buffer. ── */
+
+  /* ── Wipe stale EmulatorJS IndexedDB stores on each page load.
+        Symptom this prevents: after the first game, the in-DB cache holds a
+        partial/corrupt entry; the next boot hangs at "download game data"
+        until a full Chloe restart clears the in-memory profile. ── */
+  function purgeEjsDatabases(){
+    try{
+      if(!window.indexedDB || !indexedDB.databases) return;
+      indexedDB.databases().then(list=>{
+        (list||[]).forEach(db=>{
+          const n = (db && db.name) || '';
+          if(/emulatorjs|ejs|libretro/i.test(n)){
+            try{ indexedDB.deleteDatabase(n); }catch(_){}
+          }
+        });
+      }).catch(()=>{});
+    }catch(_){}
+  }
+  purgeEjsDatabases();
+
+  /* ── auto-start a game from URL params (reload-per-game) ── */
+  function autoStart(){
+    const p = new URLSearchParams(location.search);
+    const tmp = p.get('tmp'), g = p.get('g'), sys = p.get('sys'), name = p.get('name');
+    if(tmp==='1' && sys){
+      const url = new URL('tmprom', document.baseURI).href + '?_=' + Date.now();
+      startGame(sys, url, name || 'game');
+    } else if(g && sys){
+      curFile = g;
+      const url = new URL('roms/'+encodeURIComponent(g), document.baseURI).href;
+      startGame(sys, url, g.replace(/\.[^.]+$/,''));
+    }
+  }
+
+  // Final flush: try a synchronous save when leaving the page. fetch with
+  // keepalive lets the request finish even as the document unloads.
+  window.addEventListener('beforeunload', ()=>{
+    try{
+      if(!gameReady || !curGame) return;
+      const m = gm(); if(!m || typeof m.getState!=='function') return;
+      const state = m.getState();
+      if(!state || !state.length) return;
+      fetch('api/savestate?game='+encodeURIComponent(curGame),
+            {method:'POST', body:state, keepalive:true}).catch(()=>{});
+    }catch(_){}
+  });
+
+  connect();
+  loadLibrary();
+  autoStart();
+})();
+</script>
+</body>
+</html>

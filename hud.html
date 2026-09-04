@@ -458,6 +458,36 @@
     border-style: dashed;
   }
 
+  /* Citation block under a Chloe reply (emitted by /search + Brave fallback). */
+  .msg-sources {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed #00f7ff33;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .msg-sources a {
+    color: #aef0ff;
+    text-decoration: none;
+    opacity: 0.85;
+    transition: opacity 0.15s ease-out;
+  }
+  .msg-sources a:hover {
+    opacity: 1;
+    text-decoration: underline;
+  }
+  .msg-sources .src-n {
+    color: var(--cyan);
+    font-weight: 700;
+  }
+  .msg-sources .src-domain {
+    color: #00f7ff77;
+    font-size: 10px;
+  }
+
   /* Chat input */
   .chat-input-row {
     padding: 12px 16px;
@@ -1161,7 +1191,209 @@
     background: rgba(0, 247, 255, 0.15);
     box-shadow: 0 0 10px var(--cyan-d);
   }
-  </style>
+  
+
+/* ─── CH03 JOBS PANEL — added 2026-05-19 ───────────────────────────── */
+.jobs-panel {
+  display: none; flex: 1; overflow-y: auto;
+  padding: 16px 20px; flex-direction: column; gap: 12px;
+}
+.jobs-panel.active { display: flex; }
+.jobs-panel::-webkit-scrollbar { width: 6px; }
+.jobs-panel::-webkit-scrollbar-thumb { background: #00f7ff44; border-radius: 3px; }
+.jobs-panel::-webkit-scrollbar-track { background: transparent; }
+.jobs-summary {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; border: 1px solid var(--border);
+  background: rgba(0, 13, 26, 0.6);
+  font-family: 'Share Tech Mono', monospace; font-size: 11px;
+  letter-spacing: 2px; text-transform: uppercase;
+}
+.jobs-summary .pill { color: #00f7ff66; }
+.jobs-summary .pill b { color: var(--cyan); font-weight: 500; }
+.jobs-summary .pill.ok b { color: #00ff88; }
+.jobs-summary .pill.fail b { color: #ff5b5b; }
+.jobs-summary .pill.running b { color: #ffb35a; }
+.jobs-list { display: flex; flex-direction: column; gap: 6px; }
+.job-card {
+  border: 1px solid var(--border);
+  background: rgba(0, 13, 26, 0.6);
+  padding: 10px 12px;
+  display: grid;
+  /* Explicit 5-column layout so the run-btn doesn't auto-flow into the
+     narrow dot column on row 2 and overlap the result text. */
+  grid-template-columns: 8px 1fr auto auto auto;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: center;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px; color: var(--cyan);
+}
+.job-card .dot {
+  grid-column: 1; grid-row: 1;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #555; box-shadow: 0 0 4px #555;
+}
+.job-card.healthy   .dot { background: #00ff88; box-shadow: 0 0 6px #00ff88; }
+.job-card.stale     .dot { background: #ffb35a; box-shadow: 0 0 6px #ffb35a; }
+.job-card.fail      .dot { background: #ff5b5b; box-shadow: 0 0 6px #ff5b5b; }
+.job-card.running   .dot { background: #58e6ff; box-shadow: 0 0 8px #58e6ff;
+                            animation: chloe-pulse 1.2s ease-in-out infinite; }
+.job-card.never_run .dot { background: #6b8c9c; box-shadow: none; }
+.job-card .name {
+  grid-column: 2; grid-row: 1;
+  letter-spacing: 1.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.job-card .schedule {
+  grid-column: 3; grid-row: 1;
+  font-size: 9px; color: #00f7ff66;
+  letter-spacing: 2px; text-transform: uppercase;
+  white-space: nowrap;
+}
+.job-card .age {
+  grid-column: 4; grid-row: 1;
+  font-size: 9px; color: #00f7ff66;
+  letter-spacing: 1px; font-variant-numeric: tabular-nums;
+  min-width: 50px; text-align: right;
+}
+.job-card .run-btn {
+  grid-column: 5; grid-row: 1;
+  background: transparent; border: 1px solid var(--border2);
+  color: var(--cyan); font: 9px/1 'Share Tech Mono', monospace;
+  letter-spacing: 2px; text-transform: uppercase;
+  padding: 5px 9px; cursor: pointer; border-radius: 2px;
+  justify-self: end;
+}
+.job-card .run-btn:hover { background: rgba(0, 247, 255, 0.1); }
+.job-card .run-btn[disabled] { opacity: .4; cursor: wait; }
+.job-card .result {
+  grid-column: 2 / -1; grid-row: 2;
+  font-size: 10px; color: #00f7ff88;
+  letter-spacing: 0; white-space: pre-wrap;
+  max-height: 60px; overflow: hidden;
+}
+
+/* ─── CH04 LOGS PANEL ─────────────────────────────────────────────── */
+.logs-panel {
+  display: none; flex: 1; min-height: 0;
+  flex-direction: column; gap: 8px;
+  padding: 12px 16px;
+}
+.logs-panel.active { display: flex; }
+/* ─── CH05 SESSIONS PANEL (recent chats) ─────────────────────────────── */
+.sessions-panel {
+  display: none; flex: 1; min-height: 0;
+  flex-direction: column; gap: 6px;
+  padding: 12px 16px; overflow-y: auto;
+}
+.sessions-panel.active { display: flex; }
+.sessions-panel::-webkit-scrollbar { width: 6px; }
+.sessions-panel::-webkit-scrollbar-thumb { background: #00f7ff44; border-radius: 3px; }
+.sess-row { display: flex; align-items: center; gap: 8px; padding: 10px 8px; border-bottom: 1px solid #00f7ff2a; }
+.sess-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.sess-main:hover { opacity: 0.8; }
+.sess-rdel { flex: 0 0 auto; background: transparent; border: 1px solid rgba(255,51,85,0.4);
+  color: #ff3355; font-size: 14px; width: 26px; height: 26px; border-radius: 3px; cursor: pointer; }
+.sess-rdel:hover { background: rgba(255,51,85,0.12); }
+.sess-newchat { margin-bottom: 8px; background: rgba(0,247,255,0.1); border: 1px solid #00f7ff55;
+  color: #00f7ff; font-family: inherit; letter-spacing: 1px; padding: 8px 12px; cursor: pointer; border-radius: 4px; }
+.sess-newchat:hover { background: rgba(0,247,255,0.18); }
+.sess-del-btn { margin-top: 8px; align-self: flex-start; background: rgba(255,51,85,0.08);
+  border: 1px solid rgba(255,51,85,0.4); color: #ff3355; font-family: inherit;
+  padding: 8px 16px; cursor: pointer; border-radius: 4px; letter-spacing: 1px; }
+.sess-del-btn:hover { background: rgba(255,51,85,0.16); }
+.sess-row .st { color: #00f7ff; font-size: 13px; }
+.sess-row .sm { color: #00f7ff77; font-size: 10px; margin-top: 3px; letter-spacing: 1px; }
+.sess-back { align-self: flex-start; background: transparent; border: 1px solid #00f7ff2a;
+  color: #00f7ff; font-size: 10px; padding: 4px 10px; cursor: pointer; border-radius: 3px; }
+.sess-vtitle { color: #00f7ff; font-size: 14px; letter-spacing: 1px; margin: 8px 0; }
+.sess-turn { margin-bottom: 8px; font-size: 12px; line-height: 1.45; }
+.sess-turn .sr { color: #00f7ff77; font-size: 9px; letter-spacing: 1px; }
+.sess-turn.user .sr { color: #00ff88aa; }
+.sess-turn .sb { color: #d8f6ff; white-space: pre-wrap; word-break: break-word; }
+.sess-resume { margin-top: 12px; align-self: flex-start; background: rgba(0, 247, 255, 0.1);
+  border: 1px solid #00f7ff55; color: #00f7ff; font-family: inherit;
+  padding: 8px 16px; cursor: pointer; border-radius: 4px; letter-spacing: 1px; }
+.sess-resume:hover { background: rgba(0, 247, 255, 0.18); }
+.logs-tabs {
+  display: flex; gap: 0; border: 1px solid var(--border);
+  background: rgba(0, 13, 26, 0.6);
+  flex: 0 0 auto;
+}
+.logs-tab {
+  flex: 1;
+  background: transparent; border: 0;
+  color: #00f7ff77;
+  font: 10px/1 'Share Tech Mono', monospace;
+  letter-spacing: 2px; text-transform: uppercase;
+  padding: 8px 6px; cursor: pointer;
+  border-right: 1px solid var(--border);
+}
+.logs-tab:last-child { border-right: none; }
+.logs-tab:hover { color: var(--cyan); }
+.logs-tab.active {
+  background: rgba(0, 247, 255, 0.10);
+  color: var(--cyan);
+}
+.logs-controls {
+  display: flex; gap: 8px; align-items: center;
+  flex: 0 0 auto;
+}
+.logs-filter {
+  flex: 1;
+  background: rgba(0, 13, 26, 0.6);
+  border: 1px solid var(--border);
+  color: var(--cyan);
+  font: 11px/1 'Share Tech Mono', monospace;
+  letter-spacing: 1px;
+  padding: 7px 10px; outline: none;
+  border-radius: 2px;
+}
+.logs-filter:focus { border-color: var(--cyan); }
+.logs-filter::placeholder { color: #00f7ff44; letter-spacing: 2px; }
+.logs-tail-btn, .logs-refresh-btn {
+  background: transparent; border: 1px solid var(--border2);
+  color: #00f7ff88;
+  font: 10px/1 'Share Tech Mono', monospace;
+  letter-spacing: 2px; text-transform: uppercase;
+  padding: 7px 10px; cursor: pointer; border-radius: 2px;
+}
+.logs-tail-btn.active { color: var(--cyan); border-color: var(--cyan);
+                        background: rgba(0, 247, 255, 0.08); }
+.logs-tail-btn:hover, .logs-refresh-btn:hover { color: var(--cyan); }
+.logs-view {
+  flex: 1; min-height: 0;
+  margin: 0; padding: 10px 12px;
+  background: rgba(0, 8, 18, 0.85);
+  border: 1px solid var(--border);
+  color: #b5f0ff;
+  font: 10.5px/1.45 'Share Tech Mono', ui-monospace, monospace;
+  letter-spacing: 0;
+  overflow: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.logs-view::-webkit-scrollbar { width: 6px; }
+.logs-view::-webkit-scrollbar-thumb { background: #00f7ff44; border-radius: 3px; }
+.logs-view::-webkit-scrollbar-track { background: transparent; }
+.logs-footer {
+  font-size: 9px; color: #00f7ff66;
+  letter-spacing: 1px; text-align: right;
+  flex: 0 0 auto;
+}
+.jobs-refresh-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 4px;
+}
+.jobs-refresh-btn {
+  background: transparent; border: 1px dashed var(--border2);
+  color: #00f7ff77; font: 10px/1 'Share Tech Mono', monospace;
+  letter-spacing: 2px; text-transform: uppercase;
+  padding: 6px 10px; cursor: pointer;
+}
+.jobs-refresh-btn:hover { color: var(--cyan); border-color: var(--cyan); }
+
+</style>
 </head>
 <body>
 
@@ -1188,6 +1420,8 @@
     <span class="center">HOME // PRIMARY NODE</span>
     <span style="display:flex;gap:14px;align-items:center">
       <button class="brain-btn" id="brain-btn" onclick="toggleBrainGraph()" title="Open brain graph view">BRAIN</button>
+      <button class="brain-btn" id="chess-btn" onclick="toggleChess()" title="Play chess against Chloe">CHESS</button>
+      <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Pokémon (gen1recomp)">ARCADE</button>
       <span class="sys-tag">ONLINE</span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
         <span class="lbl">₿</span><span id="balance-value">—</span> sat
@@ -1292,6 +1526,55 @@
         </div>
         <button class="discover-btn" id="discover-btn" onclick="lightsDiscover()">+ Discover New Bulbs</button>
       </div>
+
+      <div class="jobs-panel" id="jobs-panel">
+        <div class="jobs-summary" id="jobs-summary">
+          <span class="pill">loading...</span>
+        </div>
+        <div class="jobs-list" id="jobs-list">
+          <span style="color:#00f7ff44;font-size:10px;padding:4px;">awaiting state...</span>
+        </div>
+        <div class="jobs-refresh-row">
+          <button class="jobs-refresh-btn" onclick="requestJobsState()">↻ refresh</button>
+          <span style="color:#00f7ff44;font-size:9px;letter-spacing:1px;" id="jobs-asof">—</span>
+        </div>
+      </div>
+      <div class="logs-panel" id="logs-panel">
+        <div class="logs-tabs">
+          <button class="logs-tab active" data-file="backend" onclick="setLogsFile('backend')">backend</button>
+          <button class="logs-tab" data-file="watcher" onclick="setLogsFile('watcher')">watcher</button>
+          <button class="logs-tab" data-file="static" onclick="setLogsFile('static')">static</button>
+          <button class="logs-tab" data-file="jobs" onclick="setLogsFile('jobs')">jobs</button>
+        </div>
+        <div class="logs-controls">
+          <input type="text" class="logs-filter" id="logs-filter"
+                 placeholder="filter (case-insensitive)..."
+                 oninput="setLogsFilter(this.value)">
+          <button class="logs-tail-btn active" id="logs-tail-btn"
+                  onclick="toggleLogsAutoScroll(this)">↓ tail</button>
+          <button class="logs-refresh-btn"
+                  onclick="requestLogsTail()">↻ refresh</button>
+        </div>
+        <pre class="logs-view" id="logs-view">loading...</pre>
+        <div class="logs-footer">
+          <span id="logs-counts">—</span>
+        </div>
+      </div>
+      <div class="sessions-panel" id="sessions-panel">
+        <div id="sess-listview">
+          <button class="sess-newchat" onclick="sessNewChat()">＋ NEW CHAT</button>
+          <div id="sess-list"><span style="color:#00f7ff44;font-size:10px;">loading…</span></div>
+        </div>
+        <div id="sess-view" style="display:none;">
+          <button class="sess-back" onclick="sessBackToList()">← back to list</button>
+          <div class="sess-vtitle" id="sess-vtitle"></div>
+          <div id="sess-vturns"></div>
+          <button class="sess-resume" onclick="sessResume()">RESUME THIS CHAT</button>
+          <button class="sess-del-btn" onclick="sessDeleteCurrent()">DELETE THIS CHAT</button>
+          <span id="sess-resume-status" style="font-size:11px;margin-left:8px;color:#00f7ff99;"></span>
+        </div>
+      </div>
+
       <div class="chat-attachments" id="attachments"></div>
       <div class="chat-input-row">
         <button class="attach-btn" id="attach-btn" title="Attach files (PDF, DOCX, XLSX, CSV, TXT, MD, images)" onclick="document.getElementById('file-input').click()">+</button>
@@ -1337,6 +1620,7 @@
     let streamMode = false;
     let streamFinalReceived = false;
     let streamOnFinalEnd = null;
+    let streamStalled = false;  // playback drained the queue and is idle, waiting for the next chunk
     // Single-shot (legacy `tts_audio`) state.
     let legacyOnEnd = null;
 
@@ -1365,6 +1649,40 @@
         const u8 = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
         const buffer = await c.decodeAudioData(u8.buffer);
+        return _playDecoded(buffer);
+      } catch (e) {
+        console.error('[tts] decode/play error', e);
+        active = false;
+        return false;
+      }
+    }
+
+    // Pre-decode a chunk's base64 audio to an AudioBuffer without playing
+    // it. Returns Promise<AudioBuffer | null>. Used to overlap decode of
+    // chunk N+1 with playback of chunk N, shrinking inter-chunk gaps from
+    // ~10-150ms (decode time) to ~0. Polish 2026-05-17 evening.
+    async function _preDecode(b64) {
+      const c = ensureCtx();
+      if (!c) return null;
+      try {
+        const bin = atob(b64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        return await c.decodeAudioData(u8.buffer);
+      } catch (e) {
+        console.error('[tts] pre-decode error', e);
+        return null;
+      }
+    }
+
+    // Play an already-decoded AudioBuffer. Mirrors _playBuffer's source
+    // wiring + onended hook but skips the decode step. Returns true if
+    // playback started.
+    function _playDecoded(buffer) {
+      const c = ensureCtx();
+      if (!c || !buffer) return false;
+      try { if (c.state === 'suspended') c.resume().catch(() => {}); } catch (_) {}
+      try {
         const src = c.createBufferSource();
         src.buffer = buffer;
         src.connect(analyser);
@@ -1380,7 +1698,7 @@
         src.start(0);
         return true;
       } catch (e) {
-        console.error('[tts] decode/play error', e);
+        console.error('[tts] play-decoded error', e);
         active = false;
         return false;
       }
@@ -1391,9 +1709,13 @@
       if (streamMode) {
         if (streamQueue.length > 0) {
           // More chunks already in hand — chain straight into the next.
+          // Buffer is a pre-decoded AudioBuffer OR a Promise of one (if
+          // decode hasn't finished yet). Await either way and play.
           const next = streamQueue.shift();
-          _playBuffer(next.b64).then(ok => {
-            if (!ok) _onChunkEnded();  // skip the bad chunk, try next
+          Promise.resolve(next.bufferPromise).then(buffer => {
+            if (!buffer || !_playDecoded(buffer)) {
+              _onChunkEnded();  // skip the bad chunk, try next
+            }
           });
         } else if (streamFinalReceived) {
           // Stream finished cleanly.
@@ -1402,9 +1724,14 @@
           streamFinalReceived = false;
           streamOnFinalEnd = null;
           if (cb) cb();
+        } else {
+          // Queue empty and the final chunk hasn't arrived — playback has
+          // genuinely STALLED (synthesis/network lagged). Flag it so the next
+          // playChunk re-kicks the chain. We key off this flag, NOT bare
+          // !active, because !active also matches the first chunk's in-flight
+          // decode window and re-kicking there races it.
+          streamStalled = true;
         }
-        // else: queue is empty but final not received yet — wait for the
-        // next playChunk to arrive over the WS. No-op.
       } else {
         const cb = legacyOnEnd;
         legacyOnEnd = null;
@@ -1457,9 +1784,23 @@
         return;
       }
 
-      // Mid-stream chunk — append to queue. Callbacks already wired.
+      // Mid-stream chunk — kick off decode IMMEDIATELY in the background
+      // and queue the resulting Promise. By the time the currently-playing
+      // chunk's onended fires, decode is almost certainly done, so playback
+      // chains over with no perceptible gap. Pre-buffer polish 2026-05-17
+      // evening. Callbacks were wired on the first chunk; nothing to do here.
       if (isFinal) streamFinalReceived = true;
-      streamQueue.push({ b64 });
+      streamQueue.push({ bufferPromise: _preDecode(b64) });
+      // If playback genuinely STALLED (queue drained before this chunk
+      // arrived — common on long replies), no live source is left to fire
+      // _onChunkEnded and pull it, so the tail would strand in the queue and
+      // the audio "falls off" mid-reply. Re-kick the chain — but only on a
+      // true stall, never the first chunk's in-flight decode window (which
+      // also has !active and would race it, flattening the orb early).
+      if (streamStalled) {
+        streamStalled = false;
+        _onChunkEnded();
+      }
     }
 
     function stop() {
@@ -1467,6 +1808,7 @@
       streamMode = false;
       streamFinalReceived = false;
       streamOnFinalEnd = null;
+      streamStalled = false;
       legacyOnEnd = null;
       if (currentSource) {
         try { currentSource.onended = null; currentSource.stop(); } catch (_) {}
@@ -1597,19 +1939,25 @@
       this.setStatus('STANDBY');
     },
 
-    // Fallback: if no boot signal arrives within 20s of HUD load, fade the
+    // Fallback: if no boot signal arrives within 60s of HUD load, fade the
     // splash so the user isn't stuck. The window is generous because a
     // PyInstaller-frozen build needs more time to import jarvis, enumerate
     // audio devices, load the wake model, and reach _play_boot_chime. In
     // dev mode (running from source) it's typically <5s; frozen mode can
-    // be 8-15s on first run before the OS file cache is warm.
+    // be 8-15s on first run before the OS file cache is warm. Bumped from
+    // 20s to 60s on 2026-05-12 after observing real-world startups that
+    // overran the 20s window (wake-model load + venv warm-up + ollama
+    // contention from the parallel wiki_watcher). The backend now also
+    // caches the boot signals so a HUD reload mid-init still receives
+    // them — but the 60s window covers the same-client slow-init path
+    // where the cache doesn't help.
     armFallback() {
       this._fallbackTimer = setTimeout(() => {
         if (!this._hidden) {
           console.log('[splash] no boot signal — fading via fallback');
           this.hide();
         }
-      }, 20000);
+      }, 60000);
     },
   };
   // Splash is visible by default; arm the fallback timer at script load.
@@ -1710,6 +2058,15 @@
   }
 
   function handleStructured(data) {
+    if (data.type === 'tts_amp') {
+      // Real audio amplitude streamed from the backend during local
+      // (PC-speaker) TTS playback. The orb reads these (window globals) to
+      // pulse in sync with her actual voice when there's no browser-played
+      // audio for the AnalyserNode to read.
+      window.__ttsStreamAmp = +data.amp || 0;
+      window.__ttsStreamAmpTs = performance.now();
+      return;
+    }
     if (data.type === 'boot_start') {
       // Backend is about to play the boot sound. Sync the splash loading
       // bar to the audio's actual duration so they finish together.
@@ -1736,7 +2093,17 @@
         bubble.classList.add('tool-pending');
         bubble.textContent = `🔎 ${note}`;
       }
+    } else if (data.type === 'chat_queued') {
+      // Backend queued a message that arrived while another client's reply was
+      // in flight (handle_chat wrapper). Same dim marker as the local path.
+      _appendQueuedNote();
+    } else if (data.type === 'chat_dequeued') {
+      const qn0 = document.querySelector('#chatlog .queued-note');
+      if (qn0) qn0.remove();
     } else if (data.type === 'start') {
+      // A queued turn starting — clear its marker.
+      const qn = document.querySelector('#chatlog .queued-note');
+      if (qn) qn.remove();
       // Begin a new assistant bubble (or take over an existing tool-pending one)
       if (currentReplyEl) {
         // Reuse the bubble that was showing the tool indicator
@@ -1760,6 +2127,39 @@
         // keep scrolled to bottom while streaming
         const log = document.getElementById('chatlog');
         log.scrollTop = log.scrollHeight;
+      }
+    } else if (data.type === 'sources') {
+      // Citation block emitted by /search and the Brave hedge-fallback. Append
+      // a small numbered link list inside the current reply bubble.
+      if (currentReplyEl && Array.isArray(data.items) && data.items.length) {
+        const bubble = currentReplyEl.querySelector('.msg-bubble');
+        if (bubble) {
+          // Defensive: clear an existing sources block in case backend re-emits.
+          const prev = bubble.querySelector('.msg-sources');
+          if (prev) prev.remove();
+          const wrap = document.createElement('div');
+          wrap.className = 'msg-sources';
+          for (const it of data.items) {
+            const a = document.createElement('a');
+            a.href = it.url || '#';
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            const n = document.createElement('span');
+            n.className = 'src-n';
+            n.textContent = '[' + (it.n || '\u2022') + '] ';
+            const t = document.createTextNode(it.title || it.url || '(untitled)');
+            a.appendChild(n);
+            a.appendChild(t);
+            if (it.domain) {
+              const d = document.createElement('span');
+              d.className = 'src-domain';
+              d.textContent = ' \u00B7 ' + it.domain;
+              a.appendChild(d);
+            }
+            wrap.appendChild(a);
+          }
+          bubble.appendChild(wrap);
+        }
       }
     } else if (data.type === 'done') {
       const reply = currentReplyText.trim();
@@ -1854,6 +2254,28 @@
       setState('idle');
     } else if (data.type === 'wallet_balance_result') {
       onWalletBalanceResult(data);
+    } else if (data.type === 'jobs_state_update') {
+      onJobsState(data);
+    } else if (data.type === 'jobs_run_result') {
+      // Job kicked off — state refresh will show 'running'.
+      if (data.error) console.warn('[jobs]', data.error);
+      setTimeout(requestJobsState, 800);
+    } else if (data.type === 'logs_tail_result') {
+      onLogsTail(data);
+    } else if (data.type === 'sessions_result') {
+      if (data.ok) renderSessionsList(data.sessions);
+    } else if (data.type === 'session_result') {
+      if (data.ok) renderSessionView(data);
+    } else if (data.type === 'session_resumed') {
+      const _ss = document.getElementById('sess-resume-status');
+      if (_ss) _ss.textContent = data.ok
+        ? ('resumed — ' + (data.n_turns || 0) + ' turns of context')
+        : ('resume failed: ' + (data.error || '?'));
+    } else if (data.type === 'session_deleted') {
+      if (data.ok) { sessBackToList(); requestSessionsHud(); }
+      else { const _s = document.getElementById('sess-resume-status'); if (_s) _s.textContent = 'delete failed: ' + (data.error || '?'); }
+    } else if (data.type === 'session_new_done') {
+      sessBackToList();
     } else if (data.type === 'lights_state_result') {
       onLightsState(data);
     } else if (data.type === 'lights_discover_result') {
@@ -1886,30 +2308,351 @@
 
   let _currentChannel = 'CH01';
   let _lightsState = { bulbs: [], presets: [] };
+  let _jobsState = { jobs: [], summary: {} };
+  let _jobsPollTimer = null;
+  let _logsState = { file: 'backend', lines: [], total: 0 };
+  let _logsCurrentFile = 'backend';
+  let _logsFilter = '';
+  let _logsPollTimer = null;
+  let _logsAutoScroll = true;
   let _wheelTargetBulb = null;   // name of the bulb the wheel is editing
   let _wheelColor = '#ffffff';
 
   function toggleChannel() {
-    _currentChannel = (_currentChannel === 'CH01') ? 'CH02' : 'CH01';
+    // 5-way cycle: CH01 (chat) -> CH02 (lights) -> CH03 (jobs + chat) ->
+    // CH04 (logs) -> CH05 (recent chats) -> CH01.
+    if      (_currentChannel === 'CH01') _currentChannel = 'CH02';
+    else if (_currentChannel === 'CH02') _currentChannel = 'CH03';
+    else if (_currentChannel === 'CH03') _currentChannel = 'CH04';
+    else if (_currentChannel === 'CH04') _currentChannel = 'CH05';
+    else                                  _currentChannel = 'CH01';
+    _applyChannelView();
+  }
+
+  function _applyChannelView() {
     const label = document.getElementById('ch-label');
     const chatLog = document.getElementById('chatlog');
     const lightsPanel = document.getElementById('lights-panel');
+    const jobsPanel = document.getElementById('jobs-panel');
+    const logsPanel = document.getElementById('logs-panel');
+    const sessionsPanel = document.getElementById('sessions-panel');
     const inputRow = document.querySelector('.chat-input-row');
     const attachments = document.getElementById('attachments');
+
+    // Default: hide all secondary panels + restore chat.
+    if (lightsPanel) lightsPanel.classList.remove('active');
+    if (jobsPanel)   jobsPanel.classList.remove('active');
+    if (logsPanel)   logsPanel.classList.remove('active');
+    if (sessionsPanel) sessionsPanel.classList.remove('active');
+    if (chatLog) {
+      chatLog.style.display = '';
+      chatLog.style.flex = '';
+      chatLog.style.maxHeight = '';
+    }
+    if (inputRow)    inputRow.style.display = '';
+    if (attachments) attachments.style.display = '';
+    if (_jobsPollTimer) { clearInterval(_jobsPollTimer); _jobsPollTimer = null; }
+    if (_logsPollTimer) { clearInterval(_logsPollTimer); _logsPollTimer = null; }
+
     if (_currentChannel === 'CH02') {
+      // Lights: chat hidden, no input.
       if (label) label.textContent = 'CH 02';
       if (chatLog) chatLog.style.display = 'none';
       if (lightsPanel) lightsPanel.classList.add('active');
       if (inputRow) inputRow.style.display = 'none';
       if (attachments) attachments.style.display = 'none';
       requestLightsState();
-    } else {
-      if (label) label.textContent = 'CH 01';
-      if (chatLog) chatLog.style.display = '';
-      if (lightsPanel) lightsPanel.classList.remove('active');
+    } else if (_currentChannel === 'CH03') {
+      // Jobs + chat split. Jobs panel takes most of the space; chat log
+      // pinned to a short strip at bottom so Ed can ask Chloe about
+      // scheduled tasks without losing visibility of job state.
+      if (label) label.textContent = 'CH 03';
+      if (jobsPanel) jobsPanel.classList.add('active');
+      if (chatLog) {
+        chatLog.style.display = '';
+        chatLog.style.flex = '0 0 180px';
+        chatLog.style.maxHeight = '180px';
+      }
       if (inputRow) inputRow.style.display = '';
       if (attachments) attachments.style.display = '';
+      requestJobsState();
+      _jobsPollTimer = setInterval(requestJobsState, 5000);
+    } else if (_currentChannel === 'CH04') {
+      // Logs: full panel, no chat in this view (keep it clean for log scan).
+      if (label) label.textContent = 'CH 04';
+      if (chatLog) chatLog.style.display = 'none';
+      if (logsPanel) logsPanel.classList.add('active');
+      if (inputRow) inputRow.style.display = 'none';
+      if (attachments) attachments.style.display = 'none';
+      requestLogsTail();
+      _logsPollTimer = setInterval(requestLogsTail, 4000);
+    } else if (_currentChannel === 'CH05') {
+      // Recent chats: full panel, no chat input in this view.
+      if (label) label.textContent = 'CH 05';
+      if (chatLog) chatLog.style.display = 'none';
+      if (sessionsPanel) sessionsPanel.classList.add('active');
+      if (inputRow) inputRow.style.display = 'none';
+      if (attachments) attachments.style.display = 'none';
+      requestSessionsHud();
+    } else {
+      if (label) label.textContent = 'CH 01';
     }
+  }
+
+  // ─── CH05 RECENT CHATS ───────────────────────────────────────────────────
+  let _sessOpenTs = null;
+  function requestSessionsHud() {
+    document.getElementById('sess-view').style.display = 'none';
+    document.getElementById('sess-listview').style.display = '';
+    document.getElementById('sess-list').innerHTML =
+      '<span style="color:#00f7ff44;font-size:10px;">loading…</span>';
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'sessions_list', limit: 40 }));
+  }
+  function _sessFmt(ts) {
+    const d = new Date(ts * 1000), now = new Date();
+    const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (d.toDateString() === now.toDateString()) return 'Today ' + t;
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
+  }
+  function renderSessionsList(sessions) {
+    const list = document.getElementById('sess-list');
+    list.innerHTML = '';
+    if (!sessions || !sessions.length) {
+      list.innerHTML = '<span style="color:#00f7ff44;font-size:10px;">no conversations yet</span>';
+      return;
+    }
+    for (const s of sessions) {
+      const row = document.createElement('div'); row.className = 'sess-row';
+      const main = document.createElement('div'); main.className = 'sess-main';
+      const st = document.createElement('div'); st.className = 'st';
+      st.textContent = s.title || s.preview || '(untitled)';
+      const sm = document.createElement('div'); sm.className = 'sm';
+      sm.textContent = _sessFmt(s.start_ts) + ' · ' + (s.n_turns || 0)
+                       + ' turns · ' + (s.modalities || []).join('/');
+      main.appendChild(st); main.appendChild(sm);
+      main.onclick = () => sessOpen(s.start_ts);
+      const del = document.createElement('button'); del.className = 'sess-rdel';
+      del.textContent = '×'; del.title = 'delete';
+      del.onclick = (e) => { e.stopPropagation(); sessDelete(s.start_ts, s.title || s.preview || ''); };
+      row.appendChild(main); row.appendChild(del);
+      list.appendChild(row);
+    }
+  }
+  function sessOpen(ts) {
+    _sessOpenTs = ts;
+    document.getElementById('sess-listview').style.display = 'none';
+    document.getElementById('sess-view').style.display = '';
+    document.getElementById('sess-vtitle').textContent = 'loading…';
+    document.getElementById('sess-vturns').innerHTML = '';
+    document.getElementById('sess-resume-status').textContent = '';
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'session_get', start_ts: ts }));
+  }
+  function renderSessionView(data) {
+    document.getElementById('sess-vtitle').textContent = data.title || 'conversation';
+    const turns = document.getElementById('sess-vturns'); turns.innerHTML = '';
+    for (const t of (data.turns || [])) {
+      const w = document.createElement('div');
+      w.className = 'sess-turn ' + (t.role === 'user' ? 'user' : 'chloe');
+      const r = document.createElement('span'); r.className = 'sr';
+      r.textContent = (t.role === 'user' ? 'YOU ' : 'CHLOE ');
+      const b = document.createElement('div'); b.className = 'sb';
+      b.textContent = t.content || '';
+      w.appendChild(r); w.appendChild(b); turns.appendChild(w);
+    }
+  }
+  function sessBackToList() {
+    document.getElementById('sess-view').style.display = 'none';
+    document.getElementById('sess-listview').style.display = '';
+  }
+  function sessResume() {
+    if (_sessOpenTs == null) return;
+    document.getElementById('sess-resume-status').textContent = 'resuming…';
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'session_resume', start_ts: _sessOpenTs }));
+  }
+  function sessDelete(ts, label) {
+    if (!confirm('Delete this chat? This removes it permanently.'
+                 + (label ? '\n\n' + label : ''))) return;
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'session_delete', start_ts: ts }));
+  }
+  function sessDeleteCurrent() {
+    if (_sessOpenTs != null)
+      sessDelete(_sessOpenTs, document.getElementById('sess-vtitle').textContent);
+  }
+  function sessNewChat() {
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'session_new' }));
+  }
+
+  // ─── CH03 JOBS ─────────────────────────────────────────────────────────
+  function requestJobsState() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'jobs_state' }));
+    }
+  }
+
+  function runJob(name, btn) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (btn) { btn.disabled = true; btn.textContent = '...'; }
+    ws.send(JSON.stringify({ type: 'jobs_run', job: name }));
+    // Refresh state shortly after the kick to reflect 'running'.
+    setTimeout(requestJobsState, 800);
+  }
+
+  function onJobsState(data) {
+    _jobsState = { jobs: data.jobs || [], summary: data.summary || {} };
+    renderJobs();
+    const asof = document.getElementById('jobs-asof');
+    if (asof && data.computed_at) {
+      const d = new Date(data.computed_at * 1000);
+      asof.textContent = 'as of ' + d.toLocaleTimeString('en-US', { hour12: false });
+    }
+  }
+
+  function _fmtAge(hours) {
+    if (hours == null) return '—';
+    if (hours < 1)  return Math.round(hours * 60) + 'm';
+    if (hours < 48) return hours.toFixed(1) + 'h';
+    return Math.round(hours / 24) + 'd';
+  }
+
+  function renderJobs() {
+    const sum = _jobsState.summary || {};
+    const summaryEl = document.getElementById('jobs-summary');
+    if (summaryEl) {
+      summaryEl.innerHTML =
+        '<span class="pill">total <b>' + (sum.total || 0) + '</b></span>' +
+        '<span class="pill">today <b>' + (sum.ran_today || 0) + '</b></span>' +
+        '<span class="pill ok">ok <b>' + (sum.ok || 0) + '</b></span>' +
+        (sum.fail ? '<span class="pill fail">fail <b>' + sum.fail + '</b></span>' : '') +
+        (sum.running ? '<span class="pill running">running <b>' + sum.running + '</b></span>' : '');
+    }
+    const list = document.getElementById('jobs-list');
+    if (!list) return;
+    if (!_jobsState.jobs.length) {
+      list.innerHTML = '<span style="color:#00f7ff44;font-size:10px;padding:4px;">no jobs registered</span>';
+      return;
+    }
+    list.innerHTML = _jobsState.jobs.map(j => {
+      const cls = j.health || 'never_run';
+      const age = j.health === 'running' ? 'running…' : _fmtAge(j.age_hours);
+      const result = j.last_result
+        ? '<div class="result">' + escapeHtml(j.last_result) + '</div>'
+        : '';
+      const btnLabel = j.running ? '...' : '▶ run';
+      const btnDisabled = j.running ? 'disabled' : '';
+      return '<div class="job-card ' + cls + '">' +
+        '<span class="dot"></span>' +
+        '<span class="name" title="' + escapeHtml(j.name) + '">' +
+          escapeHtml(j.name) + '</span>' +
+        '<span class="schedule">' + escapeHtml(j.schedule || '') + '</span>' +
+        '<span class="age">' + age + '</span>' +
+        '<button class="run-btn" ' + btnDisabled +
+          ' onclick="runJob(\'' + j.name + '\', this)">' + btnLabel + '</button>' +
+        result +
+      '</div>';
+    }).join('');
+  }
+
+  function escapeHtml(s) {
+    return (s == null ? '' : String(s))
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // ─── CH04 LOGS ─────────────────────────────────────────────────────────
+  function requestLogsTail() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'logs_tail',
+      file: _logsCurrentFile,
+      lines: 400,
+    }));
+  }
+
+  function setLogsFile(file) {
+    _logsCurrentFile = file;
+    // Update tab state.
+    document.querySelectorAll('.logs-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.file === file);
+    });
+    requestLogsTail();
+  }
+
+  function onLogsTail(data) {
+    if (!data.ok) {
+      const view = document.getElementById('logs-view');
+      if (view) view.textContent = '⚠ ' + (data.error || 'unknown error');
+      return;
+    }
+    _logsState = {
+      file: data.file,
+      lines: data.lines || [],
+      total: data.total_lines || 0,
+      size: data.size_bytes || 0,
+    };
+    renderLogs();
+  }
+
+  function renderLogs() {
+    const view = document.getElementById('logs-view');
+    if (!view) return;
+    const q = (_logsFilter || '').toLowerCase().trim();
+    let lines = _logsState.lines || [];
+    if (q) {
+      lines = lines.filter(L => (L || '').toLowerCase().includes(q));
+    }
+    // Colorize lightly by keywords.
+    const colorized = lines.map(L => {
+      const safe = escapeHtml(L);
+      const low = L.toLowerCase();
+      if (low.includes('fail') || low.includes('error') || low.includes('crash') ||
+          low.includes('traceback')) {
+        return '<span style="color:#ff9a9a">' + safe + '</span>';
+      }
+      if (low.includes('warn')) {
+        return '<span style="color:#ffb35a">' + safe + '</span>';
+      }
+      if (low.includes('=== ok') || low.includes('healthy')) {
+        return '<span style="color:#00ff88">' + safe + '</span>';
+      }
+      if (low.includes('=== start')) {
+        return '<span style="color:#58e6ff">' + safe + '</span>';
+      }
+      return safe;
+    });
+    view.innerHTML = colorized.join('\n');
+    const counts = document.getElementById('logs-counts');
+    if (counts) {
+      counts.textContent =
+        (q ? lines.length + ' / ' : '') +
+        (_logsState.lines || []).length + ' lines · ' +
+        (_logsState.total || 0) + ' total · ' +
+        ((_logsState.size || 0) / 1024 | 0) + ' kb';
+    }
+    if (_logsAutoScroll) {
+      view.scrollTop = view.scrollHeight;
+    }
+  }
+
+  function toggleLogsAutoScroll(btn) {
+    _logsAutoScroll = !_logsAutoScroll;
+    if (btn) {
+      btn.textContent = _logsAutoScroll ? '↓ tail' : '· paused';
+      btn.classList.toggle('active', _logsAutoScroll);
+    }
+    if (_logsAutoScroll) {
+      const view = document.getElementById('logs-view');
+      if (view) view.scrollTop = view.scrollHeight;
+    }
+  }
+
+  function setLogsFilter(value) {
+    _logsFilter = value;
+    renderLogs();
   }
 
   function requestLightsState() {
@@ -2238,7 +2981,20 @@
   // on the mobile PWA. Polls every 30s while the WS is open.
   // ──────────────────────────────────────────────────────────────────────────
   let _balancePollTimer = null;
-  function requestWalletBalance() {
+  // Throttle (Ed, 2026-08-31): ws.onopen fires this immediately on every
+  // (re)connect, independent of the 30s setInterval below — a flapping WS
+  // connection was polling wallet_balance 15+ times a session, sometimes
+  // twice within seconds. Coalesce to one real fetch per BALANCE_POLL_MS;
+  // the pill just keeps showing its last-rendered value in between. The
+  // manual click-to-refresh handler passes force=true to bypass this.
+  const BALANCE_POLL_MS = 30000;
+  let _lastBalanceFetchAt = 0;
+  function requestWalletBalance(force) {
+    const now = Date.now();
+    if (!force && (now - _lastBalanceFetchAt) < BALANCE_POLL_MS) {
+      return;
+    }
+    _lastBalanceFetchAt = now;
     const pill = document.getElementById('balance-pill');
     if (pill) pill.classList.add('refreshing');
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -2271,7 +3027,7 @@
   // Click pill → manual refresh.
   document.addEventListener('DOMContentLoaded', () => {
     const pill = document.getElementById('balance-pill');
-    if (pill) pill.addEventListener('click', requestWalletBalance);
+    if (pill) pill.addEventListener('click', () => requestWalletBalance(true));
   });
 
 
@@ -2548,7 +3304,12 @@
   });
 
   window.sendChat = function() {
-    if (busy) return;
+    // Chat input queue (2026-06-07): sending while a reply is in flight is now
+    // ALLOWED — the message rides the same WS and is processed in order
+    // (hud_server's per-connection reads are sequential; cross-client races
+    // queue server-side via the handle_chat wrapper). Mark it queued locally
+    // so Ed can see it wasn't dropped.
+    const queuedSend = busy;
     const inp = document.getElementById('chat-input');
     const text = inp.value.trim();
 
@@ -2620,9 +3381,12 @@
       return;
     }
 
-    busy = true;
-    document.getElementById('send-btn').disabled = true;
-    setState('thinking');
+    if (!queuedSend) {
+      busy = true;
+      setState('thinking');
+    } else {
+      _appendQueuedNote();
+    }
 
     try {
       // reply_audio:true ships TTS bytes over WS so the browser plays them and
@@ -2638,12 +3402,26 @@
       }));
     } catch (e) {
       console.error('[hud] send failed', e);
-      busy = false;
-      document.getElementById('send-btn').disabled = false;
-      setState('idle');
+      if (!queuedSend) {
+        busy = false;
+        document.getElementById('send-btn').disabled = false;
+        setState('idle');
+      }
       appendMsg('chloe', `[error] failed to send: ${e.message || e}`);
     }
   };
+
+  function _appendQueuedNote() {
+    // Chat input queue: dim marker for a message sent while a reply was in
+    // flight. Removed when the queued turn's own 'start' arrives.
+    const log = document.getElementById('chatlog');
+    const d = document.createElement('div');
+    d.className = 'queued-note';
+    d.textContent = '⏳ queued — answering after this reply';
+    d.style.cssText = 'font-size:11px;font-style:italic;opacity:.55;padding:2px 12px;';
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
 
   function appendMsg(who, text) {
     const log = document.getElementById('chatlog');
@@ -3399,8 +4177,14 @@ function updateAmp(t, dt, state) {
     // is playing — orb pulses then match the audio frame-perfect because
     // they share the same source. Falls back to synthetic syllables if we're
     // displaying 'speaking' from a backend-only path (e.g. wake-word loop).
-    const realAmp = (typeof window !== 'undefined' && window.TtsAudio)
+    let realAmp = (typeof window !== 'undefined' && window.TtsAudio)
                     ? window.TtsAudio.getAmp() : null;
+    // No browser-played audio to analyse (local PC-speaker playback)? Use the
+    // real amplitude the backend streams via `tts_amp`, if it's fresh (<180ms).
+    if (realAmp === null && typeof window !== 'undefined'
+        && (performance.now() - (window.__ttsStreamAmpTs || 0) < 180)) {
+      realAmp = window.__ttsStreamAmp || 0;
+    }
     if (realAmp !== null) {
       // Light noise floor so the orb has a hint of life on quiet phonemes.
       target = 0.20 + realAmp * 0.85 + pnoise(t * 8) * 0.04;
@@ -3423,7 +4207,9 @@ function updateAmp(t, dt, state) {
 // ════════════════════════════════════════════════════════════════════════════
 const clock = new THREE.Clock();
 
+let hudOrbRunning = true;
 function animate() {
+  if (!hudOrbRunning) return;
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.getElapsedTime();
 
@@ -3468,6 +4254,26 @@ const ro = new ResizeObserver(() => {
   camera.updateProjectionMatrix();
 });
 ro.observe(container);
+
+// Pause + shrink the orb's WebGL while the arcade iframe is open. Two WebGL
+// contexts (this orb + EmulatorJS) live in one QWebEngine page; running both
+// was crashing the renderer. The orb sits behind the opaque arcade overlay, so
+// pausing it is invisible. Shrinking the render targets to 1x1 frees the big
+// bloom/composer framebuffers; restored on close.
+window.__hudOrbPause = () => {
+  hudOrbRunning = false;
+  try { renderer.setSize(1, 1); composer.setSize(1, 1); bloom.setSize(1, 1); } catch (_) {}
+};
+window.__hudOrbResume = () => {
+  try {
+    const s = getSize();
+    if (s.w && s.h) {
+      renderer.setSize(s.w, s.h); composer.setSize(s.w, s.h); bloom.setSize(s.w, s.h);
+      camera.aspect = s.w / s.h; camera.updateProjectionMatrix();
+    }
+  } catch (_) {}
+  if (!hudOrbRunning) { hudOrbRunning = true; clock.getDelta(); requestAnimationFrame(animate); }
+};
 
 // Init state
 window.setState('idle');
@@ -3527,25 +4333,119 @@ window.setState('idle');
       border: 0;
       background: #000;
     }
-    #brain-graph-close {
-      position: absolute;
-      top: 10px; right: 14px;
-      z-index: 10001;
-      background: var(--panel);
-      border: 1px solid var(--border2);
-      color: var(--cyan);
-      font: inherit;
-      letter-spacing: 0.1em;
-      padding: 5px 12px;
-      border-radius: 3px;
-      cursor: pointer;
-    }
-    #brain-graph-close:hover { border-color: var(--cyan); }
+    /* The artifact has its own #btn-close in its header — let it own the
+       close affordance so the buttons line up cleanly. The HUD's button
+       used to overlap the artifact's FACTS / 3D buttons. Esc still works
+       (handled below) and the artifact's button posts {type:'brain-close'}
+       back to us. */
+    #brain-graph-close { display: none !important; }
   </style>
   <div id="brain-graph-overlay">
     <button id="brain-graph-close" onclick="toggleBrainGraph(false)">CLOSE [Esc]</button>
     <iframe id="brain-graph-iframe" title="Chloe Brain Graph"></iframe>
   </div>
+
+  <!-- Chess panel overlay — mirrors brain-graph; chess.html is served by brain_http on :6790,
+       and the panel inside opens its own ws://host:6789 to the live backend. -->
+  <style>
+    #chess-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.92); display: none; }
+    #chess-overlay.on { display: block; }
+    #chess-overlay iframe { width: 100%; height: 100%; border: 0; background: transparent; }
+    #chess-close {
+      position: absolute; top: 14px; right: 18px; z-index: 61;
+      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
+      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer;
+    }
+    #chess-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
+  </style>
+  <div id="chess-overlay">
+    <button id="chess-close" onclick="toggleChess(false)">CLOSE [Esc]</button>
+    <iframe id="chess-iframe" title="Chloe Chess"></iframe>
+  </div>
+  <script>
+    function toggleChess(force) {
+      const ov = document.getElementById('chess-overlay');
+      const btn = document.getElementById('chess-btn');
+      const f = document.getElementById('chess-iframe');
+      const willOpen = (force === undefined) ? !ov.classList.contains('on') : !!force;
+      if (willOpen) {
+        const host = (window.location.hostname && window.location.hostname !== '')
+          ? window.location.hostname : 'localhost';
+        const src = `http://${host}:6790/chess.html?t=${Date.now()}`;
+        setTimeout(() => { f.src = src; }, 30);
+        ov.classList.add('on');
+        if (btn) btn.classList.add('on');
+      } else {
+        ov.classList.remove('on');
+        if (btn) btn.classList.remove('on');
+        f.src = 'about:blank';
+      }
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('chess-overlay').classList.contains('on')) {
+        toggleChess(false);
+      }
+    });
+  </script>
+
+  <!-- Arcade (emulator) overlay — emulator.html served by brain_http on :6790 -->
+  <style>
+    #emu-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.94); display: none; }
+    #emu-overlay.on { display: block; }
+    #emu-overlay iframe { width: 100%; height: 100%; border: 0; background: transparent; }
+    #emu-close { position: absolute; top: 14px; right: 18px; z-index: 61;
+      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
+      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer; }
+    #emu-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
+    #emu-watch { position: absolute; top: 14px; left: 18px; z-index: 61;
+      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
+      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer; }
+    #emu-watch:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
+    #emu-watch.on { background: rgba(168,85,247,0.18); border-color: #a855f7; color: #d8b4ff; }
+  </style>
+  <div id="emu-overlay">
+    <button id="emu-close" onclick="toggleEmulator(false)">CLOSE [Esc]</button>
+    <iframe id="emu-iframe" title="Chloe Arcade" allow="autoplay; gamepad; fullscreen; screen-wake-lock"></iframe>
+  </div>
+  <script>
+    let _emuWatching = false;
+    function toggleEmuWatch() {
+      _emuWatching = !_emuWatching;
+      const b = document.getElementById('emu-watch');
+      try {
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: _emuWatching ? 'game_watch_start' : 'game_watch_stop' }));
+        }
+      } catch (e) {}
+      if (b) { b.textContent = _emuWatching ? 'CHLOE: WATCHING' : 'CHLOE: WATCH OFF'; b.classList.toggle('on', _emuWatching); }
+    }
+    function toggleEmulator(force) {
+      const ov = document.getElementById('emu-overlay');
+      const btn = document.getElementById('emu-btn');
+      const f = document.getElementById('emu-iframe');
+      const willOpen = (force === undefined) ? !ov.classList.contains('on') : !!force;
+      if (willOpen) {
+        const host = (window.location.hostname && window.location.hostname !== '')
+          ? window.location.hostname : 'localhost';
+        const src = `http://${host}:6790/gen1recomp.html?t=${Date.now()}`;
+        try { window.__hudOrbPause && window.__hudOrbPause(); } catch (e) {}  // free orb WebGL while playing
+        setTimeout(() => { f.src = src; }, 30);
+        ov.classList.add('on');
+        if (btn) btn.classList.add('on');
+      } else {
+        ov.classList.remove('on');
+        if (btn) btn.classList.remove('on');
+        f.src = 'about:blank';
+        if (_emuWatching) toggleEmuWatch();
+        try { window.__hudOrbResume && window.__hudOrbResume(); } catch (e) {}
+      }
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('emu-overlay').classList.contains('on')) {
+        toggleEmulator(false);
+      }
+    });
+  </script>
   <script>
     function toggleBrainGraph(force) {
       const ov = document.getElementById('brain-graph-overlay');
@@ -3575,6 +4475,15 @@ window.setState('idle');
       if (e.key === 'Escape' && document.getElementById('brain-graph-overlay').classList.contains('on')) {
         toggleBrainGraph(false);
       }
+    });
+    // The artifact's own header buttons post messages back here so the
+    // HUD can close the panel or wire up future brain-side affordances.
+    window.addEventListener('message', (e) => {
+      const d = e.data;
+      if (!d || typeof d !== 'object') return;
+      if (d.type === 'brain-close') toggleBrainGraph(false);
+      // brain_node_chat / brain_cluster_chat are wired straight to
+      // /api/brain/chat inside the artifact — no hud routing needed.
     });
   </script>
   <!-- END BRAIN GRAPH OVERLAY -->

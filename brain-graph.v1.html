@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chloe // Brain Graph</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+  :root {
+    --cyan:    #00f7ff;
+    --cyan-d:  #00f7ff44;
+    --green:   #00ff88;
+    --amber:   #ffaa00;
+    --magenta: #ff00aa;
+    --purple:  #a855f7;
+    --orange:  #ff7733;
+    --bg:      #000810;
+    --panel:   #000d1a;
+    --border:  #00f7ff2a;
+    --border2: #00f7ff55;
+    --dim:     #00f7ff88;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #000;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--cyan);
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 30%, #00f7ff0a 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 70%, #ff00aa08 0%, transparent 50%),
+      linear-gradient(rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgba(0, 247, 255, 0.025) 1px, transparent 1px) 0 0 / 40px 40px,
+      #000;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .layout {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    grid-template-rows: 48px 1fr;
+    height: 100vh;
+    gap: 0;
+  }
+  .topbar {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+  }
+  /* When loaded inside the HUD iframe, leave room on the right for the
+     parent's CLOSE [Esc] button so it doesn't cover the legend. */
+  body.embedded .topbar { padding-right: 180px; }
+  .brand {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    color: var(--cyan);
+    letter-spacing: 0.18em;
+  }
+  .stats { display: flex; gap: 18px; color: var(--dim); }
+  .stats b { color: var(--cyan); }
+  .legend {
+    display: flex; gap: 12px; align-items: center;
+    color: var(--dim);
+  }
+  .legend .swatch {
+    display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; margin-right: 4px; vertical-align: middle;
+  }
+  #graph {
+    background: #000;
+    border-right: 1px solid var(--border);
+    height: 100%;
+    width: 100%;
+  }
+  .side {
+    background: var(--panel);
+    overflow-y: auto;
+    padding: 14px 16px;
+    border-left: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .side h1, .side h2, .side h3 { color: var(--cyan); margin: 14px 0 6px; }
+  .side h1 { font-size: 18px; letter-spacing: 0.1em; }
+  .side h2 { font-size: 15px; }
+  .side h3 { font-size: 13px; color: var(--dim); }
+  .side a { color: var(--green); text-decoration: none; }
+  .side a:hover { text-decoration: underline; }
+  .side code {
+    background: #00f7ff10;
+    color: var(--green);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+  .side pre {
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .side pre code { background: transparent; color: var(--cyan); }
+  .side hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+  .side blockquote {
+    border-left: 2px solid var(--amber);
+    padding-left: 10px;
+    color: var(--dim);
+    margin: 8px 0;
+  }
+  .side ul, .side ol { padding-left: 22px; }
+  .side .empty {
+    color: var(--dim);
+    font-style: italic;
+    margin-top: 30px;
+    text-align: center;
+  }
+  .side .meta {
+    color: var(--dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+  }
+  .side .meta .pill {
+    display: inline-block;
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-right: 6px;
+  }
+  .side .meta .ghost { border-color: var(--amber); color: var(--amber); }
+  .filterbar {
+    position: absolute;
+    top: 60px; left: 14px;
+    display: flex; gap: 8px;
+    z-index: 5;
+  }
+  .filterbar input {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--cyan);
+    font: inherit;
+    padding: 5px 8px;
+    border-radius: 3px;
+    width: 220px;
+  }
+  .filterbar input:focus { outline: none; border-color: var(--cyan); }
+  .filterbar button {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--cyan);
+    font: inherit;
+    padding: 5px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.08em;
+  }
+  .filterbar button:hover { border-color: var(--cyan); }
+  #status {
+    position: absolute;
+    bottom: 14px; left: 14px;
+    background: rgba(0, 13, 26, 0.72);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    padding: 7px 12px 7px 28px;
+    border-radius: 18px;
+    transition: opacity 250ms ease;
+    z-index: 6;
+    box-shadow: 0 0 18px rgba(0, 247, 255, 0.18);
+    max-width: 65%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #status::before {
+    content: "";
+    position: absolute;
+    top: 50%; left: 12px;
+    width: 8px; height: 8px;
+    transform: translateY(-50%);
+    background: #00ff88;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #00ff88;
+    animation: status-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); }
+    50%      { opacity: 0.45; transform: translateY(-50%) scale(0.7); }
+  }
+  #ghost-toggle.ghost-off {
+    background: rgba(168, 85, 247, 0.18);
+    border-color: var(--purple);
+    color: #d8b4ff;
+  }
+  body::before {
+    animation: bg-drift 30s ease-in-out infinite alternate;
+  }
+  @keyframes bg-drift {
+    0%   { transform: translate(0, 0); }
+    100% { transform: translate(-20px, 14px); }
+  }
+  /* When the user hovers a node, fade the rest. Toggled via .focus-mode. */
+  #graph.focus-mode canvas { filter: saturate(1.3) brightness(1.05); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="topbar">
+    <span class="brand">CHLOE // BRAIN GRAPH</span>
+    <div class="stats" id="stats">loading...</div>
+    <div class="legend" title="Orb size + glow scales with how connected each page is">
+      <span><span class="swatch" style="background:#00f7ff"></span>entity</span>
+      <span><span class="swatch" style="background:#74e0ee"></span>concept</span>
+      <span><span class="swatch" style="background:#bff5ff"></span>source</span>
+      <span><span class="swatch" style="background:#3a7c8a"></span>compare</span>
+      <span><span class="swatch" style="background:#3a4a55"></span>ghost</span>
+    </div>
+  </div>
+  <div id="graph"></div>
+  <div class="filterbar">
+    <input id="search" placeholder="filter by name..." autocomplete="off">
+    <button id="reset">RESET</button>
+    <button id="ghost-toggle" class="ghost-on">HIDE GHOSTS</button>
+    <button id="debug">DEBUG</button>
+  </div>
+  <div id="status">init</div>
+  <aside class="side" id="side">
+    <div class="empty">Click a node to read its page.</div>
+  </aside>
+</div>
+<script>
+  const TYPE_COLOR = {
+    entities:    "#00f7ff",
+    concepts:    "#a855f7",
+    sources:     "#00ff88",
+    comparisons: "#ff7733",
+    explorations:"#ff00aa",
+    ghost:       "#ffaa00",
+    other:       "#888"
+  };
+
+  const el = (id) => document.getElementById(id);
+  const status = (msg) => { el("status").textContent = msg; };
+
+  let network = null;
+  let nodesDS = null;
+  let edgesDS = null;
+  let allNodes = [];
+
+  async function loadGraph() {
+    status("fetching graph...");
+    let g;
+    try {
+      const r = await fetch("/api/brain/graph", { cache: "no-store" });
+      g = await r.json();
+    } catch (e) {
+      status("fetch failed: " + e);
+      return;
+    }
+    if (g.error) {
+      status("backend error: " + g.error);
+      return;
+    }
+    const stats = g.stats || {};
+    el("stats").innerHTML =
+      `<b>${stats.node_count || 0}</b> nodes (` +
+      `<b>${stats.real_count || 0}</b> real / <b>${stats.ghost_count || 0}</b> ghost) · ` +
+      `<b>${stats.edge_count || 0}</b> edges`;
+
+    const total = (g.nodes || []).length || 1;
+    // Max degree drives brightness/glow intensity for real nodes.
+    const maxDeg = Math.max(1, ...(g.nodes || []).map((n) => n.degree || 0));
+    // Type → small hue offset within the cyan band so types are distinct
+    // but the whole graph reads as one palette.
+    const HUE = { entities: 188, concepts: 198, sources: 175,
+                  comparisons: 165, explorations: 205, other: 190 };
+
+    function styleFor(n) {
+      if (!n.real) {
+        // Ghost: cool blue-gray, dim, almost no glow.
+        return {
+          color: "#3a4a55",
+          shadow: { enabled: true, color: "rgba(120,160,180,0.20)",
+                    size: 4, x: 0, y: 0 }
+        };
+      }
+      const t = Math.min(1, (n.degree || 0) / maxDeg);  // 0..1 importance
+      const hue = HUE[n.type] || HUE.other;
+      const sat = 70 + t * 25;             // 70..95%
+      const light = 36 + t * 38;           // 36..74% — high-degree nodes pop
+      const color = `hsl(${hue}, ${sat}%, ${light}%)`;
+      const glowAlpha = 0.20 + t * 0.55;   // 0.20..0.75
+      const glowSize  = 8 + t * 28;        // 8..36 px
+      return {
+        color,
+        shadow: { enabled: true,
+                  color: `hsla(${hue}, 100%, ${65 + t * 15}%, ${glowAlpha})`,
+                  size: glowSize, x: 0, y: 0 }
+      };
+    }
+
+    // Concentric rings: real pages on inner ring, ghosts on outer ring.
+    const nodes = (g.nodes || []).map((n, i) => {
+      const innerR = 220, outerR = 480;
+      const r = n.real ? innerR : outerR;
+      const angle = (i / total) * Math.PI * 2;
+      const s = styleFor(n);
+      return ({
+        id: n.id,
+        label: n.label,
+        x: Math.cos(angle) * r + (Math.random() - 0.5) * 40,
+        y: Math.sin(angle) * r + (Math.random() - 0.5) * 40,
+        title: `${n.id}\ntype=${n.type} degree=${n.degree}` + (n.real ? "" : " (ghost)"),
+        value: n.size,
+        shape: "dot",
+        color: { background: s.color, border: s.color,
+                 highlight: { background: "#fff", border: "#ffffff" } },
+        borderWidth: n.real ? 0 : 1,
+        font: { color: "#bfeaff", face: "Share Tech Mono", size: 11, strokeWidth: 0 },
+        shadow: s.shadow,
+        _type: n.type,
+        _real: n.real,
+        _degree: n.degree || 0
+      });
+    });
+    const edges = (g.edges || []).map((e, i) => ({
+      id: i,
+      from: e.source,
+      to: e.target,
+      color: { color: "#00f7ff33", highlight: "#00f7ff", inherit: false },
+      width: 0.6,
+      smooth: { type: "continuous" },
+      arrows: { to: { enabled: false } }
+    }));
+
+    allNodes = nodes;
+    nodesDS = new vis.DataSet(nodes);
+    edgesDS = new vis.DataSet(edges);
+
+    const container = el("graph");
+    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, {
+      interaction: { hover: true, dragNodes: true, navigationButtons: false,
+                     hoverConnectedEdges: true, selectConnectedEdges: true,
+                     tooltipDelay: 120 },
+      physics: {
+        enabled: true,
+        solver: "forceAtlas2Based",
+        forceAtlas2Based: {
+          gravitationalConstant: -22,
+          centralGravity: 0.012,
+          springLength: 95,
+          springConstant: 0.06,
+          damping: 0.7,
+          avoidOverlap: 0.4
+        },
+        stabilization: { iterations: 400, fit: false, updateInterval: 50 },
+        maxVelocity: 35,
+        timestep: 0.4
+      },
+      nodes: {
+        scaling: { min: 6, max: 36 },
+        shadow: { enabled: true, color: "rgba(0,247,255,0.45)", size: 16, x: 0, y: 0 },
+        chosen: {
+          node: (values, id, selected, hovering) => {
+            values.shadowSize = hovering || selected ? 28 : 16;
+            values.shadowColor = "rgba(255,255,255,0.65)";
+          }
+        }
+      },
+      edges: {
+        smooth: { type: "continuous", roundness: 0.4 },
+        shadow: { enabled: true, color: "rgba(0,247,255,0.18)", size: 6, x: 0, y: 0 }
+      }
+    });
+
+    network.on("click", (params) => {
+      if (params.nodes.length === 0) {
+        showEmpty();
+        return;
+      }
+      const id = params.nodes[0];
+      // Smooth focus zoom on selection — gives the click a sense of motion.
+      try { network.focus(id, { scale: 1.4, animation: { duration: 600, easingFunction: "easeInOutQuad" } }); }
+      catch (_) {}
+      loadPage(id);
+    });
+
+    // ── Hover trace: dim everything not connected to the hovered node. ──
+    function neighborsOf(nodeId) {
+      const set = new Set([nodeId]);
+      edgesDS.forEach((e) => {
+        if (e.from === nodeId) set.add(e.to);
+        if (e.to === nodeId) set.add(e.from);
+      });
+      return set;
+    }
+    network.on("hoverNode", (params) => {
+      el("graph").classList.add("focus-mode");
+      const keep = neighborsOf(params.node);
+      const updates = nodesDS.map((n) => ({
+        id: n.id,
+        opacity: keep.has(n.id) ? 1.0 : 0.18
+      }));
+      nodesDS.update(updates);
+      const eUpdates = edgesDS.map((e) => ({
+        id: e.id,
+        color: (e.from === params.node || e.to === params.node)
+          ? { color: "#00f7ff", inherit: false }
+          : { color: "#00f7ff10", inherit: false },
+        width: (e.from === params.node || e.to === params.node) ? 1.6 : 0.4
+      }));
+      edgesDS.update(eUpdates);
+    });
+    network.on("blurNode", () => {
+      el("graph").classList.remove("focus-mode");
+      nodesDS.update(nodesDS.map((n) => ({ id: n.id, opacity: 1.0 })));
+      edgesDS.update(edgesDS.map((e) => ({
+        id: e.id,
+        color: { color: "#00f7ff33", inherit: false },
+        width: 0.6
+      })));
+    });
+
+    // ── Per-node drift: each orb wobbles around its anchor. ──
+    // After stabilization we capture every node's position as its anchor,
+    // then nudge it via moveNode each tick along a slow Lissajous curve.
+    // High-degree (more important) nodes get slightly larger drift radius.
+    const anchors = {};        // id -> {x, y}
+    const driftMeta = {};      // id -> {phase, freq, radius}
+    const draggedSet = new Set();
+
+    function captureAnchors() {
+      const pos = network.getPositions();
+      Object.keys(pos).forEach((id) => {
+        anchors[id] = { x: pos[id].x, y: pos[id].y };
+        const node = nodesDS.get(id);
+        const deg = (node && node._degree) || 0;
+        const importance = Math.min(1, deg / Math.max(1, maxDeg));
+        driftMeta[id] = {
+          phase:    Math.random() * Math.PI * 2,
+          phase2:   Math.random() * Math.PI * 2,
+          pulsePhase: Math.random() * Math.PI * 2,
+          // 5-10s period — visible drift, still ambient (not chaotic).
+          freqX:    0.20 + Math.random() * 0.20,
+          freqY:    0.16 + Math.random() * 0.18,
+          // Bigger amplitude so the motion actually reads at ~50px spacing.
+          radiusX:  22 + importance * 30 + Math.random() * 8,  // 22..60px
+          radiusY:  18 + importance * 26 + Math.random() * 7,  // 18..51px
+          // Per-orb pulse rate. Slow on hubs, faster on small nodes.
+          pulseFreq: 1.2 + Math.random() * 0.8,                // ~1-2 Hz
+          importance: importance,
+          hue: (node && node._real)
+            ? ({entities:188, concepts:198, sources:175, comparisons:165,
+                explorations:205, other:190}[node._type] || 188)
+            : 200,
+          real: node && node._real
+        };
+      });
+    }
+
+    network.on("dragStart", (params) => {
+      params.nodes.forEach((id) => draggedSet.add(id));
+    });
+    network.on("dragEnd", (params) => {
+      params.nodes.forEach((id) => {
+        draggedSet.delete(id);
+        // Re-anchor: drag re-positions the node, future drift orbits new spot.
+        const p = network.getPositions([id])[id];
+        if (p) anchors[id] = { x: p.x, y: p.y };
+      });
+    });
+
+    let _driftT = 0;
+    let _driftStarted = false;
+    function startDriftLoop() {
+      if (_driftStarted) return;
+      _driftStarted = true;
+      // ── Glow overlay: draws pulsing halos on a canvas above vis. ──
+      const graphContainer = el("graph");
+      graphContainer.style.position = "relative";
+      let glowCanvas = document.getElementById("glow-layer");
+      if (!glowCanvas) {
+        glowCanvas = document.createElement("canvas");
+        glowCanvas.id = "glow-layer";
+        glowCanvas.style.cssText =
+          "position:absolute; inset:0; pointer-events:none; z-index:2; mix-blend-mode:screen;";
+        graphContainer.appendChild(glowCanvas);
+      }
+      const gctx = glowCanvas.getContext("2d");
+      function resizeGlowCanvas() {
+        glowCanvas.width  = graphContainer.clientWidth;
+        glowCanvas.height = graphContainer.clientHeight;
+      }
+      resizeGlowCanvas();
+      if ("ResizeObserver" in window) {
+        try { new ResizeObserver(resizeGlowCanvas).observe(graphContainer); }
+        catch (_) {}
+      }
+
+      let _lastFrame = performance.now();
+      function tick(now) {
+        if (!network) return requestAnimationFrame(tick);
+        const dt = Math.min(0.05, (now - _lastFrame) / 1000);
+        _lastFrame = now;
+        _driftT += dt;
+
+        // 1. Move every (non-dragged) node along its Lissajous curve.
+        const ids = Object.keys(anchors);
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          if (draggedSet.has(id)) continue;
+          const m = driftMeta[id];
+          const a = anchors[id];
+          if (!m || !a) continue;
+          const x = a.x + Math.sin(_driftT * m.freqX + m.phase)  * m.radiusX;
+          const y = a.y + Math.cos(_driftT * m.freqY + m.phase2) * m.radiusY;
+          network.moveNode(id, x, y);
+        }
+
+        // 2. Draw pulsing orb halos on the overlay canvas.
+        gctx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
+        gctx.globalCompositeOperation = "lighter";
+        const positions = network.getPositions();
+        const scale = network.getScale();
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          const m = driftMeta[id];
+          const node = nodesDS.get(id);
+          if (!m || !node || node.hidden) continue;
+          const wp = positions[id];
+          if (!wp) continue;
+          const dom = network.canvasToDOM({ x: wp.x, y: wp.y });
+          // Skip off-screen (with margin)
+          if (dom.x < -150 || dom.y < -150 ||
+              dom.x > glowCanvas.width + 150 || dom.y > glowCanvas.height + 150) continue;
+
+          // Pulse: 0..1 sinusoid per orb, slower for hubs.
+          const pulse = 0.5 + 0.5 * Math.sin(_driftT * m.pulseFreq + m.pulsePhase);
+          // Base radius scales with importance and current zoom.
+          const baseR = (10 + m.importance * 28) * Math.max(0.4, Math.min(2.0, scale));
+          const glowR = baseR * (2.6 + pulse * 1.4);
+          const coreAlpha = m.real ? (0.55 + pulse * 0.35) : (0.18 + pulse * 0.10);
+          const midAlpha  = m.real ? (0.20 + pulse * 0.15) : (0.06 + pulse * 0.04);
+
+          const grad = gctx.createRadialGradient(dom.x, dom.y, 0, dom.x, dom.y, glowR);
+          grad.addColorStop(0,   `hsla(${m.hue}, 100%, 78%, ${coreAlpha})`);
+          grad.addColorStop(0.45,`hsla(${m.hue}, 100%, 60%, ${midAlpha})`);
+          grad.addColorStop(1,   `hsla(${m.hue}, 100%, 50%, 0)`);
+          gctx.fillStyle = grad;
+          gctx.beginPath();
+          gctx.arc(dom.x, dom.y, glowR, 0, Math.PI * 2);
+          gctx.fill();
+
+          // Bright inner core for real (non-ghost) orbs.
+          if (m.real) {
+            const coreR = baseR * 0.55;
+            const coreG = gctx.createRadialGradient(
+              dom.x - coreR * 0.3, dom.y - coreR * 0.3, 0,
+              dom.x, dom.y, coreR
+            );
+            coreG.addColorStop(0,   `hsla(${m.hue}, 100%, 95%, ${0.85 + pulse * 0.10})`);
+            coreG.addColorStop(0.6, `hsla(${m.hue}, 100%, 70%, ${0.45 + pulse * 0.10})`);
+            coreG.addColorStop(1,   `hsla(${m.hue}, 100%, 60%, 0)`);
+            gctx.fillStyle = coreG;
+            gctx.beginPath();
+            gctx.arc(dom.x, dom.y, coreR, 0, Math.PI * 2);
+            gctx.fill();
+          }
+        }
+        gctx.globalCompositeOperation = "source-over";
+
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    network.on("stabilizationIterationsDone", () => {
+      // Freeze physics so the layout stops drifting; then start our own gentle drift.
+      network.setOptions({ physics: { enabled: false } });
+      captureAnchors();
+      startDriftLoop();
+      const c = el("graph");
+      const cv = c.querySelector("canvas");
+      const cw = cv ? cv.clientWidth : -1;
+      const ch = cv ? cv.clientHeight : -1;
+      // Force fit twice with a small gap; the first sometimes runs before
+      // canvas resize when the iframe was just shown.
+      network.fit({ animation: false });
+      setTimeout(() => {
+        try {
+          // Some Chromium builds give us a 0-sized canvas if vis was created
+          // pre-paint. Force an explicit size match against the container.
+          if (network && network.canvas && network.canvas.setSize) {
+            network.canvas.setSize(c.clientWidth + "px", c.clientHeight + "px");
+          }
+          network.redraw();
+          network.fit({ animation: false });
+        } catch (_) {}
+      }, 120);
+      status(`ready  container=${c.clientWidth}x${c.clientHeight}  canvas=${cw}x${ch}  nodes=${total}`);
+    });
+    let _resizeT = null;
+    function _onResize() {
+      if (!network) return;
+      clearTimeout(_resizeT);
+      _resizeT = setTimeout(() => {
+        try {
+          const c = el("graph");
+          if (network.canvas && network.canvas.setSize) {
+            network.canvas.setSize(c.clientWidth + "px", c.clientHeight + "px");
+          }
+          network.redraw();
+          network.fit({ animation: false });
+        } catch (_) {}
+      }, 80);
+    }
+    window.addEventListener("resize", _onResize);
+    // Critical: ResizeObserver catches container size changes that don't
+    // trigger window resize (e.g. parent iframe being fullscreened).
+    if ("ResizeObserver" in window) {
+      try {
+        const ro = new ResizeObserver(_onResize);
+        ro.observe(el("graph"));
+      } catch (_) {}
+    }
+    setTimeout(() => {
+      if (network) {
+        try { network.redraw(); network.fit({ animation: false }); } catch (_) {}
+      }
+    }, 250);
+    status("rendering...");
+  }
+
+  function showEmpty() {
+    el("side").innerHTML = '<div class="empty">Click a node to read its page.</div>';
+  }
+
+  async function loadPage(nodeId) {
+    const node = nodesDS.get(nodeId);
+    el("side").innerHTML =
+      `<div class="meta">` +
+      `<span class="pill">${node._type || "?"}</span>` +
+      (node._real ? "" : '<span class="pill ghost">ghost</span>') +
+      `<span style="opacity:0.6">${node.id}</span>` +
+      `</div>` +
+      `<div style="opacity:0.6">loading page...</div>`;
+    try {
+      const r = await fetch("/api/brain/page?p=" + encodeURIComponent(nodeId), { cache: "no-store" });
+      const data = await r.json();
+      if (!data.ok) {
+        el("side").innerHTML =
+          `<div class="meta"><span class="pill ghost">${node._type || "?"}</span></div>` +
+          `<div class="empty">${data.error || "page not found"}` +
+          (data.path ? `<br><br><span style="opacity:0.5;font-size:11px">${data.path}</span>` : "") +
+          `</div>`;
+        return;
+      }
+      const html = marked.parse(data.text || "");
+      el("side").innerHTML =
+        `<div class="meta">` +
+        `<span class="pill">${node._type || "?"}</span>` +
+        `<span style="opacity:0.6">${node.id}.md</span>` +
+        `</div>` + html;
+      // Make in-page wikilinks clickable: rewrite [[slug]] before marked? marked passes them through.
+      // Simpler: post-render, find any text matching [[slug]] and convert to span with click handler.
+      rewriteWikilinks();
+    } catch (e) {
+      el("side").innerHTML = `<div class="empty">load error: ${e}</div>`;
+    }
+  }
+
+  function rewriteWikilinks() {
+    // Replace [[slug]] / [[type/slug]] text with clickable spans that focus the node.
+    const root = el("side");
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const re = /\[\[([^\]\|]+)(?:\|([^\]]+))?\]\]/g;
+    const todo = [];
+    while (walker.nextNode()) {
+      const t = walker.currentNode;
+      if (t.parentNode && t.parentNode.tagName === "PRE") continue;
+      if (re.test(t.textContent)) todo.push(t);
+      re.lastIndex = 0;
+    }
+    todo.forEach((t) => {
+      const span = document.createElement("span");
+      span.innerHTML = t.textContent.replace(re, (_, target, alt) => {
+        const tt = target.trim();
+        const display = (alt || tt).trim();
+        return `<a href="#" data-link="${tt.replace(/"/g,"&quot;")}" style="color:var(--green)">${display}</a>`;
+      });
+      t.parentNode.replaceChild(span, t);
+    });
+    root.querySelectorAll("a[data-link]").forEach((a) => {
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const target = a.getAttribute("data-link");
+        // Resolve same way the backend does
+        let id = target;
+        if (id.endsWith(".md")) id = id.slice(0, -3);
+        if (!id.includes("/")) {
+          // try to find any node whose label matches
+          const candidate = allNodes.find((n) => n.label === id);
+          if (candidate) id = candidate.id;
+        }
+        if (!nodesDS.get(id)) {
+          status("no node for [[" + target + "]]");
+          return;
+        }
+        network.focus(id, { scale: 1.4, animation: { duration: 400 } });
+        network.selectNodes([id]);
+        loadPage(id);
+      });
+    });
+  }
+
+  // Filter
+  el("search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!nodesDS) return;
+    const matching = q
+      ? allNodes.filter((n) => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q))
+      : allNodes;
+    const ids = new Set(matching.map((n) => n.id));
+    nodesDS.update(allNodes.map((n) => ({
+      id: n.id,
+      hidden: q && !ids.has(n.id),
+    })));
+  });
+  el("reset").addEventListener("click", () => {
+    el("search").value = "";
+    if (network) network.fit({ animation: { duration: 400 } });
+    nodesDS && nodesDS.update(allNodes.map((n) => ({ id: n.id, hidden: false })));
+  });
+
+  let ghostsHidden = false;
+  el("ghost-toggle").addEventListener("click", () => {
+    ghostsHidden = !ghostsHidden;
+    const btn = el("ghost-toggle");
+    btn.textContent = ghostsHidden ? "SHOW GHOSTS" : "HIDE GHOSTS";
+    btn.classList.toggle("ghost-off", ghostsHidden);
+    btn.classList.toggle("ghost-on", !ghostsHidden);
+    if (!nodesDS) return;
+    // Hide ghost nodes; also hide edges that touch a hidden node.
+    nodesDS.update(allNodes.map((n) => ({
+      id: n.id,
+      hidden: ghostsHidden && !n._real
+    })));
+    if (edgesDS) {
+      const hidden = new Set(allNodes.filter((n) => ghostsHidden && !n._real).map((n) => n.id));
+      edgesDS.update(edgesDS.map((e) => ({
+        id: e.id,
+        hidden: hidden.has(e.from) || hidden.has(e.to)
+      })));
+    }
+    setTimeout(() => network && network.fit({ animation: { duration: 400 } }), 50);
+  });
+
+  el("debug").addEventListener("click", () => {
+    if (!network) { status("no network"); return; }
+    const c = el("graph");
+    const cv = c.querySelector("canvas");
+    const view = network.getViewPosition();
+    const scale = network.getScale();
+    const pos = nodesDS ? network.getPositions(nodesDS.getIds().slice(0, 3)) : {};
+    const summary =
+      `cont=${c.clientWidth}x${c.clientHeight} ` +
+      `canv=${cv ? cv.clientWidth : "?"}x${cv ? cv.clientHeight : "?"} ` +
+      `view=(${view.x.toFixed(0)},${view.y.toFixed(0)}) scale=${scale.toFixed(3)} ` +
+      `n0=${JSON.stringify(pos)}`;
+    status(summary);
+    console.log("[brain-graph debug]", summary, pos);
+    network.fit({ animation: { duration: 400 } });
+  });
+  // Reserve space on the right for parent CLOSE button if we're embedded.
+  if (window.self !== window.top) {
+    document.body.classList.add("embedded");
+  }
+  loadGraph();
+</script>
+</body>
+</html>

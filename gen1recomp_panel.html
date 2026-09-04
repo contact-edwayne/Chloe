@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>chloe · pokemon</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink-0:#06070b; --ink-1:#0a0b10; --ink-2:#0d0f16; --ink-3:#11141e;
+    --line:#1d2230; --line-2:#262c40; --fog:#5a6584; --fog-2:#8893b3;
+    --text:#d6deef; --text-dim:#97a1bf;
+    --cyan:#22d3ee; --cyan-1:#00e5ff; --cyan-2:#8cf0ff;
+    --violet:#b06cff; --violet-1:#d2a7ff; --pink:#ff6ec7; --gold:#f8d676; --red:#ff5d7a; --green:#5dffa3;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+    --sans:'Inter',system-ui,sans-serif;
+    --serif:'Cormorant Garamond',Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(1100px 600px at 15% -10%,rgba(34,211,238,.06),transparent 60%),
+               radial-gradient(900px 600px at 110% 110%,rgba(176,108,255,.05),transparent 60%),var(--ink-0);
+    color:var(--text); font-family:var(--sans);
+    display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  /* ── header ── */
+  header{
+    display:flex; align-items:center; gap:16px; padding:10px 170px 10px 18px;
+    border-bottom:1px solid var(--line); flex:0 0 auto;
+  }
+  .brand{font-family:var(--mono);font-size:13px;letter-spacing:.18em;color:var(--cyan-2);
+    text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.4);white-space:nowrap}
+  .spacer{flex:1}
+  .btn{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--cyan-2);background:var(--ink-3);border:1px solid var(--line-2);padding:8px 12px;
+    cursor:pointer;border-radius:3px;transition:all .15s;white-space:nowrap}
+  .btn:hover{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.16),rgba(34,211,238,.03))}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .btn.watch-on{color:#fff;border-color:var(--violet);background:linear-gradient(180deg,rgba(176,108,255,.22),rgba(176,108,255,.05));box-shadow:0 0 10px rgba(176,108,255,.35)}
+  .btn.launch{color:var(--ink-0);background:linear-gradient(180deg,var(--cyan-2),var(--cyan-1));border-color:var(--cyan-1);font-size:11px;padding:9px 16px}
+  .btn.stop{border-color:var(--red);color:var(--red)}
+  select#gameSel{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--text);background:var(--ink-3);border:1px solid var(--line-2);padding:9px 10px;border-radius:3px}
+  /* ── pulse strip ── */
+  .pulse{position:relative;display:flex;align-items:center;gap:14px;padding:6px 18px;
+    border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(34,211,238,.04),rgba(176,108,255,.04));
+    overflow:hidden;flex:0 0 auto;min-height:42px}
+  .pulse::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(220px 60px at 0% 50%,rgba(34,211,238,.10),transparent 70%),
+               radial-gradient(220px 60px at 100% 50%,rgba(176,108,255,.10),transparent 70%)}
+  .pulse-orb{position:relative;width:30px;height:30px;flex:0 0 auto;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#f6fbff,#8cf0ff 22%,#22d3ee 50%,#063543 100%);
+    box-shadow:0 0 14px rgba(34,211,238,.7),0 0 32px rgba(34,211,238,.35),inset 0 0 8px rgba(0,229,255,.55);
+    transition:box-shadow .4s ease, background .4s ease, transform .4s ease}
+  .pulse-orb::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:1px solid rgba(34,211,238,.4);
+    box-shadow:0 0 12px rgba(34,211,238,.4) inset; animation:orbRing 3.4s ease-in-out infinite}
+  .pulse-orb.thinking{background:radial-gradient(circle at 35% 30%,#fff,#d2a7ff 22%,#b06cff 55%,#1a0a35 100%);
+    box-shadow:0 0 16px rgba(176,108,255,.85),0 0 38px rgba(176,108,255,.45),inset 0 0 10px rgba(210,167,255,.6);
+    transform:scale(1.05); animation:orbThink 1.05s ease-in-out infinite}
+  .pulse-orb.speaking{background:radial-gradient(circle at 35% 30%,#fff,#ffc6e5 20%,#ff6ec7 55%,#350a26 100%);
+    box-shadow:0 0 18px rgba(255,110,199,.85),0 0 44px rgba(255,110,199,.5),inset 0 0 12px rgba(255,198,229,.6);
+    transform:scale(1.08); animation:orbSpeak 0.55s ease-in-out infinite}
+  @keyframes orbRing{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.18);opacity:.15}}
+  @keyframes orbThink{50%{transform:scale(1.12)}}
+  @keyframes orbSpeak{50%{transform:scale(1.16)}}
+  .pulse-canvas{flex:1 1 auto;height:34px;display:block}
+  .pulse-tag{position:relative;font-family:var(--mono);font-size:9.5px;letter-spacing:.26em;
+    color:var(--cyan-2);text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.5);flex:0 0 auto;
+    transition:color .3s}
+  .pulse-tag.thinking{color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.6)}
+  .pulse-tag.speaking{color:var(--pink);text-shadow:0 0 10px rgba(255,110,199,.6)}
+  /* ── body: launch console ── */
+  .body{flex:1 1 auto;display:flex;min-height:0}
+  .stage{flex:1 1 auto;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+  .launchbox{flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+    background:#000;position:relative;padding:24px;text-align:center}
+  .lc-title{font-family:var(--serif);font-style:italic;font-size:28px;color:var(--violet-1);
+    text-shadow:0 0 16px rgba(176,108,255,.35)}
+  .lc-status{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--fog)}
+  .lc-status.on{color:var(--green);text-shadow:0 0 8px rgba(93,255,163,.4)}
+  .lc-row{display:flex;align-items:center;gap:10px}
+  .lc-hint{max-width:440px;font-size:12.5px;line-height:1.6;color:var(--text-dim)}
+  .lc-hint b{color:var(--cyan-2);font-weight:600}
+  /* ── save bar ── */
+  .savebar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid var(--line);background:var(--ink-2)}
+  .savebar .st{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--fog);margin-left:auto}
+  /* ── memory viewer ── */
+  .memviewer{position:absolute;inset:0;display:none;flex-direction:column;
+    background:rgba(6,7,11,.96);backdrop-filter:blur(3px);z-index:50}
+  .memviewer.on{display:flex}
+  .memviewer-head{display:flex;align-items:center;gap:12px;padding:12px 18px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(90deg,rgba(176,108,255,.08),rgba(34,211,238,.04))}
+  .memviewer-head .tag{font-family:var(--mono);font-size:10px;letter-spacing:.24em;
+    color:var(--pink);text-transform:uppercase;text-shadow:0 0 8px rgba(255,110,199,.4)}
+  .memviewer-head .gn{flex:1;font-family:var(--serif);font-style:italic;
+    font-size:18px;color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.25);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .memviewer-body{flex:1;overflow-y:auto;padding:18px 22px;font-family:var(--mono);
+    font-size:12.5px;line-height:1.65;color:var(--text-dim);white-space:pre-wrap;
+    scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+  .memviewer-body em{color:var(--fog);font-style:italic;font-family:var(--sans);font-size:13px}
+  /* ── talk ── */
+  .talk{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 14px;background:linear-gradient(180deg,transparent,rgba(176,108,255,.03))}
+  .talk-log{max-height:90px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:5px;scrollbar-width:thin}
+  .talk-log:empty{display:none}
+  .tmsg{font-size:13px;line-height:1.4}
+  .tmsg .who{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;margin-right:8px}
+  .tmsg.you .who{color:var(--cyan-2)} .tmsg.you{color:var(--text-dim)}
+  .tmsg.chloe .who{color:var(--pink)} .tmsg.chloe{color:var(--violet-1);font-family:var(--serif);font-style:italic;font-size:15px}
+  .talk-row{display:flex;gap:8px}
+  .talk-in{flex:1;background:var(--ink-3);border:1px solid var(--line-2);color:var(--text);font-family:var(--sans);
+    font-size:13px;padding:9px 11px;outline:none;border-radius:3px}
+  .talk-in:focus{border-color:var(--cyan-1);box-shadow:0 0 10px rgba(34,211,238,.2)}
+  .talk-in::placeholder{color:var(--fog)}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">CHLOE // POKÉMON</div>
+    <div class="spacer"></div>
+  </header>
+
+  <div class="pulse" id="pulse">
+    <div class="pulse-orb" id="pulseOrb"></div>
+    <canvas class="pulse-canvas" id="pulseCanvas"></canvas>
+    <div class="pulse-tag" id="pulseTag">IDLE</div>
+  </div>
+
+  <div class="body">
+    <div class="stage">
+      <div class="launchbox" id="launchbox">
+        <div class="lc-title">Pokémon — Gen 1 Recompilation</div>
+        <div class="lc-status" id="lcStatus">— not running —</div>
+        <div class="lc-row">
+          <select id="gameSel">
+            <option value="red">Red</option>
+            <option value="blue">Blue</option>
+            <option value="yellow">Yellow</option>
+          </select>
+          <button class="btn launch" id="btnLaunch">▶ Launch</button>
+          <button class="btn stop" id="btnStop" disabled>■ Stop</button>
+        </div>
+        <div class="lc-hint">This opens as its own window on the PC — not embedded here.
+          Once it's up, hit <b>Chloe: Watch</b> below and she'll comment on your screen
+          while you play. First time on a version, gen1recomp will ask you to import your
+          own ROM once before Launch can boot straight in.</div>
+      </div>
+      <div class="savebar">
+        <span class="st" id="saveStatus"></span>
+        <button class="btn" id="btnMemory">✦ Memory</button>
+        <button class="btn" id="btnWatch">◉ Chloe: Watch</button>
+      </div>
+      <div class="memviewer" id="memviewer">
+        <div class="memviewer-head">
+          <span class="tag">CHLOE REMEMBERS</span>
+          <span class="gn" id="memGame">—</span>
+          <button class="btn" id="btnMemRefresh">↻</button>
+          <button class="btn" id="btnMemClose">✕ Close</button>
+        </div>
+        <div class="memviewer-body" id="memBody">loading…</div>
+      </div>
+      <div class="talk">
+        <div class="talk-log" id="talkLog"></div>
+        <form class="talk-row" id="talkForm" autocomplete="off">
+          <input class="talk-in" id="talkIn" type="text" placeholder="say something to chloe…" maxlength="500">
+          <button class="btn" id="talkSend" type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+
+  let curGame = 'pokemon_red';
+  function gameLabel(v){ return 'pokemon_' + (v||'red'); }
+
+  /* ── launch console ── */
+  let running = false, pollTimer = null;
+  function setLaunchUI(r){
+    running = r;
+    $('lcStatus').textContent = running ? '— running —' : '— not running —';
+    $('lcStatus').classList.toggle('on', running);
+    $('btnLaunch').disabled = running;
+    $('btnStop').disabled = !running;
+    $('gameSel').disabled = running;
+  }
+  async function pollStatus(){
+    try{
+      const r = await fetch('api/gen1recomp/status', {cache:'no-store'});
+      const j = await r.json();
+      setLaunchUI(!!j.running);
+      if(j.game) curGame = gameLabel(j.game);
+    }catch(_){}
+  }
+  $('btnLaunch').addEventListener('click', async ()=>{
+    const game = $('gameSel').value;
+    curGame = gameLabel(game);
+    $('btnLaunch').disabled = true;
+    try{
+      const r = await fetch('api/gen1recomp/launch', {method:'POST',
+        headers:{'Content-Type':'application/json'}, body: JSON.stringify({game})});
+      const j = await r.json().catch(()=>({}));
+      if(!j.ok){ setSaveStatus(j.error || 'launch failed', true); }
+      await pollStatus();
+    }catch(e){ setSaveStatus('launch failed', true); }
+    finally{ $('btnLaunch').disabled = running; }
+  });
+  $('btnStop').addEventListener('click', async ()=>{
+    try{ await fetch('api/gen1recomp/stop', {method:'POST'}); }catch(_){}
+    await pollStatus();
+  });
+  pollStatus();
+  pollTimer = setInterval(pollStatus, 4000);
+
+  function setSaveStatus(t, bad){ const e=$('saveStatus'); e.textContent=t; e.style.color = bad?'var(--red)':'var(--cyan-2)'; }
+
+  /* ── Chloe watch toggle — no canvas here (native window), backend falls
+        back to whole-screen capture automatically when no fresh frame was
+        uploaded, so this just toggles the watch loop on the game name. ── */
+  let watching=false;
+  function syncWatchBtn(){
+    $('btnWatch').textContent = watching ? '◉ Watching' : '◉ Chloe: Watch';
+    $('btnWatch').classList.toggle('watch-on', watching);
+  }
+  $('btnWatch').addEventListener('click', ()=>{
+    watching=!watching;
+    wsSend({type: watching?'game_watch_start':'game_watch_stop', game: curGame});
+    syncWatchBtn();
+  });
+
+  /* ── memory viewer (per-game brain page from /api/game_memory) ── */
+  async function openMemory(){
+    const game = curGame;
+    $('memGame').textContent = game || '— launch a game —';
+    $('memviewer').classList.add('on');
+    $('memBody').innerHTML = '<em>loading…</em>';
+    if(!game){ $('memBody').innerHTML = '<em>launch a game first, then come back to see what Chloe remembers about it.</em>'; return; }
+    try{
+      const r = await fetch('api/game_memory?game='+encodeURIComponent(game), {cache:'no-store'});
+      const txt = await r.text();
+      $('memBody').textContent = (txt||'').trim() || '(empty)';
+    }catch(e){
+      $('memBody').innerHTML = '<em>could not reach her memory right now.</em>';
+    }
+  }
+  function closeMemory(){ $('memviewer').classList.remove('on'); }
+  $('btnMemory').addEventListener('click', openMemory);
+  $('btnMemRefresh').addEventListener('click', openMemory);
+  $('btnMemClose').addEventListener('click', closeMemory);
+
+  /* ── chloe state pulse: flowing cyberpunk waveform + orb ── */
+  const pulse = (function(){
+    const c = $('pulseCanvas'), orb = $('pulseOrb'), tag = $('pulseTag');
+    if(!c) return { set(){}, kick(){} };
+    const ctx = c.getContext('2d');
+    let state = 'idle', energy = 0, target = 0, t0 = performance.now(), raf = 0;
+    const PAL = {
+      idle:     { hue1: 188, hue2: 195, glow: 'rgba(34,211,238,0.55)',  amp: 6,  speed: 0.0010, label: 'IDLE' },
+      thinking: { hue1: 270, hue2: 290, glow: 'rgba(176,108,255,0.65)', amp: 11, speed: 0.0024, label: 'THINKING' },
+      speaking: { hue1: 320, hue2: 200, glow: 'rgba(255,110,199,0.7)',  amp: 16, speed: 0.0042, label: 'SPEAKING' },
+    };
+    function resize(){
+      const r = c.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio||1);
+      c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    const ro = new ResizeObserver(()=>resize()); ro.observe(c); resize();
+    function draw(now){
+      const p = PAL[state] || PAL.idle;
+      const w = c.clientWidth, h = c.clientHeight, mid = h/2;
+      energy += (target - energy) * 0.08;
+      target *= 0.94;
+      const baseAmp = p.amp + energy * 14;
+      ctx.clearRect(0,0,w,h);
+      const grad = ctx.createLinearGradient(0,0,w,0);
+      grad.addColorStop(0,'rgba(0,0,0,0)');
+      grad.addColorStop(0.5, p.glow.replace(/[\d.]+\)$/,'0.10)'));
+      grad.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = grad; ctx.fillRect(0,0,w,h);
+      for(let layer=0; layer<3; layer++){
+        const phase = (now - t0) * p.speed * (1 + layer*0.4);
+        const amp = baseAmp * (1 - layer*0.22);
+        const hue = layer===0 ? p.hue1 : (layer===1 ? p.hue2 : (p.hue1+p.hue2)/2);
+        ctx.beginPath();
+        for(let x=0; x<=w; x+=2){
+          const k = x / w * Math.PI * 4 + layer * 0.7;
+          const y = mid + Math.sin(k + phase) * amp * 0.6 + Math.sin(k*1.7 - phase*1.3) * amp * 0.4;
+          if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        }
+        ctx.lineWidth = layer===0 ? 1.8 : 1.0;
+        ctx.strokeStyle = `hsla(${hue}, 95%, ${65 - layer*8}%, ${0.85 - layer*0.22})`;
+        ctx.shadowBlur = 8 + layer*4; ctx.shadowColor = p.glow;
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      const nDots = 14;
+      for(let i=0;i<nDots;i++){
+        const tx = ((now - t0) * 0.06 * p.speed * 1000 + i * (w/nDots)) % (w + 40) - 20;
+        const ty = mid + Math.sin(((now - t0)*0.003) + i) * (baseAmp*0.7);
+        const r = 1.4 + (i%3===0 ? 0.8 : 0);
+        ctx.beginPath(); ctx.arc(tx, ty, r, 0, Math.PI*2);
+        ctx.fillStyle = `hsla(${p.hue1}, 95%, 75%, ${0.55 + (i%3===0?0.25:0)})`;
+        ctx.shadowBlur = 6; ctx.shadowColor = p.glow;
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+      raf = requestAnimationFrame(draw);
+    }
+    raf = requestAnimationFrame(draw);
+    function set(s){
+      if(!PAL[s]) s = 'idle';
+      if(s === state) return;
+      state = s;
+      orb.classList.remove('thinking','speaking');
+      tag.classList.remove('thinking','speaking');
+      if(s !== 'idle'){ orb.classList.add(s); tag.classList.add(s); }
+      tag.textContent = PAL[s].label;
+    }
+    function kick(amount){ target = Math.min(1.2, target + (amount || 0.35)); }
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.hidden){ cancelAnimationFrame(raf); }
+      else { t0 = performance.now(); raf = requestAnimationFrame(draw); }
+    });
+    return { set, kick };
+  })();
+
+  /* ── talk-back (shared conversation with watch commentary) ── */
+  const talkLog=$('talkLog'); let hist=[], asstEl=null, buf='';
+  function appendTalk(who, text){
+    const row=document.createElement('div'); row.className='tmsg '+(who==='you'?'you':'chloe');
+    const w=document.createElement('span'); w.className='who'; w.textContent=who==='you'?'you':'chloe';
+    const t=document.createElement('span'); t.textContent=text;
+    row.appendChild(w); row.appendChild(t); talkLog.appendChild(row); talkLog.scrollTop=talkLog.scrollHeight;
+    return t;
+  }
+  let speakingTimer = null;
+  function markSpeaking(){
+    pulse.set('speaking'); pulse.kick(0.6);
+    if(speakingTimer) clearTimeout(speakingTimer);
+    speakingTimer = setTimeout(()=>{ pulse.set('idle'); speakingTimer=null; }, 4500);
+  }
+  function onChat(msg){
+    if(msg.type==='start'){ buf=''; asstEl=appendTalk('chloe',''); pulse.set('thinking'); pulse.kick(0.5); }
+    else if(msg.type==='delta'){ buf+=(msg.text||''); if(!asstEl) asstEl=appendTalk('chloe',''); asstEl.textContent=buf; talkLog.scrollTop=talkLog.scrollHeight; pulse.set('speaking'); pulse.kick(0.25); }
+    else if(msg.type==='done'){ if(buf){ hist.push({role:'assistant',content:buf}); hist=hist.slice(-12); } asstEl=null; buf=''; markSpeaking(); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='error' && msg.text){ appendTalk('chloe','['+msg.text+']'); pulse.set('idle'); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='game_comment' && msg.text){ appendTalk('chloe',msg.text); hist.push({role:'assistant',content:msg.text}); hist=hist.slice(-12); markSpeaking(); }
+    else if(msg.type==='game_watch_state'){ watching=!!msg.on; syncWatchBtn(); }
+  }
+  $('talkForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const text=($('talkIn').value||'').trim(); if(!text || $('talkIn').disabled) return;
+    const _kb=text.match(/^\/kb\s+(.+)$/i);
+    if(_kb){ appendTalk('you', text); $('talkIn').value=''; wsSend({type:'game_kb_ingest', game:curGame, url:_kb[1].trim()}); return; }
+    appendTalk('you', text); hist.push({role:'user',content:text}); hist=hist.slice(-12);
+    $('talkIn').value=''; $('talkIn').disabled=true; $('talkSend').disabled=true;
+    pulse.set('thinking'); pulse.kick(0.4);
+    wsSend({type:'chat', messages:hist.slice(), max_tokens:512});
+  });
+
+  /* ── WS (talk-back + watch commentary) — same protocol as the ROM arcade ── */
+  let ws=null, didWatchReset=false;
+  function wsUrl(){ return location.protocol==='https:' ? `wss://${location.host}/chloe-ws` : `ws://${location.hostname||'localhost'}:6789`; }
+  function wsSend(o){ try{ if(ws && ws.readyState===1) ws.send(JSON.stringify(o)); }catch(_){} }
+  function connect(){
+    try{ ws=new WebSocket(wsUrl()); }catch(e){ return; }
+    ws.addEventListener('open', ()=>{
+      if(!didWatchReset){ didWatchReset=true; watching=false; syncWatchBtn(); wsSend({type:'game_watch_stop'}); }
+    });
+    ws.addEventListener('message', ev=>{ try{ onChat(JSON.parse(ev.data)); }catch(_){} });
+    ws.addEventListener('close', ()=> setTimeout(connect, 3000));
+  }
+  connect();
+
+  window.addEventListener('beforeunload', ()=>{
+    try{ wsSend({type:'game_watch_stop'}); }catch(_){}
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+    if use_ollama:
+        ollama_msgs = _trim_messages_for_model(groq_messages, MODEL_TEXT)
+        ollama_reply = ""
+        ollama_started = False  # have we sent the {"type":"start"} event yet?
+        # Inline streaming TTS: kick off Kokoro per sentence as the LLM emits
+        # them, so spoken audio catches up to the typed text instead of
+        # waiting for the whole reply. Mirrors _reply_audio_or_speak's
+        # gating (reply_audio flag on, no_tts not set).
+        wants_audio = bool(data.get("reply_audio")) and not data.get("no_tts")
+        tts_buf = ""
+        tts_chunk_idx = 0
+        tts_tasks: list = []
+        inline_tts_fired = False
+
+        async def _emit_tts_chunk(text: str, is_final: bool):
+            nonlocal tts_chunk_idx
+            text = (text or "").strip()
+            if not text:
+                if is_final and tts_chunk_idx > 0:
+                    # No tail audio to synth, but the HUD needs a final
+                    # marker so its tts_audio_chunk state machine ends.
+                    await _ws_broadcast({
+                        "type":         "tts_audio_chunk",
+                        "chunk_id":     tts_chunk_idx,
+                        "total_chunks": tts_chunk_idx,
+                        "is_final":     True,
+                        "format":       "wav",
+                        "audio_b64":    "",
+                        "text":         "",
+                    })
+                return
+            idx = tts_chunk_idx
+            tts_chunk_idx += 1
+            try:
+                result = await asyncio.to_thread(_synthesize_tts_bytes, text)
+                if result is None:
+                    print(f"[chloe] chat-ollama inline TTS: synth failed "
+                          f"(chunk {idx})", flush=True)
+                    return
+                audio_bytes, fmt = result
+                ab64 = base64.b64encode(audio_bytes).decode("ascii")
+                await _ws_broadcast({
+                    "type":         "tts_audio_chunk",
+                    "chunk_id":     idx,
+                    "total_chunks": (idx + 1) if is_final else -1,
+                    "is_final":     is_final,
+                    "format":       fmt,
+                    "audio_b64":    ab64,
+                    "text":         text,
+                })
+                print(f"[chloe] chat-ollama inline: chunk {idx} "
+                      f"({len(audio_bytes)} bytes, {fmt})"
+                      f"{' [final]' if is_final else ''}", flush=True)
+            except Exception as e:
+                print(f"[chloe] chat-ollama inline TTS error chunk {idx}: {e}",
+                      flush=True)
+
+        try:
+            # Real token streaming: forward deltas to the HUD as Ollama
+            # generates them, so the first word lands in ~1-2s instead of
+            # after the whole reply finishes. When reply_audio is on we
+            # ALSO peel completed sentences off the buffer and fire Kokoro
+            # per sentence so the voice tracks the typed text.
+            async for _delta in _ollama_chat_stream(ollama_msgs, max_tok):
+                if not ollama_started:
+                    await _ws_send(websocket, {"type": "start"})
+                    ollama_started = True
+                ollama_reply += _delta
+                await _ws_send(websocket, {"type": "delta", "text": _delta})
+                if wants_audio:
+                    tts_buf += _delta
+                    while True:
+                        m = _SENT_BOUNDARY_RE.search(tts_buf)
+                        if m is None:
+                            break
+                        sent_text = tts_buf[:m.end()]
+                        tts_buf = tts_buf[m.end():]
+                        tts_tasks.append(asyncio.create_task(
+                            _emit_tts_chunk(sent_text, is_final=False)))
+                        inline_tts_fired = True
+        except _OllamaToolCallNeeded:
+            # Model wants a tool (rare on this route — introspection is
+            # routed to Groq). Run the non-streaming tool loop instead;
+            # no deltas were streamed yet, so the HUD state is clean.
+            try:
+                ollama_reply = await asyncio.to_thread(
+                    _ollama_chat, ollama_msgs, max_tok
+                )
+            except Exception as e:
+                print(f"[chloe] Ollama tool-loop errored: {e}", flush=True)
+                traceback.print_exc()
+                ollama_reply = ""
+        except Exception as e:
+            print(f"[chloe] Ollama stream errored: {e}", flush=True)
+            traceback.print_exc()
+            # Keep any partial text already streamed; fall back only if empty.
+        if not ollama_reply and _sync_groq:
+            # Ollama daemon hiccup — fall back to Groq fast Llama (cloud)
+            print("[chloe] Ollama empty — falling back to Groq fast Llama",
+                  flush=True)
+            await _ws_send(websocket, {
+                "type": "tool_start",
+                "text": "Ollama unreachable — using Groq fast path…",
+            })
+            use_ollama = False  # let the Groq stream block below run
+        else:
+            if not ollama_started:
+                # Tool-loop fallback produced text without streaming — emit
+                # it now so the HUD still gets a start/delta/done cycle.
+                await _ws_send(websocket, {"type": "start"})
+                await _ws_send(websocket, {"type": "delta",
+                                           "text": ollama_reply})
+            await _ws_send(websocket, {"type": "done"})
+            # Flush any trailing TTS buffer (the final sentence, which won't
+            # have a boundary marker after it) and wait for in-flight TTS
+            # tasks to finish broadcasting before the caller emits "idle".
+            if wants_audio and inline_tts_fired:
+                tts_tasks.append(asyncio.create_task(
+                    _emit_tts_chunk(tts_buf, is_final=True)))
+                if tts_tasks:
+                    await asyncio.gather(*tts_tasks, return_exceptions=True)

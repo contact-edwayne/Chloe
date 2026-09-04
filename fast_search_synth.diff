@@ -1,0 +1,141 @@
+--- jarvis.py
++++ jarvis.py
+@@ -153,6 +153,19 @@
+     OLLAMA_NUM_CTX = int(os.environ.get("CHLOE_OLLAMA_CTX", "16384"))
+ except (ValueError, TypeError):
+     OLLAMA_NUM_CTX = 8192
++# Ed (2026-08-27): search-result synthesis needs speed, not depth -- the
++# answer's accuracy comes from the Brave results already fetched, not the
++# model's own knowledge. Reusing OLLAMA_MODEL (a 14-32B model picked for
++# everyday chat quality) here means paying that model's full inference
++# time, plus any cold-reload cost if it had been evicted, just to reword 5
++# search snippets into 2-4 sentences -- the actual cause of a 43s "real-time"
++# reply on 2026-08-26. A small model dedicated to this one narrow job is
++# dramatically faster and plenty accurate for "summarize these already-
++# fetched facts." SEARCH_SYNTH_TIMEOUT_S caps how long we wait before
++# giving up on Ollama and falling through to the existing Groq fallback,
++# so a cold/slow local model can't turn a "fast path" into a 40s wait.
++SEARCH_SYNTH_MODEL      = os.environ.get("CHLOE_SEARCH_SYNTH_MODEL", "llama3.2:3b").strip()
++SEARCH_SYNTH_TIMEOUT_S  = float(os.environ.get("CHLOE_SEARCH_SYNTH_TIMEOUT_S", "12"))
+ # Local-first routing: when on (default), Ollama handles everyday chat and
+ # Groq compound-mini is reserved for queries that explicitly need real-time
+ # web data. Saves Groq quota for what only Groq can do (search).
+@@ -795,7 +808,10 @@
+     try:
+         if _ollama_available():
+             ollama_reply = await asyncio.to_thread(
+-                _ollama_chat, search_msgs, 400
++                _ollama_chat, search_msgs, 220,
++                model=SEARCH_SYNTH_MODEL,
++                timeout=SEARCH_SYNTH_TIMEOUT_S,
++                use_tools=False,
+             )
+             if ollama_reply:
+                 full_reply = ollama_reply
+@@ -884,7 +900,12 @@
+     # Ollama first — no Groq round-trip needed for the common case.
+     if _ollama_available():
+         try:
+-            _voice_reply = (_ollama_chat(search_msgs, 250) or "").strip()
++            _voice_reply = (_ollama_chat(
++                search_msgs, 160,
++                model=SEARCH_SYNTH_MODEL,
++                timeout=SEARCH_SYNTH_TIMEOUT_S,
++                use_tools=False,
++            ) or "").strip()
+             if _voice_reply:
+                 _persist_brave_to_wiki(query, _voice_reply, results, "brave_voice_fallback")
+                 return _voice_reply
+@@ -5725,7 +5746,9 @@
+               flush=True)
+ 
+ 
+-def _ollama_chat(messages: list, max_tokens: int = 400) -> str:
++def _ollama_chat(messages: list, max_tokens: int = 400, *,
++                  model: str | None = None, timeout: float = 180,
++                  use_tools: bool = True) -> str:
+     """Send a non-streaming chat completion to local Ollama. Returns the
+     reply text (stripped) or empty string on any failure. Includes a
+     tool-call loop for our `grep_source` tool — Ollama's chat API since
+@@ -5734,6 +5757,14 @@
+ 
+     `messages` is in OpenAI format and includes the system prompt;
+     we mutate a local copy as the tool loop progresses.
++
++    `model` overrides OLLAMA_MODEL for this one call — used by the search-
++    synthesis fast path (SEARCH_SYNTH_MODEL) so a narrow "summarize these
++    search results" call doesn't pay the everyday-chat model's inference
++    cost. `timeout` overrides the 180s default request timeout for the
++    same reason: a fast path should fail over to Groq quickly, not hang.
++    `use_tools=False` skips the grep_source/wallet tool schemas entirely
++    for calls that will never need them.
+     """
+     if not _ollama_available():
+         return ""
+@@ -5745,29 +5776,32 @@
+     # Local copy so we don't mutate the caller's history with intermediate
+     # tool messages — those are scaffolding, not user-facing turns.
+     msgs = list(messages)
+-
+-    MAX_TOOL_ITERS = 3
++    _model = model or OLLAMA_MODEL
++
++    MAX_TOOL_ITERS = 3 if use_tools else 0
+     t0 = time.time()
+     final_msg = None
+ 
+     for tool_iter in range(MAX_TOOL_ITERS + 1):
+         try:
++            _payload = {
++                "model":      _model,
++                "messages":   msgs,
++                "stream":     False,
++                "keep_alive": OLLAMA_KEEP_ALIVE,
++                "options": {
++                    "temperature": 0.7,
++                    "num_predict": max_tokens,
++                    "num_ctx": OLLAMA_NUM_CTX,
++                },
++            }
++            if use_tools:
++                _payload["tools"] = [GREP_TOOL_SCHEMA,
++                                      *WALLET_TOOL_SCHEMAS.values()]
+             r = _req.post(
+                 f"{OLLAMA_URL}/api/chat",
+-                json={
+-                    "model":    OLLAMA_MODEL,
+-                    "messages": msgs,
+-                    "stream":   False,
+-                    "keep_alive": OLLAMA_KEEP_ALIVE,
+-                    "tools":    [GREP_TOOL_SCHEMA,
+-                                 *WALLET_TOOL_SCHEMAS.values()],
+-                    "options": {
+-                        "temperature": 0.7,
+-                        "num_predict": max_tokens,
+-                        "num_ctx": OLLAMA_NUM_CTX,
+-                    },
+-                },
+-                timeout=180,
++                json=_payload,
++                timeout=timeout,
+             )
+             if r.status_code != 200:
+                 print(f"[chloe] Ollama HTTP {r.status_code}: {r.text[:200]}",
+@@ -5790,7 +5824,7 @@
+         # JSON tool-call shape into `content` as plain text. Detect that
+         # case (in any of several wrapper styles) and synthesize a real
+         # tool_call so we can execute it instead of speaking the JSON.
+-        if not tool_calls:
++        if use_tools and not tool_calls:
+             synth = _synthesize_tool_call_from_content(msg.get("content") or "")
+             if synth is not None:
+                 tool_calls = [synth]
+@@ -5894,7 +5928,7 @@
+                   f"canned fallback", flush=True)
+             reply = "I'm here — what can I help you with?"
+     dt = time.time() - t0
+-    print(f"[chloe] Ollama ({OLLAMA_MODEL}) replied in {dt:.2f}s "
++    print(f"[chloe] Ollama ({_model}) replied in {dt:.2f}s "
+           f"({len(reply)} chars)", flush=True)
+     return reply
+ 

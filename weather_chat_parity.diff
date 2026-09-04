@@ -1,0 +1,43 @@
+--- jarvis.py
++++ jarvis.py
+@@ -1777,6 +1777,40 @@
+                         hud_server.broadcast_sync("idle")
+             return
+ 
++    # Real-time weather (chat parity, 2026-08-27): answer weather questions
++    # from a live weather API (weather.py) BEFORE the forced-Brave/real-time
++    # route -- same fast, zero-LLM path the voice loop already uses (see
++    # _ask_groq). Chat/HUD/PWA text queries previously fell through to the
++    # much slower Brave-search-and-synthesize or compound-mini paths for
++    # weather; this makes chat as fast as voice for the same question.
++    # maybe_weather_reply returns None for non-weather text -> falls through.
++    if messages and not _needs_vision(messages):
++        _wx_user_q = _last_user_text(messages)
++        _wx_reply = None
++        if _wx_user_q:
++            try:
++                import weather as _weather
++                _wx_reply = _weather.maybe_weather_reply(_wx_user_q)
++            except Exception as e:
++                print(f"[chloe] weather check crashed: {type(e).__name__}: {e}",
++                      flush=True)
++                _wx_reply = None
++        if _wx_reply:
++            print(f"[chloe] weather route (chat): {_wx_user_q!r}", flush=True)
++            _push_history("user", _wx_user_q, modality="chat")
++            _push_history("assistant", _wx_reply, modality="chat")
++            await _ws_send(websocket, {"type": "start"})
++            await _ws_send(websocket, {"type": "delta", "text": _wx_reply})
++            await _ws_send(websocket, {"type": "done"})
++            if not data.get("no_tts"):
++                try:
++                    await _reply_audio_or_speak(_wx_reply, data, label="chat-weather")
++                except Exception as e:
++                    print(f"[chloe] chat TTS error on weather reply: {e}")
++                finally:
++                    hud_server.broadcast_sync("idle")
++            return
++
+     # Force-route to Brave when the query asks for a recent factual outcome
+     # (winner/result/election/etc.) tied to a current/recent year. The model
+     # will confidently confabulate these from training (bug #4: the

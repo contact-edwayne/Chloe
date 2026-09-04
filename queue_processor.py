@@ -118,13 +118,18 @@ PROMPT_DRAFT = """You are Chloe, drafting long-form content for Edward.
 Brief / scope:
 {user_request}
 
-Write a full draft using Edward's brain as source material. Cite wiki pages as [[page_name]] inline. Match Edward's voice — direct, terse, opinion-bearing, willing to push back. Don't pad. Don't use marketing language.
+Write a full draft using Edward's brain as source material. Cite wiki pages as [[page_name]] inline. Internalize the VOICE GUIDE below — do not quote it. Don't pad. Don't use marketing language.
 
 Output:
 
 # Draft: {slug}
 
 (then the actual draft, properly structured with headings, no preamble)
+
+---
+
+VOICE GUIDE (style only — never quote from this section):
+{voice}
 
 ---
 
@@ -246,10 +251,14 @@ def build_prompt(verb: str, slug: str, user_request: str, brain) -> str:
             facts = brain.facts_only() or "(none)"
         except Exception:
             facts = "(facts read failed)"
+        try:
+            voice = brain.voice_only() or "(voice guide missing — default to direct, terse, opinion-bearing prose)"
+        except Exception:
+            voice = "(voice guide read failed)"
         return PROMPT_DRAFT.format(
             slug=slug, user_request=user_request,
             relevant_pages=gather_relevant_pages(brain, user_request),
-            facts=facts,
+            facts=facts, voice=voice,
         )
     if verb == "ANALYZE":
         return PROMPT_ANALYZE.format(

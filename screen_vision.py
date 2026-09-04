@@ -79,6 +79,75 @@ def _get_groq():
     return _groq
 
 
+# ─── Local vision (Ollama) — tried before Groq ───────────────────────────────
+# This module is imported standalone (no jarvis.py import — that has heavy
+# start-up side effects), so it keeps its own small env-var config mirroring
+# jarvis.py's OLLAMA_* names rather than importing them.
+OLLAMA_URL          = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+OLLAMA_VISION_MODEL = os.environ.get("CHLOE_OLLAMA_VISION_MODEL", "llama3.2-vision").strip()
+from ollama_keepalive import get_keep_alive as _get_ollama_keep_alive
+OLLAMA_KEEP_ALIVE   = _get_ollama_keep_alive()
+
+# One-shot-per-process cache — screen_vision is re-imported fresh on every
+# Chloe start, so unlike jarvis.py's re-probing version this doesn't need a
+# TTL; a stale "not pulled" reading only lasts until the next restart.
+_ollama_vision_checked = False
+_ollama_vision_ok = False
+
+
+def _ollama_vision_available() -> bool:
+    """Is OLLAMA_VISION_MODEL actually pulled? Probed once per process."""
+    global _ollama_vision_checked, _ollama_vision_ok
+    if _ollama_vision_checked:
+        return _ollama_vision_ok
+    _ollama_vision_checked = True
+    try:
+        import requests
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+        if r.status_code == 200:
+            names = [m.get("name", "") for m in (r.json().get("models") or [])]
+            _ollama_vision_ok = any(
+                OLLAMA_VISION_MODEL in n or n.startswith(OLLAMA_VISION_MODEL.split(":")[0])
+                for n in names
+            )
+            if not _ollama_vision_ok:
+                print(f"[vision] local vision model '{OLLAMA_VISION_MODEL}' not pulled "
+                      f"— using Groq ({MODEL_VISION}). "
+                      f"Run: ollama pull {OLLAMA_VISION_MODEL}", flush=True)
+    except Exception as e:
+        print(f"[vision] Ollama probe failed: {type(e).__name__}: {e}", flush=True)
+    return _ollama_vision_ok
+
+
+def _describe_screen_ollama(image_bytes: bytes, prompt: str) -> dict:
+    """Try local Ollama vision. {'ok': True, 'text', 'model'} on success,
+    {'ok': False} on any failure — caller falls back to Groq."""
+    try:
+        import requests
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+        r = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_VISION_MODEL,
+                "messages": [{"role": "user", "content": prompt, "images": [b64]}],
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {"temperature": 0.4, "num_predict": 900},
+            },
+            timeout=60,
+        )
+        if r.status_code != 200:
+            print(f"[vision] Ollama HTTP {r.status_code}: {r.text[:200]}", flush=True)
+            return {"ok": False}
+        text = ((r.json().get("message") or {}).get("content") or "").strip()
+        if not text:
+            return {"ok": False}
+        return {"ok": True, "text": text, "model": f"ollama:{OLLAMA_VISION_MODEL}"}
+    except Exception as e:
+        print(f"[vision] Ollama vision error: {type(e).__name__}: {e}", flush=True)
+        return {"ok": False}
+
+
 # ─── Foreground window detection ─────────────────────────────────────────────
 def get_frontmost_app() -> dict:
     """Return info about the foreground window.
@@ -227,14 +296,37 @@ ANTI_HALLUCINATION_SUFFIX = (
 )
 
 
+# Tiny retro frames (Game Boy is 160x144) are nearly illegible to a VLM — a
+# sprite is ~8-16px and the model just guesses (the "geodude" problem). Upscale
+# small frames with NEAREST resampling (crisp pixels, no blur) so sprites and
+# on-screen text are legible. Full-screen mss captures are already large and are
+# left untouched. Falls back to the original bytes on any error.
+def _upscale_for_vision(png_bytes: bytes, target: int = 480, max_factor: int = 4) -> bytes:
+    try:
+        import math
+        from PIL import Image
+        im = Image.open(io.BytesIO(png_bytes)); im.load()
+        w, h = im.size
+        big = max(w or 0, h or 0)
+        if not big or big >= target:
+            return png_bytes
+        factor = min(max_factor, max(2, math.ceil(target / big)))
+        im2 = im.resize((w * factor, h * factor), Image.NEAREST)
+        buf = io.BytesIO(); im2.convert("RGB").save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[vision] upscale skipped: {type(e).__name__}: {e}", flush=True)
+        return png_bytes
+
+
 def describe_screen(image_bytes: bytes, prompt: str = "") -> dict:
-    """Send PNG bytes to Groq Llama 4 Scout and return its description.
+    """Try local Ollama vision first (no Groq quota spent — this is the
+    quota-sensitive arcade watch-loop's vision call, not just the on-demand
+    /see command). Groq Llama 4 Scout is the fallback when the local vision
+    model isn't pulled or the daemon errors.
 
     Returns {'ok': bool, 'text': str, 'model': str, 'error': str?}.
     """
-    client = _get_groq()
-    if client is None:
-        return {"ok": False, "error": "Groq client unavailable (no GROQ_API_KEY or groq pkg missing)"}
     user_prompt_raw = (prompt or "").strip()
     if user_prompt_raw:
         # User asked a specific question — append the anti-hallucination clause
@@ -242,6 +334,18 @@ def describe_screen(image_bytes: bytes, prompt: str = "") -> dict:
         user_prompt = user_prompt_raw + ANTI_HALLUCINATION_SUFFIX
     else:
         user_prompt = DEFAULT_PROMPT
+    image_bytes = _upscale_for_vision(image_bytes)
+
+    if _ollama_vision_available():
+        local = _describe_screen_ollama(image_bytes, user_prompt)
+        if local.get("ok"):
+            return local
+        print("[vision] Ollama vision came back empty/failed — falling back "
+              "to Groq", flush=True)
+
+    client = _get_groq()
+    if client is None:
+        return {"ok": False, "error": "Groq client unavailable (no GROQ_API_KEY or groq pkg missing)"}
     b64 = base64.b64encode(image_bytes).decode("ascii")
     try:
         resp = client.with_options(timeout=60.0).chat.completions.create(

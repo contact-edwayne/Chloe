@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>chloe · arcade</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink-0:#06070b; --ink-1:#0a0b10; --ink-2:#0d0f16; --ink-3:#11141e; --ink-4:#161a26;
+    --line:#1d2230; --line-2:#262c40; --fog:#5a6584; --fog-2:#8893b3;
+    --text:#d6deef; --text-dim:#97a1bf;
+    --cyan:#22d3ee; --cyan-1:#00e5ff; --cyan-2:#8cf0ff;
+    --violet:#b06cff; --violet-1:#d2a7ff; --pink:#ff6ec7; --pink-1:#ffb3df; --gold:#f8d676; --red:#ff5d7a;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+    --sans:'Inter',system-ui,sans-serif;
+    --serif:'Cormorant Garamond',Georgia,serif;
+    --safe-t:env(safe-area-inset-top);
+    --safe-b:env(safe-area-inset-bottom);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    background:radial-gradient(1100px 600px at 15% -10%,rgba(34,211,238,.06),transparent 60%),
+               radial-gradient(900px 600px at 110% 110%,rgba(176,108,255,.05),transparent 60%),var(--ink-0);
+    color:var(--text); font-family:var(--sans);
+    display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+    -webkit-font-smoothing:antialiased; touch-action:manipulation;
+  }
+
+  /* ── header ── */
+  header{display:flex;align-items:center;gap:11px;
+    padding:calc(5px + var(--safe-t)) 14px 5px 14px;border-bottom:1px solid var(--line);flex:0 0 auto}
+  .orb{width:20px;height:20px;border-radius:50%;flex:0 0 auto;
+    background:radial-gradient(circle at 35% 30%,#f6fbff,#8cf0ff 22%,#22d3ee 50%,#0a2b3a 100%);
+    box-shadow:0 0 10px rgba(34,211,238,.7),0 0 22px rgba(34,211,238,.3)}
+  .brand{font-family:var(--mono);font-size:12px;letter-spacing:.16em;color:var(--cyan-2);
+    text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.4);white-space:nowrap;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis}
+  .hbtn{font-family:var(--mono);font-size:15px;line-height:1;color:var(--cyan-2);
+    background:var(--ink-3);border:1px solid var(--line-2);padding:9px 12px;cursor:pointer;border-radius:4px;transition:all .15s;flex:0 0 auto}
+  .hbtn:active{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.18),rgba(34,211,238,.04))}
+
+  /* ── pulse strip ── */
+  .pulse{position:relative;display:flex;align-items:center;gap:12px;padding:4px 14px;
+    border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(34,211,238,.04),rgba(176,108,255,.04));
+    overflow:hidden;flex:0 0 auto;min-height:30px}
+  .pulse::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(220px 60px at 0% 50%,rgba(34,211,238,.10),transparent 70%),
+               radial-gradient(220px 60px at 100% 50%,rgba(176,108,255,.10),transparent 70%)}
+  .pulse-orb{position:relative;width:24px;height:24px;flex:0 0 auto;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#f6fbff,#8cf0ff 22%,#22d3ee 50%,#063543 100%);
+    box-shadow:0 0 14px rgba(34,211,238,.7),0 0 32px rgba(34,211,238,.35),inset 0 0 8px rgba(0,229,255,.55);
+    transition:box-shadow .4s ease, background .4s ease, transform .4s ease}
+  .pulse-orb::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(34,211,238,.4);
+    box-shadow:0 0 12px rgba(34,211,238,.4) inset; animation:orbRing 3.4s ease-in-out infinite}
+  .pulse-orb.thinking{background:radial-gradient(circle at 35% 30%,#fff,#d2a7ff 22%,#b06cff 55%,#1a0a35 100%);
+    box-shadow:0 0 16px rgba(176,108,255,.85),0 0 38px rgba(176,108,255,.45),inset 0 0 10px rgba(210,167,255,.6);
+    transform:scale(1.05); animation:orbThink 1.05s ease-in-out infinite}
+  .pulse-orb.speaking{background:radial-gradient(circle at 35% 30%,#fff,#ffc6e5 20%,#ff6ec7 55%,#350a26 100%);
+    box-shadow:0 0 18px rgba(255,110,199,.85),0 0 44px rgba(255,110,199,.5),inset 0 0 12px rgba(255,198,229,.6);
+    transform:scale(1.08); animation:orbSpeak 0.55s ease-in-out infinite}
+  @keyframes orbRing{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.18);opacity:.15}}
+  @keyframes orbThink{50%{transform:scale(1.12)}}
+  @keyframes orbSpeak{50%{transform:scale(1.16)}}
+  .pulse-canvas{flex:1 1 auto;height:24px;display:block}
+  .pulse-tag{position:relative;font-family:var(--mono);font-size:9px;letter-spacing:.24em;
+    color:var(--cyan-2);text-transform:uppercase;text-shadow:0 0 8px rgba(34,211,238,.5);flex:0 0 auto;transition:color .3s}
+  .pulse-tag.thinking{color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.6)}
+  .pulse-tag.speaking{color:var(--pink);text-shadow:0 0 10px rgba(255,110,199,.6)}
+
+  /* ── says strip ── */
+  .saystrip{display:flex;align-items:center;gap:10px;padding:4px 14px;flex:0 0 auto;
+    border-bottom:1px solid var(--line);min-height:26px;
+    background:linear-gradient(90deg,rgba(176,108,255,.06),rgba(255,110,199,.03) 60%,transparent)}
+  .says{flex:1;min-width:0;font-family:var(--serif);font-style:italic;font-size:15px;line-height:1.25;
+    color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.25);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .says:empty::before{content:"link stable. pick a game, darling.";color:var(--fog);opacity:.7}
+  .st{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--fog);flex:0 0 auto;white-space:nowrap}
+  /* While a game is running, collapse the decorative strips so the screen grows. */
+  body.playing .pulse,body.playing .saystrip{display:none}
+
+  /* ── device shell ── */
+  .device{position:relative;flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:7px;
+    margin:5px 8px 0;padding:8px 10px 10px;
+    background:linear-gradient(180deg,#14182a,#0d111c 55%,#090c14);
+    border:1px solid var(--line-2);border-radius:16px;
+    box-shadow:0 0 0 1px rgba(34,211,238,.07) inset,0 16px 40px rgba(0,0,0,.5)}
+  .screw{position:absolute;width:5px;height:5px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,#2a3450,#0a0e1a 70%);
+    box-shadow:0 0 0 1px rgba(34,211,238,.2),inset 0 0 3px rgba(0,0,0,.8);pointer-events:none}
+  .screw.s1{top:8px;left:8px}.screw.s2{top:8px;right:8px}.screw.s3{bottom:8px;left:8px}.screw.s4{bottom:8px;right:8px}
+  .screen-well{position:relative;flex:1 1 auto;min-height:90px;display:flex;flex-direction:column;
+    background:linear-gradient(180deg,#050609,#0a0d16 60%,#04060b);
+    border:1px solid var(--line-2);border-radius:8px;padding:6px 8px 8px;
+    box-shadow:inset 0 0 0 1px rgba(34,211,238,.07),inset 0 0 26px rgba(0,0,0,.95)}
+  .screen-strip{display:flex;justify-content:space-between;align-items:center;gap:8px;
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.18em;color:var(--fog);
+    text-transform:uppercase;margin-bottom:4px;flex:0 0 auto}
+  .screen-strip .game{color:var(--cyan-2);text-shadow:0 0 6px rgba(34,211,238,.4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  .screen-strip .mode{color:var(--violet-1);border:1px solid rgba(176,108,255,.4);padding:2px 6px;flex:0 0 auto;text-shadow:0 0 6px rgba(176,108,255,.4)}
+  .screen-frame{position:relative;flex:1 1 auto;min-height:90px;background:#0b0f13;
+    border:1px solid #1c2738;overflow:hidden;border-radius:4px}
+  #emu{position:absolute;inset:0;background:#000;display:flex;align-items:center;justify-content:center}
+  /* WasmBoy canvas: centered, height-driven, aspect-locked (GB 160:144), pixel scaling.
+     Dead EmulatorJS sizing/gamepad rules removed 2026-06-08 — there's no longer any
+     competing selector, so the !important flags below are belt-and-suspenders, kept
+     to avoid churning a device-validated render path. */
+  canvas#wbCanvas{position:relative!important;display:none;width:auto!important;height:100%!important;
+    max-width:100%!important;object-fit:contain;image-rendering:pixelated;aspect-ratio:160/144;background:#0b0f13}
+  body.playing canvas#wbCanvas{display:block}
+  #build{position:fixed;bottom:2px;right:6px;font-family:var(--mono);font-size:9px;color:var(--cyan);opacity:.5;pointer-events:none;z-index:80}
+  .standby{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+    color:var(--fog);font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;text-align:center;padding:0 20px}
+
+  /* ── controls (d-pad / start-select / A-B) ── */
+  .controls-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex:0 0 auto;padding:2px 2px 0}
+  .dpad{position:relative;width:104px;height:104px;flex:0 0 auto}
+  .dpad-bg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:100%;height:100%;
+    background:radial-gradient(circle at 35% 30%,#1a2236,#0a0e18 75%);border-radius:50%;
+    box-shadow:inset 0 0 0 1px rgba(34,211,238,.12),0 6px 12px rgba(0,0,0,.6),inset 0 -3px 6px rgba(0,0,0,.6)}
+  .dbtn{position:absolute;background:linear-gradient(180deg,#1a2336,#0c1120);border:1px solid var(--line-2);
+    cursor:pointer;display:grid;place-items:center;user-select:none;touch-action:none;
+    box-shadow:inset 0 0 0 1px rgba(34,211,238,.18),inset 0 -2px 4px rgba(0,0,0,.6),0 2px 4px rgba(0,0,0,.4);transition:all .08s}
+  .dbtn::after{content:"";width:0;height:0;border-style:solid;filter:drop-shadow(0 0 4px var(--cyan-1))}
+  .dbtn.up{top:0;left:50%;width:40px;height:46px;transform:translateX(-50%)}
+  .dbtn.down{bottom:0;left:50%;width:40px;height:46px;transform:translateX(-50%)}
+  .dbtn.left{left:0;top:50%;width:46px;height:40px;transform:translateY(-50%)}
+  .dbtn.right{right:0;top:50%;width:46px;height:40px;transform:translateY(-50%)}
+  .dbtn.up::after{border-width:0 6px 8px 6px;border-color:transparent transparent var(--cyan-2) transparent}
+  .dbtn.down::after{border-width:8px 6px 0 6px;border-color:var(--cyan-2) transparent transparent transparent}
+  .dbtn.left::after{border-width:6px 8px 6px 0;border-color:transparent var(--cyan-2) transparent transparent}
+  .dbtn.right::after{border-width:6px 0 6px 8px;border-color:transparent transparent transparent var(--cyan-2)}
+  .dbtn.active{background:linear-gradient(180deg,#22344e,#0c1120);
+    box-shadow:inset 0 0 0 1px var(--cyan-1),inset 0 0 12px rgba(34,211,238,.4),0 0 12px rgba(34,211,238,.4)}
+  .dpad-cap{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:20px;height:20px;
+    background:#0a0e18;border:1px solid var(--line-2);box-shadow:inset 0 0 0 1px rgba(34,211,238,.2),inset 0 0 6px rgba(0,0,0,.8);pointer-events:none}
+  .pills{display:flex;gap:16px;align-items:center;justify-content:center;flex:0 0 auto;margin-top:8px}
+  .pill{background:linear-gradient(180deg,#161b2c,#0a0e18);border:1px solid var(--line-2);color:var(--cyan-2);
+    font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;padding:8px 18px;border-radius:999px;
+    cursor:pointer;user-select:none;touch-action:none;box-shadow:inset 0 0 0 1px rgba(34,211,238,.1),inset 0 -2px 4px rgba(0,0,0,.5);transition:all .1s}
+  .pill.active{color:#fff;box-shadow:inset 0 0 0 1px var(--cyan-1),inset 0 0 6px rgba(34,211,238,.3)}
+  /* A/B as a compact diagonal cluster (A upper-right, B lower-left) so the row never overflows */
+  .ab{position:relative;width:106px;height:86px;flex:0 0 auto}
+  .abtn{position:absolute;width:52px;height:52px;border-radius:50%;background:linear-gradient(180deg,#15192a,#0a0e18);border:1px solid var(--line-2);
+    cursor:pointer;display:grid;place-items:center;user-select:none;touch-action:none;
+    box-shadow:inset 0 0 0 1px rgba(34,211,238,.15),inset 0 -3px 8px rgba(0,0,0,.7),0 4px 10px rgba(0,0,0,.5);transition:all .08s}
+  .abtn.a{right:0;top:2px}
+  .abtn.b{left:0;bottom:8px}
+  .abtn .cap{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+    font-family:var(--mono);font-weight:700;font-size:15px;color:#0a1e26;
+    background:radial-gradient(circle at 35% 30%,rgba(140,240,255,.95),rgba(34,211,238,.7) 40%,rgba(10,40,55,.9) 95%);
+    box-shadow:0 0 12px rgba(34,211,238,.55),inset 0 0 8px rgba(140,240,255,.7);text-shadow:0 1px 0 rgba(255,255,255,.4)}
+  .abtn.b .cap{color:#2a0a1a;background:radial-gradient(circle at 35% 30%,rgba(255,179,223,.95),rgba(255,110,199,.7) 40%,rgba(80,20,55,.9) 95%);
+    box-shadow:0 0 12px rgba(255,110,199,.55),inset 0 0 8px rgba(255,179,223,.7)}
+  .abtn-lab{position:absolute;bottom:-13px;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:8.5px;letter-spacing:.2em;color:var(--fog)}
+  .abtn.active{transform:translateY(2px);box-shadow:inset 0 0 0 1px var(--cyan-1),inset 0 0 10px rgba(34,211,238,.5)}
+
+  /* ── bottom action bar ── */
+  .action-bar{flex:0 0 auto;display:grid;grid-template-columns:repeat(4,1fr);gap:7px;
+    padding:6px 10px calc(6px + var(--safe-b)) 10px;border-top:1px solid var(--line);background:var(--ink-2);margin-top:6px}
+  .act-btn{background:var(--ink-3);color:var(--cyan-2);border:1px solid var(--line-2);
+    font-family:var(--mono);font-size:8.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;
+    padding:7px 2px;cursor:pointer;user-select:none;display:flex;flex-direction:column;align-items:center;gap:3px;transition:all .15s;border-radius:4px}
+  .act-btn .glyph{font-size:15px;line-height:1;color:var(--cyan)}
+  .act-btn:active{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.18),rgba(34,211,238,.04));box-shadow:0 0 10px rgba(34,211,238,.3)}
+  .act-btn:disabled{opacity:.3;cursor:not-allowed}
+  .act-btn.warn .glyph{color:var(--violet)}
+  .act-btn.warn.on{color:#fff;border-color:var(--violet);background:linear-gradient(180deg,rgba(176,108,255,.22),rgba(176,108,255,.05));box-shadow:0 0 10px rgba(176,108,255,.35)}
+  .act-btn.warn.on .glyph{color:var(--violet-1)}
+  .act-btn.chat .glyph{color:var(--pink)}
+
+  /* ── scrims ── */
+  .scrim{position:fixed;inset:0;background:rgba(4,5,10,.55);backdrop-filter:blur(2px);
+    opacity:0;pointer-events:none;transition:opacity .3s ease;z-index:60}
+  .scrim.open{opacity:1;pointer-events:auto}
+
+  /* ── ROM library drawer ── */
+  .drawer{position:fixed;top:0;left:0;bottom:0;z-index:61;width:min(84vw,330px);
+    display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ink-2),var(--ink-1));
+    border-right:1px solid var(--line-2);box-shadow:16px 0 40px rgba(0,0,0,.6);
+    transform:translateX(-100%);transition:transform .32s cubic-bezier(.22,.61,.36,1);padding-top:var(--safe-t)}
+  .drawer.open{transform:translateX(0)}
+  .lib-head{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:var(--fog);text-transform:uppercase;
+    padding:14px 14px 10px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .lib-head .ttl{flex:1}.lib-head .cnt{color:var(--cyan-2)}
+  .lib-head .x{font-family:var(--mono);font-size:15px;color:var(--fog);background:none;border:none;cursor:pointer;padding:2px 6px}
+  .sysfilter{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line)}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--fog-2);background:var(--ink-3);border:1px solid var(--line-2);padding:6px 10px;cursor:pointer;border-radius:3px;transition:all .15s}
+  .chip.on{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.18),rgba(34,211,238,.04));box-shadow:0 0 8px rgba(34,211,238,.3)}
+  .drawer-tools{display:flex;gap:8px;padding:10px 12px 0 12px}
+  .btn{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--cyan-2);background:var(--ink-3);border:1px solid var(--line-2);padding:9px 12px;cursor:pointer;border-radius:3px;transition:all .15s;white-space:nowrap;flex:1;text-align:center}
+  .btn:active{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.16),rgba(34,211,238,.03))}
+  .btn:disabled{opacity:.35;cursor:not-allowed}
+  .lib-list{flex:1 1 auto;overflow-y:auto;padding:8px;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent;-webkit-overflow-scrolling:touch}
+  .rom{display:flex;align-items:center;gap:8px;padding:11px 10px;cursor:pointer;border-radius:4px;border:1px solid transparent}
+  .rom:active{background:rgba(34,211,238,.10);border-color:var(--line-2)}
+  .rom.active{background:rgba(34,211,238,.12);border-color:var(--cyan-1)}
+  .rom .nm{flex:1;font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rom .sy{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;color:var(--cyan-2);border:1px solid currentColor;padding:2px 5px;border-radius:2px}
+  .lib-empty{color:var(--fog);font-size:12px;letter-spacing:.04em;padding:18px 14px;line-height:1.7}
+
+  /* ── memory viewer ── */
+  .memviewer{position:fixed;inset:0;display:none;flex-direction:column;background:rgba(6,7,11,.96);backdrop-filter:blur(3px);z-index:62;padding-top:var(--safe-t)}
+  .memviewer.on{display:flex}
+  .memviewer-head{display:flex;align-items:center;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line);
+    background:linear-gradient(90deg,rgba(176,108,255,.08),rgba(34,211,238,.04))}
+  .memviewer-head .tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.22em;color:var(--pink);text-transform:uppercase;text-shadow:0 0 8px rgba(255,110,199,.4)}
+  .memviewer-head .gn{flex:1;font-family:var(--serif);font-style:italic;font-size:17px;color:var(--violet-1);text-shadow:0 0 10px rgba(176,108,255,.25);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .memviewer-body{flex:1;overflow-y:auto;padding:18px 22px calc(18px + var(--safe-b)) 22px;font-family:var(--mono);font-size:12.5px;line-height:1.65;color:var(--text-dim);white-space:pre-wrap;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent;-webkit-overflow-scrolling:touch}
+  .memviewer-body em{color:var(--fog);font-style:italic;font-family:var(--sans);font-size:13px}
+
+  /* ── Chloe chat sheet ── */
+  .chat-sheet{position:fixed;left:0;right:0;bottom:0;z-index:63;height:min(72%,560px);
+    display:flex;flex-direction:column;background:linear-gradient(180deg,var(--ink-2),var(--ink-1));
+    border-top:1px solid var(--line-2);box-shadow:0 -16px 40px rgba(0,0,0,.6),inset 0 1px 0 rgba(34,211,238,.12);
+    border-radius:22px 22px 0 0;transform:translateY(100%);transition:transform .34s cubic-bezier(.22,.61,.36,1);padding-bottom:calc(14px + var(--safe-b))}
+  .chat-sheet.open{transform:translateY(0)}
+  .sheet-grip{display:grid;place-items:center;padding:10px 0 4px 0;flex-shrink:0}
+  .sheet-grip span{width:40px;height:4px;border-radius:3px;background:var(--line-2)}
+  .chat-head{padding:4px 18px 12px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-shrink:0}
+  .chat-head .label{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--pink-1);text-transform:uppercase;text-shadow:0 0 8px rgba(255,110,199,.4);display:flex;align-items:center;gap:10px}
+  .chat-head .micro-orb{width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff,var(--pink) 60%,#5a1a3e 100%);box-shadow:0 0 8px var(--pink)}
+  .chat-head .x{font-family:var(--mono);font-size:16px;color:var(--fog);background:none;border:none;cursor:pointer;padding:4px 8px}
+  .talk-log{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:9px;min-height:0;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent;-webkit-overflow-scrolling:touch}
+  .tmsg{font-size:14px;line-height:1.45;max-width:90%}
+  .tmsg .who{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;display:block;margin-bottom:3px}
+  .tmsg.you{align-self:flex-end;text-align:right;color:var(--text-dim)} .tmsg.you .who{color:var(--cyan-2)}
+  .tmsg.chloe{align-self:flex-start;color:var(--violet-1);font-family:var(--serif);font-style:italic;font-size:16px} .tmsg.chloe .who{color:var(--pink);font-family:var(--mono);font-style:normal;font-size:8.5px}
+  .talk-row{display:flex;gap:9px;padding:11px 14px 0 14px;border-top:1px solid var(--line);flex-shrink:0}
+  .talk-in{flex:1;background:var(--ink-3);border:1px solid var(--line-2);color:var(--text);font-family:var(--sans);font-size:15px;padding:11px 12px;outline:none;border-radius:4px}
+  .talk-in:focus{border-color:var(--cyan-1);box-shadow:0 0 10px rgba(34,211,238,.2)}
+  .talk-in::placeholder{color:var(--fog)}
+  .talk-send{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--cyan-2);background:var(--ink-3);border:1px solid var(--line-2);padding:0 16px;cursor:pointer;border-radius:4px;transition:all .15s}
+  .talk-send:active{color:#fff;border-color:var(--cyan-1);background:linear-gradient(180deg,rgba(34,211,238,.16),rgba(34,211,238,.03))}
+</style>
+</head>
+<body>
+  <header>
+    <div class="orb" id="hdrOrb"></div>
+    <div class="brand">CHLOE // ARCADE</div>
+    <button class="hbtn" id="btnLib" title="ROM library" aria-label="ROM library">&#9776;</button>
+    <button class="hbtn" id="btnLoad" title="Load ROM" aria-label="Load ROM">&#8679;</button>
+    <input type="file" id="fileInput" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin" style="display:none">
+  </header>
+
+  <div class="pulse" id="pulse">
+    <div class="pulse-orb" id="pulseOrb"></div>
+    <canvas class="pulse-canvas" id="pulseCanvas"></canvas>
+    <div class="pulse-tag" id="pulseTag">IDLE</div>
+  </div>
+
+  <div class="saystrip">
+    <div class="says" id="says"></div>
+    <div class="st" id="saveStatus"></div>
+  </div>
+
+  <!-- device shell: EmulatorJS canvas lives in the screen-frame -->
+  <div class="device" id="device">
+    <span class="screw s1"></span><span class="screw s2"></span><span class="screw s3"></span><span class="screw s4"></span>
+    <div class="screen-well">
+      <div class="screen-strip">
+        <span class="game" id="gameTitle">NO CARTRIDGE</span>
+        <span class="mode" id="modeTag">STANDBY</span>
+      </div>
+      <div class="screen-frame">
+        <div id="emu"><canvas id="wbCanvas" width="160" height="144"></canvas><div class="standby" id="standby">— standby —<br>tap &#9776; to pick a game</div></div>
+      </div>
+    </div>
+    <div class="controls-row">
+      <div class="dpad" id="dpad">
+        <div class="dpad-bg"></div>
+        <div class="dbtn up"    data-btn="up"></div>
+        <div class="dbtn down"  data-btn="down"></div>
+        <div class="dbtn left"  data-btn="left"></div>
+        <div class="dbtn right" data-btn="right"></div>
+        <div class="dpad-cap"></div>
+      </div>
+      <div class="ab">
+        <div class="abtn a" data-btn="a"><div class="cap">A</div><div class="abtn-lab">A</div></div>
+        <div class="abtn b" data-btn="b"><div class="cap">B</div><div class="abtn-lab">B</div></div>
+      </div>
+    </div>
+    <div class="pills">
+      <div class="pill" data-btn="select">SELECT</div>
+      <div class="pill" data-btn="start">START</div>
+    </div>
+  </div>
+
+  <!-- bottom action bar -->
+  <div class="action-bar">
+    <button class="act-btn" id="btnSave" disabled><span class="glyph">&#9634;</span>Save</button>
+    <button class="act-btn" id="btnLoadState" disabled><span class="glyph">&#9635;</span>Load</button>
+    <button class="act-btn" id="btnMemory"><span class="glyph">&#10022;</span>Memory</button>
+    <button class="act-btn chat" id="btnChat"><span class="glyph">&#10022;</span>Chloe</button>
+  </div>
+
+  <!-- scrims -->
+  <div class="scrim" id="libScrim"></div>
+  <div class="scrim" id="chatScrim"></div>
+
+  <!-- ROM library drawer -->
+  <div class="drawer" id="libDrawer">
+    <div class="lib-head">
+      <span class="ttl">ROM LIBRARY</span>
+      <span class="cnt" id="libCount">0</span>
+      <button class="x" id="btnLibClose" aria-label="close">&#10005;</button>
+    </div>
+    <div class="sysfilter" id="sysfilter">
+      <span class="chip on" data-sys="all">ALL</span>
+      <span class="chip" data-sys="nes">NES</span>
+      <span class="chip" data-sys="gb">GB/GBC</span>
+      <span class="chip" data-sys="gba">GBA</span>
+      <span class="chip" data-sys="snes">SNES</span>
+      <span class="chip" data-sys="segaMD">GENESIS</span>
+    </div>
+    <div class="drawer-tools">
+      <button class="btn" id="btnRefresh">&#8635; Refresh</button>
+      <button class="btn" id="btnLoad2">&#8679; Load ROM…</button>
+    </div>
+    <div class="lib-list" id="libList"><div class="lib-empty">loading…</div></div>
+  </div>
+
+  <!-- memory viewer -->
+  <div class="memviewer" id="memviewer">
+    <div class="memviewer-head">
+      <span class="tag">CHLOE REMEMBERS</span>
+      <span class="gn" id="memGame">—</span>
+      <button class="btn" id="btnMemRefresh" style="flex:0 0 auto">&#8635;</button>
+      <button class="btn" id="btnMemClose" style="flex:0 0 auto">&#10005; Close</button>
+    </div>
+    <div class="memviewer-body" id="memBody">loading…</div>
+  </div>
+
+  <!-- Chloe chat sheet -->
+  <div class="chat-sheet" id="chatSheet">
+    <div class="sheet-grip"><span></span></div>
+    <div class="chat-head">
+      <div class="label"><span class="micro-orb"></span>DIRECT LINE · CHLOE</div>
+      <button class="x" id="btnChatClose" aria-label="close">&#10005;</button>
+    </div>
+    <div class="talk-log" id="talkLog"></div>
+    <form class="talk-row" id="talkForm" autocomplete="off">
+      <input class="talk-in" id="talkIn" type="text" placeholder="say something to chloe…" maxlength="500">
+      <button class="talk-send" id="talkSend" type="submit">Send</button>
+    </form>
+  </div>
+
+  <div id="build">build GB-WasmBoy (arcade) v3</div>
+
+<script src="https://cdn.jsdelivr.net/npm/wasmboy@0.7.1/dist/wasmboy.wasm.umd.js"></script>
+<script>
+(function(){
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const SYS = {
+    nes:{label:'NES'}, gb:{label:'GB/GBC'}, gba:{label:'GBA'},
+    snes:{label:'SNES'}, segaMD:{label:'GENESIS'},
+  };
+  // ── build marker (confirms which emulator_mobile.html is actually live) ──
+  (function(){
+    const BUILD = 'build R3 · autosave OFF';
+    const add = ()=>{ const d=document.createElement('div'); d.textContent=BUILD;
+      d.style.cssText='position:fixed;bottom:2px;right:5px;font:10px/1 monospace;'
+        +'color:#0ff;opacity:.55;z-index:99999;pointer-events:none';
+      document.body.appendChild(d); };
+    if(document.body) add(); else document.addEventListener('DOMContentLoaded', add);
+  })();
+  const EXT_CORE = {nes:'nes',fds:'nes',gb:'gb',gbc:'gb',sgb:'gb',gba:'gba',
+                    sfc:'snes',smc:'snes',md:'segaMD',gen:'segaMD',smd:'segaMD',bin:'segaMD'};
+
+  /* ── library ── */
+  let allRoms = [], filter = 'all', curGame = '', curFile = '';
+  async function loadLibrary(){
+    try{
+      const r = await fetch('api/roms', {cache:'no-store'});
+      const j = await r.json();
+      allRoms = j.roms || [];
+    }catch(e){ allRoms = []; }
+    renderLibrary();
+  }
+  function renderLibrary(){
+    const list = $('libList');
+    const roms = allRoms.filter(r => filter==='all' || r.system===filter);
+    $('libCount').textContent = roms.length;
+    if(!roms.length){
+      list.innerHTML = '<div class="lib-empty">no roms found.<br>drop files in C:\\Chloe\\roms,<br>or use Load ROM…</div>';
+      return;
+    }
+    list.innerHTML = '';
+    for(const rom of roms){
+      const el = document.createElement('div');
+      el.className = 'rom'; el.dataset.file = rom.file;
+      const sy = (SYS[rom.system]||{}).label || rom.system;
+      el.innerHTML = `<span class="nm"></span><span class="sy">${sy}</span>`;
+      el.querySelector('.nm').textContent = rom.name.replace(/\.[^.]+$/,'');
+      if(rom.file === curFile) el.classList.add('active');
+      el.addEventListener('click', () => {
+        // Fresh page per game: EmulatorJS does not cleanly re-init in one document.
+        location.replace('?g='+encodeURIComponent(rom.file)+'&sys='+encodeURIComponent(rom.system)+'&t='+Date.now());
+      });
+      list.appendChild(el);
+    }
+  }
+  $('sysfilter').addEventListener('click', e=>{
+    const c = e.target.closest('.chip'); if(!c) return;
+    filter = c.dataset.sys;
+    document.querySelectorAll('.chip').forEach(x=>x.classList.toggle('on', x===c));
+    renderLibrary();
+  });
+  $('btnRefresh').addEventListener('click', loadLibrary);
+
+  /* ── file picker ── */
+  function pickFile(){ $('fileInput').click(); }
+  $('btnLoad').addEventListener('click', pickFile);
+  $('btnLoad2').addEventListener('click', pickFile);
+  $('fileInput').addEventListener('change', async e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const ext = (f.name.split('.').pop()||'').toLowerCase();
+    const core = EXT_CORE[ext];
+    if(!core){ alert("i don't recognize that file type."); return; }
+    try{
+      const buf = await f.arrayBuffer();
+      const r = await fetch('api/tmprom', {method:'POST', body:buf});
+      if(!r.ok) throw new Error('upload failed');
+      location.replace('?tmp=1&sys='+encodeURIComponent(core)+'&name='+encodeURIComponent(f.name.replace(/\.[^.]+$/,''))+'&t='+Date.now());
+    }catch(err){ console.error(err); alert('could not load that file.'); }
+  });
+
+  /* ── WasmBoy lifecycle (Canvas2D, no WebGL) — replaces EmulatorJS on iPhone.
+        EmulatorJS's RetroArch WebGL stack force-closes iOS WebKit ~30s into play
+        (proven across PWA + Safari tab + the lightest core); WasmBoy renders to a
+        2D canvas and survives. GB/GBC only — other systems stay on the desktop
+        arcade. EmulatorJS backup preserved in emulator_mobile.html.bak.*. ── */
+  function resolveWB(){
+    const g = window.WasmBoy;
+    if(!g) return null;
+    if(typeof g.config==='function' && typeof g.loadROM==='function') return g;
+    if(g.WasmBoy && typeof g.WasmBoy.config==='function') return g.WasmBoy;
+    if(g.default && typeof g.default.config==='function') return g.default;
+    return null;
+  }
+  const WB = resolveWB();
+  const WB_OPTIONS = {
+    headless:false, useGbcWhenOptional:true, isAudioEnabled:true, frameSkip:0,
+    audioBatchProcessing:true, timersBatchProcessing:false, audioAccumulateSamples:false,
+    graphicsBatchProcessing:false, graphicsDisableScanlineRendering:false,
+    tileRendering:true, tileCaching:true, gameboyFPSCap:60,
+    updateGraphicsCallback:false, updateAudioCallback:false, saveStateCallback:false
+  };
+  let gameReady = false, wbConfigured = false, audioUnlocked = false;
+  async function ensureConfigured(){
+    if(wbConfigured) return;
+    await WB.config(WB_OPTIONS, $('wbCanvas'));
+    wbConfigured = true;
+  }
+  // iOS won't start audio without a user gesture.
+  function unlockAudio(){ if(audioUnlocked || !WB) return; audioUnlocked=true; try{ WB.resumeAudioContext && WB.resumeAudioContext(); }catch(_){} }
+  document.addEventListener('touchend', unlockAudio, {passive:true});
+  document.addEventListener('click', unlockAudio);
+
+  async function teardown(){
+    try{ if(WB && WB.isPlaying && WB.isPlaying()) await WB.pause(); }catch(_){}
+    gameReady = false;
+    const cv=$('wbCanvas'); if(cv) cv.style.display='none';
+    const sb=$('standby'); if(sb) sb.style.display='';
+    $('btnSave').disabled = true; $('btnLoadState').disabled = true;
+    document.body.classList.remove('playing');
+  }
+  async function startGame(core, url, name){
+    if(!WB){ setSays('emulator core failed to load'); return; }
+    await teardown();
+    if(core !== 'gb'){
+      const sb=$('standby'); if(sb){ sb.style.display='';
+        sb.innerHTML = 'iPhone arcade plays<br>GB / GBC only.<br><br>“' + ((SYS[core]||{label:core}).label) + '” runs on the desktop arcade.'; }
+      setSays('that one’s GB/GBC-only on here, love.');
+      return;
+    }
+    document.body.classList.add('playing');
+    curGame = name || 'game';
+    const gt=$('gameTitle'); if(gt) gt.textContent=(curGame||'game').toUpperCase();
+    const mt=$('modeTag'); if(mt) mt.textContent='GB/GBC';
+    const sb=$('standby'); if(sb) sb.style.display='none';
+    const cv=$('wbCanvas'); if(cv) cv.style.display='block';
+    setSays('booting…');
+    try{
+      await ensureConfigured();
+      await WB.loadROM(url);     // WasmBoy fetches the URL itself
+      await WB.play();
+      onGameReady();
+    }catch(e){
+      console.error('WasmBoy start failed', e);
+      setSays('could not start that game');
+    }
+  }
+  function onGameReady(){
+    gameReady = true;
+    $('btnSave').disabled = false; $('btnLoadState').disabled = false;
+    $('saveStatus').textContent = '';
+    setSays(curGame || '');
+  }
+
+  /* ── auto-save ── WasmBoy persists cartridge RAM (Pokémon's in-game SAVE)
+        to IndexedDB automatically, so no server-side autosave loop is needed.
+        Manual save/load STATE snapshots are wired to the Save/Load buttons. ── */
+
+  /* ── EXPLICIT save / load state (WasmBoy IndexedDB-backed snapshots) ── */
+  $('btnSave').addEventListener('click', async ()=>{
+    if(!WB || !gameReady){ setSaveStatus('save unavailable', true); return; }
+    try{ await WB.saveState(); await WB.play(); setSaveStatus('state saved'); }
+    catch(e){ console.error('saveState', e); setSaveStatus('save failed', true); }
+  });
+  $('btnLoadState').addEventListener('click', async ()=>{
+    if(!WB || !gameReady){ setSaveStatus('load unavailable', true); return; }
+    try{
+      const states = await WB.getSaveStates();
+      if(!states || !states.length){ setSaveStatus('no saved state', true); return; }
+      await WB.loadState(states[states.length - 1]);
+      await WB.play();
+      setSaveStatus('loaded');
+    }catch(e){ console.error('loadState', e); setSaveStatus('load failed', true); }
+  });
+  function setSaveStatus(t, bad){ const e=$('saveStatus'); e.textContent=t; e.style.color = bad?'var(--red)':'var(--cyan-2)'; }
+
+  /* ── custom touch controls → WasmBoy via synthetic key events ──
+        WasmBoy reads keyboard through responsive-gamepad (matches event.code).
+        Its default joypad stays enabled; we synthesize the mapped keys so the
+        on-screen buttons drive the same path a real keyboard would. ── */
+  const KEY_CODES = {
+    up:['ArrowUp','KeyW'], down:['ArrowDown','KeyS'], left:['ArrowLeft','KeyA'], right:['ArrowRight','KeyD'],
+    a:['KeyX','Semicolon'], b:['KeyZ','KeyM'], start:['Enter'], select:['ShiftRight','ShiftLeft']
+  };
+  const KEY_INFO = {
+    ArrowUp:{k:'ArrowUp',c:38}, ArrowDown:{k:'ArrowDown',c:40}, ArrowLeft:{k:'ArrowLeft',c:37}, ArrowRight:{k:'ArrowRight',c:39},
+    KeyW:{k:'w',c:87}, KeyA:{k:'a',c:65}, KeyS:{k:'s',c:83}, KeyD:{k:'d',c:68},
+    KeyX:{k:'x',c:88}, KeyZ:{k:'z',c:90}, Semicolon:{k:';',c:186}, KeyM:{k:'m',c:77},
+    Enter:{k:'Enter',c:13}, ShiftRight:{k:'Shift',c:16}, ShiftLeft:{k:'Shift',c:16}
+  };
+  function dispatchKey(type, code){
+    const i = KEY_INFO[code] || {k:code, c:0};
+    const opts = {code, key:i.k, keyCode:i.c, which:i.c, bubbles:true, cancelable:true};
+    try{ window.dispatchEvent(new KeyboardEvent(type, opts)); }catch(_){}
+    try{ document.dispatchEvent(new KeyboardEvent(type, opts)); }catch(_){}
+  }
+  function emuInput(name, on){
+    const codes = KEY_CODES[name]; if(!codes) return;
+    unlockAudio();
+    codes.forEach(c => dispatchKey(on ? 'keydown' : 'keyup', c));
+  }
+  function bindBtn(el){
+    const name = el.dataset.btn; if(!name) return;
+    let held = false;
+    const dn = ev => { ev.preventDefault(); if(held) return; held=true; el.classList.add('active'); emuInput(name,true); };
+    const up = ev => { if(ev) ev.preventDefault(); if(!held) return; held=false; el.classList.remove('active'); emuInput(name,false); };
+    el.addEventListener('pointerdown', dn);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointerleave', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('contextmenu', ev=>ev.preventDefault());
+  }
+  document.querySelectorAll('[data-btn]').forEach(bindBtn);
+
+  /* ── Chloe watch toggle → screen-vision commentary loop ── */
+  let watching=false, frameTimer=null;
+  function syncWatchBtn(){
+    const b=$('btnWatch');
+    if(!b) return;  // Watch is disabled on mobile (canvas readback crashed iOS)
+    b.querySelector('.glyph').nextSibling.textContent = watching ? 'Watching' : 'Watch';
+    b.classList.toggle('on', watching);
+  }
+  function findGameCanvas(){
+    const root = $('emu'); if(!root) return null;
+    const cs = root.querySelectorAll('canvas');
+    let best=null, bestArea=0;
+    cs.forEach(c=>{ const a=(c.width||0)*(c.height||0); if(a>bestArea){ bestArea=a; best=c; } });
+    return best;
+  }
+  // Capture without preserveDrawingBuffer: read the live GL framebuffer inside a
+  // rAF, flip it (GL is bottom-up) into a 2D canvas, then toBlob. 2D-canvas fallback.
+  function captureCanvasBlob(c){
+    return new Promise(resolve=>{
+      requestAnimationFrame(()=>{
+        try{
+          const gl = c.getContext('webgl2') || c.getContext('webgl') || c.getContext('experimental-webgl');
+          if(gl && typeof gl.readPixels === 'function'){
+            const w=c.width, h=c.height;
+            const px=new Uint8Array(w*h*4);
+            gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,px);
+            const tmp=document.createElement('canvas'); tmp.width=w; tmp.height=h;
+            const tctx=tmp.getContext('2d'); const img=tctx.createImageData(w,h);
+            const row=w*4;
+            for(let y=0;y<h;y++){ const s=(h-1-y)*row, d=y*row; img.data.set(px.subarray(s,s+row), d); }
+            tctx.putImageData(img,0,0);
+            tmp.toBlob(b=>resolve(b),'image/png');
+            return;
+          }
+          c.toBlob(b=>resolve(b),'image/png');
+        }catch(_){ try{ c.toBlob(b=>resolve(b),'image/png'); }catch(__){ resolve(null); } }
+      });
+    });
+  }
+  // If the GL context is lost (the usual precursor to the white-screen crash),
+  // reload the game cleanly instead of stranding a blank canvas — autosave
+  // restores progress on the reload.
+  function guardContextLoss(){
+    const c = findGameCanvas(); if(!c || c.__lossGuarded) return; c.__lossGuarded = true;
+    c.addEventListener('webglcontextlost', (e)=>{
+      try{ e.preventDefault(); }catch(_){}
+      setSays('graphics reset — reloading…');
+      setTimeout(()=>{ try{ location.reload(); }catch(_){} }, 500);
+    }, false);
+  }
+  async function uploadGameFrame(){
+    if(!watching) return;
+    try{
+      const c = findGameCanvas();
+      if(!c || !c.width || !c.height) return;
+      // Read pixels off the live GL context (works without preserveDrawingBuffer).
+      const blob = await captureCanvasBlob(c);
+      if(!blob || !blob.size) return;
+      await fetch('api/arcade_frame', {method:'POST', body:blob, headers:{'Content-Type':'image/png'}}).catch(()=>{});
+    }catch(_){}
+  }
+  function startFrameUploads(){ stopFrameUploads(); uploadGameFrame(); frameTimer = setInterval(uploadGameFrame, 12000); }
+  function stopFrameUploads(){ if(frameTimer){ clearInterval(frameTimer); frameTimer=null; } }
+  const _btnWatch = $('btnWatch');
+  if(_btnWatch) _btnWatch.addEventListener('click', ()=>{
+    watching=!watching;
+    wsSend({type: watching?'game_watch_start':'game_watch_stop', game: curGame});
+    syncWatchBtn();
+    if(watching) startFrameUploads(); else stopFrameUploads();
+  });
+
+  /* ── memory viewer ── */
+  async function openMemory(){
+    const game = curGame || (new URLSearchParams(location.search).get('name') || '');
+    $('memGame').textContent = game || '— pick a game —';
+    $('memviewer').classList.add('on');
+    $('memBody').innerHTML = '<em>loading…</em>';
+    if(!game){ $('memBody').innerHTML = '<em>start a game first, then come back to see what Chloe remembers about it.</em>'; return; }
+    try{
+      const r = await fetch('api/game_memory?game='+encodeURIComponent(game), {cache:'no-store'});
+      const txt = await r.text();
+      $('memBody').textContent = (txt||'').trim() || '(empty)';
+    }catch(e){ $('memBody').innerHTML = '<em>could not reach her memory right now.</em>'; }
+  }
+  function closeMemory(){ $('memviewer').classList.remove('on'); }
+  $('btnMemory').addEventListener('click', openMemory);
+  $('btnMemRefresh').addEventListener('click', openMemory);
+  $('btnMemClose').addEventListener('click', closeMemory);
+
+  /* ── chloe state pulse: flowing cyberpunk waveform + orb ── */
+  const pulse = (function(){
+    const c = $('pulseCanvas'), orb = $('pulseOrb'), tag = $('pulseTag');
+    if(!c) return { set(){}, kick(){} };
+    const ctx = c.getContext('2d');
+    let state = 'idle', energy = 0, target = 0, t0 = performance.now(), raf = 0;
+    const PAL = {
+      idle:     { hue1: 188, hue2: 195, glow: 'rgba(34,211,238,0.55)',  amp: 6,  speed: 0.0010, label: 'IDLE' },
+      thinking: { hue1: 270, hue2: 290, glow: 'rgba(176,108,255,0.65)', amp: 11, speed: 0.0024, label: 'THINKING' },
+      speaking: { hue1: 320, hue2: 200, glow: 'rgba(255,110,199,0.7)',  amp: 16, speed: 0.0042, label: 'SPEAKING' },
+    };
+    function resize(){
+      const r = c.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio||1);
+      c.width = Math.max(1, r.width * dpr); c.height = Math.max(1, r.height * dpr);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+    const ro = new ResizeObserver(()=>resize()); ro.observe(c); resize();
+    function draw(now){
+      const p = PAL[state] || PAL.idle;
+      const w = c.clientWidth, h = c.clientHeight, mid = h/2;
+      energy += (target - energy) * 0.08; target *= 0.94;
+      const baseAmp = p.amp + energy * 14;
+      ctx.clearRect(0,0,w,h);
+      const grad = ctx.createLinearGradient(0,0,w,0);
+      grad.addColorStop(0,'rgba(0,0,0,0)');
+      grad.addColorStop(0.5, p.glow.replace(/[\d.]+\)$/,'0.10)'));
+      grad.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.fillStyle = grad; ctx.fillRect(0,0,w,h);
+      for(let layer=0; layer<3; layer++){
+        const phase = (now - t0) * p.speed * (1 + layer*0.4);
+        const amp = baseAmp * (1 - layer*0.22);
+        const hue = layer===0 ? p.hue1 : (layer===1 ? p.hue2 : (p.hue1+p.hue2)/2);
+        ctx.beginPath();
+        for(let x=0; x<=w; x+=2){
+          const k = x / w * Math.PI * 4 + layer * 0.7;
+          const y = mid + Math.sin(k + phase) * amp * 0.6 + Math.sin(k*1.7 - phase*1.3) * amp * 0.4;
+          if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+        }
+        ctx.lineWidth = layer===0 ? 1.8 : 1.0;
+        ctx.strokeStyle = `hsla(${hue}, 95%, ${65 - layer*8}%, ${0.85 - layer*0.22})`;
+        ctx.shadowBlur = 8 + layer*4; ctx.shadowColor = p.glow;
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+      const nDots = 14;
+      for(let i=0;i<nDots;i++){
+        const tx = ((now - t0) * 0.06 * p.speed * 1000 + i * (w/nDots)) % (w + 40) - 20;
+        const ty = mid + Math.sin(((now - t0)*0.003) + i) * (baseAmp*0.7);
+        const r = 1.4 + (i%3===0 ? 0.8 : 0);
+        ctx.beginPath(); ctx.arc(tx, ty, r, 0, Math.PI*2);
+        ctx.fillStyle = `hsla(${p.hue1}, 95%, 75%, ${0.55 + (i%3===0?0.25:0)})`;
+        ctx.shadowBlur = 6; ctx.shadowColor = p.glow; ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+      raf = requestAnimationFrame(draw);
+    }
+    raf = requestAnimationFrame(draw);
+    function set(s){
+      if(!PAL[s]) s = 'idle';
+      if(s === state) return;
+      state = s;
+      orb.classList.remove('thinking','speaking');
+      tag.classList.remove('thinking','speaking');
+      if(s !== 'idle'){ orb.classList.add(s); tag.classList.add(s); }
+      tag.textContent = PAL[s].label;
+    }
+    function kick(amount){ target = Math.min(1.2, target + (amount || 0.35)); }
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.hidden){ cancelAnimationFrame(raf); }
+      else { t0 = performance.now(); raf = requestAnimationFrame(draw); }
+    });
+    return { set, kick };
+  })();
+
+  /* ── says + talk-back ── */
+  function setSays(t){ const e=$('says'); if(e) e.textContent=(t||'').trim(); }
+  const talkLog=$('talkLog'); let hist=[], asstEl=null, buf='';
+  function appendTalk(who, text){
+    const row=document.createElement('div'); row.className='tmsg '+(who==='you'?'you':'chloe');
+    const w=document.createElement('span'); w.className='who'; w.textContent=who==='you'?'you':'chloe';
+    const t=document.createElement('span'); t.textContent=text;
+    row.appendChild(w); row.appendChild(t); talkLog.appendChild(row); talkLog.scrollTop=talkLog.scrollHeight;
+    return t;
+  }
+  let speakingTimer = null;
+  function markSpeaking(){
+    pulse.set('speaking'); pulse.kick(0.6);
+    if(speakingTimer) clearTimeout(speakingTimer);
+    speakingTimer = setTimeout(()=>{ pulse.set('idle'); speakingTimer=null; }, 4500);
+  }
+  function onChat(msg){
+    if(msg.type==='start'){ buf=''; asstEl=appendTalk('chloe',''); pulse.set('thinking'); pulse.kick(0.5); }
+    else if(msg.type==='delta'){ buf+=(msg.text||''); if(!asstEl) asstEl=appendTalk('chloe',''); asstEl.textContent=buf; talkLog.scrollTop=talkLog.scrollHeight; pulse.set('speaking'); pulse.kick(0.25); }
+    else if(msg.type==='done'){ if(buf){ hist.push({role:'assistant',content:buf}); hist=hist.slice(-12); setSays(buf); } asstEl=null; buf=''; markSpeaking(); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='error' && msg.text){ appendTalk('chloe','['+msg.text+']'); pulse.set('idle'); $('talkIn').disabled=false; $('talkSend').disabled=false; }
+    else if(msg.type==='game_comment' && msg.text){ appendTalk('chloe',msg.text); setSays(msg.text); hist.push({role:'assistant',content:msg.text}); hist=hist.slice(-12); markSpeaking(); }
+    else if(msg.type==='game_watch_state'){ watching=!!msg.on; syncWatchBtn(); }
+    else if(msg.type==='tts_audio'){ playSingle(msg.audio_b64, msg.format||'mp3'); }
+    else if(msg.type==='tts_audio_chunk'){ enqueueChunk(msg.audio_b64||'', msg.format||'wav', msg.chunk_id|0, !!msg.is_final); }
+  }
+  $('talkForm').addEventListener('submit', e=>{
+    e.preventDefault();
+    const text=($('talkIn').value||'').trim(); if(!text || $('talkIn').disabled) return;
+    // "/kb <url-or-text>" → ingest a walkthrough/wiki into this game's KB (feeds
+    // Chloe's watch commentary; watch itself runs on desktop).
+    const _kb=text.match(/^\/kb\s+(.+)$/i);
+    if(_kb){ appendTalk('you', text); $('talkIn').value=''; wsSend({type:'game_kb_ingest', game:curGame, url:_kb[1].trim()}); return; }
+    appendTalk('you', text); hist.push({role:'user',content:text}); hist=hist.slice(-12);
+    $('talkIn').value=''; $('talkIn').disabled=true; $('talkSend').disabled=true;
+    pulse.set('thinking'); pulse.kick(0.4);
+    unlockAudio();  // user gesture → bless the <audio> element for iOS playback
+    // reply_audio:true → backend ships TTS bytes over the WS (played on THIS phone)
+    // instead of speaking on the desktop. Desktop emulator_lite.html omits this,
+    // so its arcade chat keeps playing on the HUD/PC.
+    wsSend({type:'chat', messages:hist.slice(), max_tokens:512, reply_audio:true});
+  });
+
+  /* ── reply audio: play Chloe's arcade-chat voice on THIS device (iPhone) ── */
+  const SILENT_WAV='data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  let replyAudioEl=null, ttsQ=[], ttsPlaying=false, ttsActive=false, ttsFinal=false;
+  function ensureAudio(){ if(!replyAudioEl){ replyAudioEl=new Audio(); replyAudioEl.preload='auto'; } return replyAudioEl; }
+  function unlockAudio(){
+    const a=ensureAudio();
+    try{ a.src=SILENT_WAV; const p=a.play(); if(p&&p.then) p.then(()=>{ try{a.pause();a.currentTime=0;}catch(_){} }).catch(()=>{}); }catch(_){}
+  }
+  function playSingle(b64,fmt){
+    if(!b64) return; ttsQ=[]; ttsActive=false; const a=ensureAudio();
+    a.onended=null; a.onerror=null;
+    a.src='data:audio/'+(fmt||'mp3')+';base64,'+b64;
+    a.play().catch(()=>{});
+  }
+  function enqueueChunk(b64,fmt,id,isFinal){
+    if(id===0||!ttsActive){ try{ ensureAudio().pause(); }catch(_){} ttsQ=[]; ttsPlaying=false; ttsActive=true; ttsFinal=false; }
+    if(isFinal) ttsFinal=true;
+    if(b64) ttsQ.push({b64,fmt:fmt||'wav'});
+    if(!ttsPlaying) playNextChunk();
+  }
+  function playNextChunk(){
+    if(!ttsQ.length){ ttsPlaying=false; if(ttsActive&&ttsFinal){ ttsActive=false; ttsFinal=false; } return; }
+    ttsPlaying=true; const n=ttsQ.shift(); const a=ensureAudio();
+    a.src='data:audio/'+n.fmt+';base64,'+n.b64;
+    a.onended=()=>playNextChunk();
+    a.onerror=()=>playNextChunk();
+    a.play().catch(()=>{ ttsQ=[]; ttsPlaying=false; ttsActive=false; });
+  }
+
+  /* ── WS (talk-back + watch commentary) ── */
+  let ws=null, didWatchReset=false;
+  function wsUrl(){ return location.protocol==='https:' ? `wss://${location.host}/chloe-ws` : `ws://${location.hostname||'localhost'}:6789`; }
+  function wsSend(o){ try{ if(ws && ws.readyState===1) ws.send(JSON.stringify(o)); }catch(_){} }
+  function connect(){
+    try{ ws=new WebSocket(wsUrl()); }catch(e){ return; }
+    ws.addEventListener('open', ()=>{
+      if(!didWatchReset){ didWatchReset=true; watching=false; syncWatchBtn(); wsSend({type:'game_watch_stop'}); }
+    });
+    ws.addEventListener('message', ev=>{ try{ onChat(JSON.parse(ev.data)); }catch(_){} });
+    ws.addEventListener('close', ()=> setTimeout(connect, 3000));
+  }
+
+  /* ── drawer + chat sheet open/close ── */
+  function openDrawer(){ $('libDrawer').classList.add('open'); $('libScrim').classList.add('open'); }
+  function closeDrawer(){ $('libDrawer').classList.remove('open'); $('libScrim').classList.remove('open'); }
+  $('btnLib').addEventListener('click', openDrawer);
+  $('btnLibClose').addEventListener('click', closeDrawer);
+  $('libScrim').addEventListener('click', closeDrawer);
+  $('libList').addEventListener('click', e=>{ if(e.target.closest('.rom')) closeDrawer(); });
+
+  function openChat(){
+    $('chatSheet').classList.add('open'); $('chatScrim').classList.add('open');
+    try{ unlockAudio(); }catch(_){}
+    talkLog.scrollTop = talkLog.scrollHeight;
+    setTimeout(()=>{ try{ $('talkIn').focus(); }catch(_){} }, 320);
+  }
+  function closeChat(){
+    $('chatSheet').classList.remove('open'); $('chatScrim').classList.remove('open');
+    try{ $('talkIn').blur(); }catch(_){}
+  }
+  $('btnChat').addEventListener('click', openChat);
+  $('btnChatClose').addEventListener('click', closeChat);
+  $('chatScrim').addEventListener('click', closeChat);
+
+  /* ── iOS stability: do NOT force preserveDrawingBuffer here. On iPhone it
+        roughly doubles the emulator's WebGL back-buffer memory and was getting
+        the web-content process killed (white screen → PWA reload to splash).
+        Gameplay is unaffected by dropping it; only off-screen frame capture is,
+        so uploadGameFrame() now grabs frames inside a rAF (best-effort) instead
+        of relying on a always-retained buffer. ── */
+
+  /* ── Wipe stale EmulatorJS IndexedDB stores on each page load. ── */
+  function purgeEjsDatabases(){
+    try{
+      if(!window.indexedDB || !indexedDB.databases) return;
+      indexedDB.databases().then(list=>{
+        (list||[]).forEach(db=>{
+          const n = (db && db.name) || '';
+          if(/emulatorjs|ejs|libretro/i.test(n)){ try{ indexedDB.deleteDatabase(n); }catch(_){} }
+        });
+      }).catch(()=>{});
+    }catch(_){}
+  }
+  purgeEjsDatabases();
+
+  /* ── auto-start a game from URL params (reload-per-game) ── */
+  function autoStart(){
+    const p = new URLSearchParams(location.search);
+    const tmp = p.get('tmp'), g = p.get('g'), sys = p.get('sys'), name = p.get('name');
+    if(tmp==='1' && sys){
+      const url = new URL('tmprom', document.baseURI).href + '?_=' + Date.now();
+      startGame(sys, url, name || 'game');
+    } else if(g && sys){
+      curFile = g;
+      const url = new URL('roms/'+encodeURIComponent(g), document.baseURI).href;
+      startGame(sys, url, g.replace(/\.[^.]+$/,''));
+    }
+  }
+
+  // No beforeunload save needed — WasmBoy continuously persists cartridge RAM
+  // (in-game saves) to IndexedDB on its own.
+
+  connect();
+  loadLibrary();
+  autoStart();
+})();
+</script>
+</body>
+</html>

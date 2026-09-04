@@ -1,0 +1,145 @@
+class _OllamaToolCallNeeded(Exception):
+    """Signal from _ollama_chat_stream that the model wants to call a tool.
+    The streaming path can't run the tool loop, so the caller falls back to
+    the non-streaming _ollama_chat (which does). Raised only before any
+    content has been streamed — tool-call turns start with empty content."""
+    pass
+
+
+async def _ollama_chat_stream(messages: list, max_tokens: int = 400):
+    """Async generator: stream a chat completion from local Ollama, yielding
+    content deltas as they arrive.
+
+    Ollama's HTTP client (requests) is synchronous, so a worker thread reads
+    the NDJSON stream and hands chunks to this coroutine over an
+    asyncio.Queue. The upshot: the HUD sees the first token in ~1-2s instead
+    of waiting for the whole reply to finish generating.
+
+    Raises _OllamaToolCallNeeded if the model emits a tool call before any
+    content (caller should fall back to _ollama_chat for the tool loop).
+    Yields nothing if Ollama is unreachable or errors before producing text;
+    a mid-stream error just ends the generator with whatever was streamed.
+    """
+    if not _ollama_available():
+        return
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+
+    def _producer():
+        try:
+            import requests as _req
+            with _req.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model":      OLLAMA_MODEL,
+                    "messages":   messages,
+                    "stream":     True,
+                    "keep_alive": OLLAMA_KEEP_ALIVE,
+                    "options": {
+                        "temperature": 0.7,
+                        "num_predict": max_tokens,
+                    },
+                },
+                timeout=180,
+                stream=True,
+            ) as r:
+                if r.status_code != 200:
+                    loop.call_soon_threadsafe(
+                        q.put_nowait, ("error", f"HTTP {r.status_code}"))
+                    return
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except Exception:
+                        continue
+                    msg = chunk.get("message", {}) or {}
+                    if msg.get("tool_calls"):
+                        loop.call_soon_threadsafe(
+                            q.put_nowait, ("tool", None))
+                        return
+                    piece = msg.get("content") or ""
+                    if piece:
+                        loop.call_soon_threadsafe(
+                            q.put_nowait, ("delta", piece))
+                    if chunk.get("done"):
+                        break
+        except Exception as e:
+            loop.call_soon_threadsafe(q.put_nowait, ("error", str(e)))
+        finally:
+            loop.call_soon_threadsafe(q.put_nowait, ("end", None))
+
+    threading.Thread(target=_producer, daemon=True,
+                     name="ollama-stream").start()
+
+    t0 = time.time()
+    yielded_any = False
+    first_token_at = None
+    while True:
+        kind, payload = await q.get()
+        if kind == "delta":
+            if not yielded_any:
+                first_token_at = time.time() - t0
+                yielded_any = True
+            yield payload
+        elif kind == "tool":
+            if not yielded_any:
+                raise _OllamaToolCallNeeded()
+            break  # tool call after content already streamed — just stop
+        elif kind == "error":
+            print(f"[chloe] Ollama stream error: {payload}", flush=True)
+            break
+        else:  # "end"
+            break
+    if yielded_any:
+        print(f"[chloe] Ollama ({OLLAMA_MODEL}) stream: first token "
+              f"{first_token_at:.2f}s, total {time.time() - t0:.2f}s",
+              flush=True)
+
+
+def _warm_ollama_models():
+    """Pre-load the chat + embedding models into VRAM at startup so the
+    first real question doesn't pay a cold load. Best-effort: any failure
+    is logged and ignored. Runs in a daemon thread off the boot path."""
+    if not OLLAMA_FALLBACK_ENABLED:
+        return
+    try:
+        import requests as _req
+    except ImportError:
+        return
+    # Tiny chat completion — forces the chat model (e.g. qwen2.5:32b) resident.
+    try:
+        t0 = time.time()
+        r = _req.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {"num_predict": 1},
+            },
+            timeout=300,
+        )
+        if r.status_code == 200:
+            print(f"[chloe] Ollama warm-up: {OLLAMA_MODEL} resident "
+                  f"({time.time() - t0:.1f}s)", flush=True)
+        else:
+            print(f"[chloe] Ollama warm-up: HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[chloe] Ollama warm-up skipped ({OLLAMA_MODEL}): {e}",
+              flush=True)
+    # Tiny embedding — forces nomic-embed-text resident for recall + wiki.
+    try:
+        emb_model = os.environ.get("CHLOE_EMBED_MODEL", "nomic-embed-text")
+        r = _req.post(
+            f"{OLLAMA_URL}/api/embeddings",
+            json={"model": emb_model, "prompt": "hi",
+                  "keep_alive": OLLAMA_KEEP_ALIVE},
+            timeout=60,
+        )
+        if r.status_code == 200:
+            print(f"[chloe] Ollama warm-up: {emb_model} resident", flush=True)
+    except Exception as e:
+        print(f"[chloe] Ollama embed warm-up skipped: {e}", flush=True)

@@ -81,11 +81,36 @@ def run_jarvis():
 threading.Thread(target=run_jarvis, daemon=True).start()
 
 
+def run_catchup_sweep():
+    # Run scheduled jobs that missed their window while the PC was off/asleep
+    # (Windows Task Scheduler silently no-ops those). Delay first so Ollama, the
+    # WS server, and the memory DB are warm. After the initial boot sweep, enter
+    # the periodic loop — which re-sweeps on a timer AND right after the machine
+    # resumes from sleep (the usual case here: the PC sleeps with Chloe running).
+    time.sleep(90)
+    try:
+        import chloe_jobs
+        fired = chloe_jobs.run_catchup()
+        print(f"[catchup] boot sweep fired: {fired}")
+        chloe_jobs.run_periodic_catchup()  # blocks this daemon thread forever
+    except Exception as e:
+        print(f"[catchup] sweep failed: {e}")
+
+
+threading.Thread(target=run_catchup_sweep, daemon=True).start()
+
+
 # ─── HUD WINDOW ──────────────────────────────────────────────────────────────
 class Page(QWebEnginePage):
     """Forwards JS console messages to our redirected stdout so they show
     up in chloe.log when running as exe."""
     def javaScriptConsoleMessage(self, level, message, line, source):
+        # "ResizeObserver loop completed with undelivered notifications" is a
+        # benign Chromium warning — it fires when a resize callback can't deliver
+        # every notification within one frame. EmulatorJS + responsive layouts
+        # emit it in a flood; drop it so it doesn't bury chloe.log.
+        if message and "ResizeObserver loop" in message:
+            return
         print(f"JS: {message}")
 
 
@@ -105,9 +130,46 @@ view.setPage(Page(view))
 
 profile = QWebEngineProfile.defaultProfile()
 profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.NoCache)
+# Give the profile a persistent storage path so EmulatorJS save states / SRAM
+# (IndexedDB + localStorage) actually survive — without one, browser storage
+# can be ephemeral and save state silently no-ops.
+try:
+    profile.setPersistentStoragePath(str(app_dir / "webdata"))
+except Exception:
+    pass
 
 settings = view.settings()
 settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
+
+# Fullscreen + storage + downloads for embedded panels (EmulatorJS, etc.).
+# QWebEngine disables fullscreen by default and ignores download requests unless
+# we opt in — without these the emulator's fullscreen button does nothing and
+# "save state to file" / screenshot exports silently fail.
+settings.setAttribute(QWebEngineSettings.WebAttribute.FullScreenSupportEnabled, True)
+settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+
+
+def _on_fullscreen_requested(req):
+    req.accept()
+    window.showFullScreen() if req.toggleOn() else window.showNormal()
+
+
+view.page().fullScreenRequested.connect(_on_fullscreen_requested)
+
+
+def _on_download_requested(item):
+    # Accept downloads (EmulatorJS save-state exports, screenshots) so they
+    # actually write instead of being silently dropped.
+    try:
+        item.accept()
+    except Exception:
+        pass
+
+
+try:
+    profile.downloadRequested.connect(_on_download_requested)
+except Exception:
+    pass
 
 # hud.html is a bundled resource (shipped inside the exe), so it lives in
 # bundled_dir even when frozen. Loading it via setHtml(content, base_url)

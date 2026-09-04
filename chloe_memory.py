@@ -60,6 +60,10 @@ _EMBED_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 # that, the embed gets skipped (NULL embedding) and the backfill script can
 # patch it up later. Tune via CHLOE_EMBED_TIMEOUT for slow boxes.
 _EMBED_TIMEOUT = float(os.environ.get("CHLOE_EMBED_TIMEOUT", "5"))
+# Keep the embedding model resident between calls (same knob as the
+# chat model) so recall + wiki lookups don't pay a cold reload.
+from ollama_keepalive import get_keep_alive as _get_ollama_keep_alive
+_EMBED_KEEP_ALIVE = _get_ollama_keep_alive()
 
 # Minimum cosine similarity for a turn to surface from search_turns(). With
 # only a few hundred turns in the corpus, brute-force top-k always returns
@@ -203,6 +207,16 @@ class ChloeMemory:
                 "PRAGMA table_info(turns)").fetchall()}
             if 'embedding' not in existing_cols:
                 c.execute("ALTER TABLE turns ADD COLUMN embedding BLOB")
+            # Migration 2026-05-17 (pillar 4): summarized flag for old turns
+            # rolled up into wiki/episodic/conversation_summary_*.md pages.
+            # search_turns() skips summarized rows so recall surfaces the
+            # compact summary (auto-embedded via wiki_watcher) instead of
+            # scattered original turns. Default 0, set to 1 by
+            # mark_summarized() after a successful rollup.
+            if 'summarized' not in existing_cols:
+                c.execute(
+                    "ALTER TABLE turns ADD COLUMN summarized INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _init_facts(self):
         """Create facts.md with a starter header if it doesn't exist."""
@@ -240,6 +254,26 @@ class ChloeMemory:
             # Don't let memory errors break the conversation flow.
             print(f"[memory] append_turn failed: {e}", flush=True)
 
+    def forget(self, query: str) -> int:
+        """Delete turns whose content contains `query` (case-insensitive). The
+        FTS mirror stays consistent via the AFTER DELETE trigger (turns_ad), so
+        recall won't resurface forgotten text. Returns the number removed.
+        A blunt but honest privacy/forget primitive."""
+        if not query or not query.strip():
+            return 0
+        try:
+            with self._lock, self._connect() as c:
+                cur = c.execute(
+                    "DELETE FROM turns WHERE content LIKE ?",
+                    (f"%{query.strip()}%",))
+                n = cur.rowcount or 0
+            if n:
+                print(f"[memory] forgot {n} turn(s) matching {query!r}", flush=True)
+            return n
+        except Exception as e:
+            print(f"[memory] forget failed: {e}", flush=True)
+            return 0
+
     def recent_turns(self, n: int = 20) -> list[dict]:
         """Last n turns in chronological order (oldest → newest)."""
         try:
@@ -262,6 +296,79 @@ class ChloeMemory:
             with self._lock, self._connect() as c:
                 return c.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
         except sqlite3.Error:
+            return 0
+
+    def most_recent_turn_ts(self) -> float | None:
+        """Unix epoch of the newest logged turn, or None if the table is
+        empty/unreadable. 2026-09-03: added so health checks can verify
+        turns are ACTUALLY being written recently, not just that a query
+        against the table succeeds -- a health check that only proves
+        the connection opens (e.g. via count_turns()/unsummarized_count())
+        would report healthy even against a schema-only DB nothing has
+        ever written a row to, or one pointed at entirely the wrong file
+        path. See brain_http.py's memory_db_writable check."""
+        try:
+            with self._lock, self._connect() as c:
+                row = c.execute("SELECT MAX(ts) FROM turns").fetchone()
+                return float(row[0]) if row and row[0] is not None else None
+        except sqlite3.Error:
+            return None
+
+    def unsummarized_count(self) -> int:
+        """Count turns not yet rolled up by pillar-4 summarization.
+
+        Used as the trigger threshold ("if >= 50, run a rollup pass").
+        """
+        try:
+            with self._lock, self._connect() as c:
+                return c.execute(
+                    "SELECT COUNT(*) FROM turns "
+                    "WHERE COALESCE(summarized, 0) = 0"
+                ).fetchone()[0]
+        except sqlite3.Error:
+            return 0
+
+    def oldest_unsummarized_turns(self, limit: int = 20) -> list[dict]:
+        """Return the oldest N turns that have not yet been rolled up.
+
+        Pillar 4 of memory autopilot: the rollup pass calls this, feeds
+        the result to a Groq heavy compression call, writes a wiki
+        summary page, then calls mark_summarized() on the ids returned.
+        Includes the row id so the caller can pass them back unambiguously.
+        """
+        try:
+            with self._lock, self._connect() as c:
+                rows = c.execute(
+                    "SELECT id, ts, role, content, modality FROM turns "
+                    "WHERE COALESCE(summarized, 0) = 0 "
+                    "ORDER BY id ASC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        except sqlite3.Error as e:
+            print(f"[memory] oldest_unsummarized_turns failed: {e}", flush=True)
+            return []
+        return [
+            {"id": r[0], "ts": r[1], "role": r[2],
+             "content": r[3], "modality": r[4]}
+            for r in rows
+        ]
+
+    def mark_summarized(self, turn_ids: list[int]) -> int:
+        """Flag turns as rolled up into a summary page. Returns count
+        actually updated (caller can sanity-check)."""
+        if not turn_ids:
+            return 0
+        try:
+            with self._lock, self._connect() as c:
+                placeholders = ",".join("?" * len(turn_ids))
+                cur = c.execute(
+                    f"UPDATE turns SET summarized = 1 "
+                    f"WHERE id IN ({placeholders})",
+                    tuple(turn_ids),
+                )
+                return cur.rowcount or 0
+        except sqlite3.Error as e:
+            print(f"[memory] mark_summarized failed: {e}", flush=True)
             return 0
 
     def turns_in_range(self, days_back: int = 7,
@@ -304,28 +411,12 @@ class ChloeMemory:
         L2-normalizing on the way in lets us compute cosine similarity at
         query time with a single matmul — np.dot of two unit vectors is
         cosine, no division needed downstream."""
-        if not text or not text.strip():
-            return None
-        try:
-            r = requests.post(
-                f"{_EMBED_URL}/api/embeddings",
-                json={"model": _EMBED_MODEL, "prompt": text.strip()},
-                timeout=_EMBED_TIMEOUT,
-            )
-            r.raise_for_status()
-            emb = r.json().get("embedding") or []
-            if not emb:
-                return None
-            arr = np.asarray(emb, dtype=np.float32)
-            norm = float(np.linalg.norm(arr))
-            if not norm or not np.isfinite(norm):
-                return None
-            arr = arr / norm
-            return arr.tobytes()
-        except Exception as e:
-            print(f"[memory] embed failed ({_EMBED_MODEL} @ {_EMBED_URL}): {e}",
-                  flush=True)
-            return None
+        # Delegate to the shared cache so a query embedded here and then again
+        # by wiki auto-inject (same model+text) only hits Ollama once per turn.
+        import chloe_embed
+        return chloe_embed.embed(
+            text, model=_EMBED_MODEL, url=_EMBED_URL,
+            timeout=_EMBED_TIMEOUT, keep_alive=_EMBED_KEEP_ALIVE, tag="memory")
 
     def search_turns(self, query: str, limit: int = 5,
                      min_age_hours: float = 0.5) -> list[dict]:
@@ -357,10 +448,14 @@ class ChloeMemory:
 
         try:
             with self._lock, self._connect() as c:
+                # Pillar 4 (2026-05-17): skip summarized=1 rows — their
+                # content lives in a wiki/episodic/ summary page which is
+                # surfaced via wiki recall, no need to double-surface here.
                 rows = c.execute("""
                     SELECT ts, role, content, modality, embedding
                     FROM turns
                     WHERE ts < ? AND embedding IS NOT NULL
+                      AND COALESCE(summarized, 0) = 0
                 """, (cutoff,)).fetchall()
         except sqlite3.Error as e:
             print(f"[memory] search_turns failed: {e}", flush=True)
@@ -410,17 +505,28 @@ class ChloeMemory:
         order = np.argsort(-scores)
 
         hits: list[dict] = []
+        # Phase 4B: keep cosine as the relevance FLOOR, but reorder the
+        # above-floor candidates by cosine × importance × recency so
+        # load-bearing memories (decisions, emotional beats, explicit
+        # "remember") outrank passing mentions of the same words.
+        now = time.time()
+        cands = []
         for idx in order:
-            score = float(scores[idx])
-            if score < _RECALL_THRESHOLD:
-                break  # remaining are all below threshold, sorted desc
+            cos = float(scores[idx])
+            if cos < _RECALL_THRESHOLD:
+                break  # sorted desc — the rest are below the relevance floor
             ts, role, content, modality = metas[idx]
             if _is_noise_turn(role, content):
                 continue  # slash command or recall output — never surface
+            imp = _recall_importance(content, role)              # ~1.0 .. 4.8
+            age_days = max(0.0, (now - float(ts)) / 86400.0)
+            recency = 0.5 + 0.5 * (0.97 ** age_days)             # 1.0 fresh → 0.5 old
+            combined = cos * (0.6 + 0.4 * min(imp / 3.5, 1.0)) * recency
+            cands.append((combined, ts, role, content, modality))
+        cands.sort(key=lambda c: c[0], reverse=True)
+        for _, ts, role, content, modality in cands[:limit]:
             hits.append({"ts": ts, "role": role,
                          "content": content, "modality": modality})
-            if len(hits) >= limit:
-                break
 
         # Semantic search returned no above-threshold hits. Fall back to FTS5
         # keyword search before giving up — the older actual discussion may
@@ -666,6 +772,23 @@ def parse_remember_about(text: str) -> str | None:
     return note or None
 
 
+def _recall_importance(content: str, role: str) -> float:
+    """Read-time importance heuristic for ranking recall hits (Phase 4B).
+    No schema change — derived from the turn text. ~1.0 (passing) .. 4.8 (a
+    flagged decision/emotional 'remember this' from Ed)."""
+    t = (content or "").lower()
+    s = 1.0
+    if "remember" in t:
+        s += 2.0
+    if _re.search(r"\b(decide|decision|should i|whether|the plan|go with|i'?ll go with)\b", t):
+        s += 1.5
+    if _re.search(r"\b(love|hate|frustrat|annoy|excited|stress|worried|important|hard|hate)\b", t):
+        s += 1.0
+    if (role or "").lower() == "user":
+        s += 0.3
+    return s
+
+
 def looks_like_recall_query(text: str) -> bool:
     """Heuristic: should we do an FTS lookup before answering this turn?"""
     if not text:
@@ -674,26 +797,78 @@ def looks_like_recall_query(text: str) -> bool:
     return any(kw in t for kw in _RECALL_KEYWORDS)
 
 
+def _rel_time(ts) -> str:
+    """Coarse relative timestamp — reads better to an LLM than an absolute
+    stamp and costs fewer tokens. Never raises."""
+    try:
+        days = (time.time() - float(ts)) / 86400.0
+        if days < 1:
+            return "today"
+        if days < 2:
+            return "yesterday"
+        if days < 14:
+            return f"{int(days)} days ago"
+        if days < 60:
+            return f"{int(days / 7)} weeks ago"
+        return f"{int(days / 30)} months ago"
+    except Exception:
+        return "earlier"
+
+
+# Assistant-voice boilerplate that carries no recall signal — Chloe's own
+# generic self-description / corporate-AI tells. When one of these surfaces as a
+# recall hit it just crowds the recall budget with her own filler (e.g.
+# "I'm designed to remember everything we talk about…"). Drop assistant-role
+# hits that match; never filter Ed's turns. Mirrors the phrasings the persona
+# already bans in live replies.
+_RECALL_NOISE_RE = _re.compile(
+    r"(i'?m designed to|i am designed to|as an ai|as a language model|"
+    r"i'?m just a (language model|chat|bot|program)|how can i (assist|help)|"
+    r"is there anything else|feel free to (ask|reach out)|"
+    r"i'?m here to (help|assist)|i can (help|assist) you with|"
+    r"great question|happy to assist|building our own little system)",
+    _re.IGNORECASE,
+)
+
+
+def _is_recall_noise(content: str, role: str) -> bool:
+    """True if an ASSISTANT-role recall hit is generic boilerplate with no
+    recall value. Ed's own turns are never filtered."""
+    if str(role or "").lower() == "user":
+        return False
+    return bool(_RECALL_NOISE_RE.search(content or ""))
+
+
 def format_recall_block(hits: Iterable[dict]) -> str:
-    """Format FTS hits as a context block to inject into the system prompt.
-    Returns empty string if no hits."""
+    """Format recall hits as a compact, fused memory block for the system
+    prompt. Latency-free (no LLM call): relative dates, de-duplication,
+    speaker-light phrasing, trimming — clean signal instead of a raw
+    timestamped log dump. Returns '' if there are no usable hits."""
     hits = list(hits)
     if not hits:
         return ""
+    seen = set()
     lines = []
     for h in hits:
-        ts = datetime.fromtimestamp(h["ts"]).strftime("%Y-%m-%d %H:%M")
-        role = h["role"].upper()
-        # Trim very long historical turns so we don't blow context budget.
-        content = h["content"]
-        if len(content) > 400:
-            content = content[:400] + " […]"
-        lines.append(f"  [{ts}] {role}: {content}")
+        content = " ".join((h.get("content") or "").split())
+        if not content:
+            continue
+        if _is_recall_noise(content, h.get("role", "")):
+            continue
+        key = content[:60].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(content) > 280:
+            content = content[:280].rstrip() + " […]"
+        who = "Ed" if str(h.get("role", "")).lower() == "user" else "you"
+        lines.append(f"- {_rel_time(h.get('ts', 0))}, {who}: {content}")
+    if not lines:
+        return ""
     return (
-        "\n\n## Possibly relevant past conversation:\n"
+        "\n\n## From earlier conversations (background — weave in naturally, "
+        "don't quote unless asked):\n"
         + "\n".join(lines)
-        + "\n(use the above as background only — don't quote it back unless "
-          "the user asks)"
     )
 
 

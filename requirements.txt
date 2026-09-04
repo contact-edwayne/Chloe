@@ -43,6 +43,14 @@ breez-sdk-liquid>=0.6            # may need to be installed from Breez's index
 bip-utils>=2.9                   # BIP-39 mnemonic generation
 argon2-cffi>=23.1                # PIN hashing for wallet guard
 
+# ─── YouTube playlist voice control (youtube_playlists.py / youtube_player.py /
+#     youtube_api.py) ────────────────────────────────────────────────────────
+yt-dlp==2026.8.19                # shuffle id listing + search-and-play, no API key
+playwright==1.62.0                # persistent browser-controlled player (run
+                                  # `playwright install chromium` after installing)
+google-auth-oauthlib==1.4.1      # OAuth for "add to playlist" (real YouTube Data API)
+google-api-python-client==2.200.0
+
 # ─── Misc ────────────────────────────────────────────────────────────────────
 python-dotenv==1.2.2
 
