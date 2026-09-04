@@ -6073,7 +6073,9 @@ EMAIL_DRAFT_SCHEMA = {
             "calling this, tell Ed what you drafted and that he needs to "
             "say 'send it' to actually send it, or 'cancel' to drop it. "
             "There is no way for you to send an email directly; sending "
-            "only happens if Ed explicitly confirms in a later turn."
+            "only happens if Ed explicitly confirms in a later turn. "
+            "Optionally attaches a file from his Desktop -- give BOTH "
+            "attachment_folder and attachment_file, or neither."
         ),
         "parameters": {
             "type": "object",
@@ -6088,6 +6090,14 @@ EMAIL_DRAFT_SCHEMA = {
                 },
                 "subject": {"type": "string", "description": "Email subject line."},
                 "body": {"type": "string", "description": "Email body text."},
+                "attachment_folder": {
+                    "type": "string",
+                    "description": "Optional. Desktop folder name (e.g. 'workout').",
+                },
+                "attachment_file": {
+                    "type": "string",
+                    "description": "Optional. File/photo description in that folder.",
+                },
             },
             "required": ["to", "subject", "body"],
         },
@@ -6119,13 +6129,23 @@ EMAIL_REPLY_SCHEMA = {
         "description": (
             "Draft a reply to the sender of one email from the last "
             "email_check listing, by number. ONLY drafts -- never sends. "
-            "Tell Ed to say 'send it' or 'cancel' after."
+            "Tell Ed to say 'send it' or 'cancel' after. Optionally "
+            "attaches a file from his Desktop -- give BOTH "
+            "attachment_folder and attachment_file, or neither."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "index": {"type": "integer", "description": "1-based number from the last email_check listing."},
                 "body": {"type": "string", "description": "Reply body text."},
+                "attachment_folder": {
+                    "type": "string",
+                    "description": "Optional. Desktop folder name (e.g. 'workout').",
+                },
+                "attachment_file": {
+                    "type": "string",
+                    "description": "Optional. File/photo description in that folder.",
+                },
             },
             "required": ["index", "body"],
         },
@@ -6421,9 +6441,14 @@ def _extra_tool_dispatch(name: str, args: dict) -> str:
             to = str(args.get("to") or "").strip()
             subject = str(args.get("subject") or "").strip()
             body = str(args.get("body") or "").strip()
+            attachment_folder = str(args.get("attachment_folder") or "").strip() or None
+            attachment_file = str(args.get("attachment_file") or "").strip() or None
             if not to:
                 return "email_draft error: no recipient given."
-            return email_client.email_draft_tool(to, subject, body)
+            return email_client.email_draft_tool(
+                to, subject, body,
+                attachment_folder=attachment_folder,
+                attachment_file=attachment_file)
 
         if name == "email_read":
             import email_client
@@ -6436,11 +6461,16 @@ def _extra_tool_dispatch(name: str, args: dict) -> str:
             import email_client
             index = args.get("index")
             body = str(args.get("body") or "").strip()
+            attachment_folder = str(args.get("attachment_folder") or "").strip() or None
+            attachment_file = str(args.get("attachment_file") or "").strip() or None
             if index is None:
                 return "email_reply error: no index given."
             if not body:
                 return "email_reply error: no reply body given."
-            return email_client.email_reply_tool(index, body)
+            return email_client.email_reply_tool(
+                index, body,
+                attachment_folder=attachment_folder,
+                attachment_file=attachment_file)
 
         return f"unknown tool: {name}"
     except Exception as e:

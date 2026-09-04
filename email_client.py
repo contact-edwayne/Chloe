@@ -67,6 +67,23 @@ No body-content extraction beyond best-effort (prefers text/plain,
 falls back to a tag-stripped text/html) -- good enough to read aloud,
 not a MIME renderer.
 
+2026-09-03: added attachments, resolved by voice from live Desktop
+folders rather than a pre-registered config file -- Ed: "she should be
+able to see the folders on my desktop and recognize which one I'm
+referring to through voice command and find the file or photo within
+that folder." Resolution is desktop_files.py's job (same honest-miss
+ladder as local_media.py, applied to a live directory listing instead
+of a config file); this module just calls it from draft_email/
+draft_reply when `attachment_folder`/`attachment_file` are both given,
+and stores the RESOLVED ABSOLUTE PATH (never the spoken phrase) on the
+pending draft. A miss on either the folder or the file is an honest
+tool-level error -- it never drafts silently without the attachment
+Ed asked for. v1 scope: one attachment per email (matches what Ed
+asked for -- "a file", "a photo" -- not a batch of them). _send_smtp
+builds a multipart MIME message only when a draft carries an
+attachment path; a plain draft still sends as a single MIMEText, same
+as before this feature existed.
+
 Public API
 ----------
 resolve_contact(text) -> str | None
@@ -75,10 +92,12 @@ list_recent(n=5, unread_only=False) -> list[dict]         (raises on IMAP failur
 email_check_tool(n=5, unread_only=False) -> str            (LLM tool target, never raises; refreshes the index cache)
 read_email_body(uid) -> dict                                (raises on IMAP failure)
 email_read_tool(index) -> str                               (LLM tool target, never raises)
-draft_email(to, subject, body) -> dict
-email_draft_tool(to, subject, body) -> str                 (LLM tool target, never raises)
-draft_reply(index, body) -> dict
-email_reply_tool(index, body) -> str                        (LLM tool target, never raises)
+draft_email(to, subject, body, attachment_folder=, attachment_file=) -> dict
+email_draft_tool(to, subject, body, attachment_folder=, attachment_file=) -> str
+                                                             (LLM tool target, never raises)
+draft_reply(index, body, attachment_folder=, attachment_file=) -> dict
+email_reply_tool(index, body, attachment_folder=, attachment_file=) -> str
+                                                             (LLM tool target, never raises)
 try_handle_email_confirm_command(text) -> str | None       (dispatcher contract: None = unclaimed)
 
 CLI:
@@ -92,11 +111,17 @@ CLI:
 from __future__ import annotations
 
 import email as _email
+import email.encoders
+import email.mime.application
+import email.mime.base
+import email.mime.image
+import email.mime.multipart
 import email.mime.text
 import email.utils
 import html as _html
 import imaplib
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -444,16 +469,61 @@ def _save_pending(entry: Optional[dict]) -> None:
     os.replace(tmp, p)
 
 
-def draft_email(to: str, subject: str, body: str) -> dict:
+def _resolve_attachment(attachment_folder: Optional[str],
+                        attachment_file: Optional[str]) -> dict:
+    """Resolve (folder phrase, file phrase) to an absolute path via
+    desktop_files.py's live honest-miss ladder. Returns {"ok": True,
+    "path": Path} or {"ok": False, "error": str}. Requires BOTH phrases
+    together -- Ed's own phrasing is "the <file> from my <folder>
+    folder", and resolving a bare file phrase against every Desktop
+    folder at once would be exactly the kind of guess this codebase's
+    resolvers are built to refuse."""
+    attachment_folder = (attachment_folder or "").strip()
+    attachment_file = (attachment_file or "").strip()
+    if not attachment_folder or not attachment_file:
+        return {"ok": False,
+                "error": "need both a folder and a file/photo description "
+                        "to attach something"}
+    try:
+        import desktop_files
+    except ImportError as e:
+        return {"ok": False, "error": f"attachment support unavailable: {e}"}
+    folder = desktop_files.resolve_folder(attachment_folder)
+    if folder is None:
+        return {"ok": False,
+                "error": f'no folder matching "{attachment_folder}" on the desktop'}
+    f = desktop_files.resolve_file(folder, attachment_file)
+    if f is None:
+        return {"ok": False,
+                "error": f'nothing matching "{attachment_file}" in the '
+                        f'{folder.name} folder'}
+    size_error = desktop_files.check_attachment_size(f)
+    if size_error:
+        return {"ok": False, "error": size_error}
+    return {"ok": True, "path": f}
+
+
+def draft_email(to: str, subject: str, body: str, *,
+                attachment_folder: Optional[str] = None,
+                attachment_file: Optional[str] = None) -> dict:
     address = resolve_contact(to)
     if not address:
-        return {"ok": False, "error": f'no email address for "{to}"'}
+        return {"ok": False, "error": f'no email address for "{to}"',
+                "error_kind": "contact"}
+    attachment_path = None
+    if attachment_folder or attachment_file:
+        resolved = _resolve_attachment(attachment_folder, attachment_file)
+        if not resolved["ok"]:
+            resolved["error_kind"] = "attachment"
+            return resolved
+        attachment_path = str(resolved["path"])
     entry = {
         "id": secrets.token_hex(3),
         "to": address,
         "to_raw": to,
         "subject": (subject or "").strip() or "(no subject)",
         "body": body or "",
+        "attachment_path": attachment_path,
         "created_at": time.time(),
         "expires_at": time.time() + _DRAFT_TTL_S,
     }
@@ -461,22 +531,31 @@ def draft_email(to: str, subject: str, body: str) -> dict:
     return {"ok": True, **entry}
 
 
-def email_draft_tool(to: str, subject: str, body: str) -> str:
+def email_draft_tool(to: str, subject: str, body: str, *,
+                     attachment_folder: Optional[str] = None,
+                     attachment_file: Optional[str] = None) -> str:
     if not _configured():
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
                 "(a Gmail App Password, not the account password).")
-    r = draft_email(to, subject, body)
+    r = draft_email(to, subject, body,
+                    attachment_folder=attachment_folder,
+                    attachment_file=attachment_file)
     if not r["ok"]:
-        return (f'{r["error"]} -- give me the address, or add them as a '
-                f'contact first.')
+        if r.get("error_kind") == "contact":
+            return (f'{r["error"]} -- give me the address, or add them as a '
+                    f'contact first.')
+        return f'{r["error"]}.'
     preview = r["body"][:200] + ("..." if len(r["body"]) > 200 else "")
+    attach_note = f' Attached: {Path(r["attachment_path"]).name}.' if r.get("attachment_path") else ""
     return (f'Drafted to {r["to"]} — subject: "{r["subject"]}". '
-            f'"{preview}" Say "send it" to send, or "cancel" to drop it. '
+            f'"{preview}"{attach_note} Say "send it" to send, or "cancel" to drop it. '
             f'This will NOT send until you say so.')
 
 
-def draft_reply(index, body: str) -> dict:
+def draft_reply(index, body: str, *,
+                attachment_folder: Optional[str] = None,
+                attachment_file: Optional[str] = None) -> dict:
     """Same draft-then-confirm split as draft_email, but addresses the
     sender of a prior email_check listing by 1-based index and carries
     Message-ID/References so the reply threads properly."""
@@ -497,6 +576,12 @@ def draft_reply(index, body: str) -> dict:
     to_addr = email.utils.parseaddr(original["from"])[1]
     if not to_addr:
         return {"ok": False, "error": "couldn't find a reply address on that email"}
+    attachment_path = None
+    if attachment_folder or attachment_file:
+        resolved = _resolve_attachment(attachment_folder, attachment_file)
+        if not resolved["ok"]:
+            return resolved
+        attachment_path = str(resolved["path"])
     subj = original["subject"] or ""
     if not subj.lower().startswith("re:"):
         subj = f"Re: {subj}"
@@ -509,6 +594,7 @@ def draft_reply(index, body: str) -> dict:
         "to_raw": original["from"],
         "subject": subj,
         "body": body or "",
+        "attachment_path": attachment_path,
         "in_reply_to": msg_id or None,
         "references": references or None,
         "created_at": time.time(),
@@ -518,24 +604,65 @@ def draft_reply(index, body: str) -> dict:
     return {"ok": True, **entry}
 
 
-def email_reply_tool(index, body: str) -> str:
+def email_reply_tool(index, body: str, *,
+                     attachment_folder: Optional[str] = None,
+                     attachment_file: Optional[str] = None) -> str:
     if not _configured():
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
                 "(a Gmail App Password, not the account password).")
-    r = draft_reply(index, body)
+    r = draft_reply(index, body,
+                    attachment_folder=attachment_folder,
+                    attachment_file=attachment_file)
     if not r["ok"]:
         return f'{r["error"]}.'
     preview = r["body"][:200] + ("..." if len(r["body"]) > 200 else "")
+    attach_note = f' Attached: {Path(r["attachment_path"]).name}.' if r.get("attachment_path") else ""
     return (f'Drafted a reply to {r["to"]} — subject: "{r["subject"]}". '
-            f'"{preview}" Say "send it" to send, or "cancel" to drop it. '
+            f'"{preview}"{attach_note} Say "send it" to send, or "cancel" to drop it. '
             f'This will NOT send until you say so.')
 
 
+def _build_attachment_part(path: Path):
+    """MIMEImage for image/*, MIMEApplication for application/*, else a
+    generic MIMEBase + base64 fallback (covers audio/video/text/anything
+    mimetypes can't narrow down) -- same three-tier approach the stdlib
+    email docs use for "attach any file type". Content-Disposition
+    carries the original filename so it shows up right in the client."""
+    ctype, encoding = mimetypes.guess_type(str(path))
+    if ctype is None or encoding is not None:
+        ctype = "application/octet-stream"
+    maintype, subtype = ctype.split("/", 1)
+    data = path.read_bytes()
+    if maintype == "image":
+        part = email.mime.image.MIMEImage(data, _subtype=subtype)
+    elif maintype == "application":
+        part = email.mime.application.MIMEApplication(data, _subtype=subtype)
+    else:
+        part = email.mime.base.MIMEBase(maintype, subtype)
+        part.set_payload(data)
+        email.encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename=path.name)
+    return part
+
+
 def _send_smtp(to: str, subject: str, body: str, *, in_reply_to: Optional[str] = None,
-               references: Optional[str] = None) -> dict:
+               references: Optional[str] = None,
+               attachment_path: Optional[str] = None) -> dict:
     try:
-        msg = email.mime.text.MIMEText(body, "plain", "utf-8")
+        # Plain MIMEText when there's no attachment -- unchanged from
+        # before this feature existed. Multipart only gets built when a
+        # draft actually carries an attachment path (2026-09-03).
+        if attachment_path:
+            p = Path(attachment_path)
+            if not p.is_file():
+                return {"ok": False,
+                        "error": f"attachment no longer exists on disk: {p.name}"}
+            msg = email.mime.multipart.MIMEMultipart()
+            msg.attach(email.mime.text.MIMEText(body, "plain", "utf-8"))
+            msg.attach(_build_attachment_part(p))
+        else:
+            msg = email.mime.text.MIMEText(body, "plain", "utf-8")
         msg["Subject"] = subject
         msg["From"] = _address()
         msg["To"] = to
@@ -581,7 +708,8 @@ def try_handle_email_confirm_command(text: str) -> Optional[str]:
         return "Email isn't configured -- can't actually send this."
     r = _send_smtp(pending["to"], pending["subject"], pending["body"],
                    in_reply_to=pending.get("in_reply_to"),
-                   references=pending.get("references"))
+                   references=pending.get("references"),
+                   attachment_path=pending.get("attachment_path"))
     if r["ok"]:
         return f'Sent to {pending["to"]}.'
     return f'That didn\'t send -- {r["error"]}'
