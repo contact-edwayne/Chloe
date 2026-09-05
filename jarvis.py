@@ -6083,9 +6083,17 @@ EMAIL_DRAFT_SCHEMA = {
                 "to": {
                     "type": "string",
                     "description": (
-                        "Recipient name or email address. A saved contact "
-                        "name works too (e.g. 'John'); an unresolvable "
-                        "name will fail -- ask Ed for the address."
+                        "Recipient exactly as Ed said or typed it, verbatim "
+                        "-- a saved contact name (e.g. 'John') or a full "
+                        "email address he actually spoke/typed. NEVER "
+                        "invent, guess, autocorrect, or make up an email "
+                        "address under any circumstances, even one that "
+                        "looks plausible -- if Ed didn't give you a real "
+                        "address and there's no saved contact for the name, "
+                        "pass the name through as-is and let this fail; the "
+                        "tool result will tell you to ask Ed for the "
+                        "address. A fabricated address is worse than an "
+                        "honest failure."
                     ),
                 },
                 "subject": {"type": "string", "description": "Email subject line."},
@@ -6128,10 +6136,12 @@ EMAIL_REPLY_SCHEMA = {
         "name": "email_reply",
         "description": (
             "Draft a reply to the sender of one email from the last "
-            "email_check listing, by number. ONLY drafts -- never sends. "
-            "Tell Ed to say 'send it' or 'cancel' after. Optionally "
-            "attaches a file from his Desktop -- give BOTH "
-            "attachment_folder and attachment_file, or neither."
+            "email_check listing, by number -- the recipient is taken "
+            "from that email's own From header, never invented or "
+            "guessed. ONLY drafts -- never sends. Tell Ed to say 'send "
+            "it' or 'cancel' after. Optionally attaches a file from his "
+            "Desktop -- give BOTH attachment_folder and attachment_file, "
+            "or neither."
         ),
         "parameters": {
             "type": "object",
@@ -6399,12 +6409,18 @@ def _wallet_dispatch(name: str, args: dict) -> str:
         return f"Wallet error: {type(e).__name__}: {e}"
 
 
-def _extra_tool_dispatch(name: str, args: dict) -> str:
+def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str:
     """Route run_python / notify_me / email_check / email_draft /
     email_read / email_reply tool calls. Mirrors _wallet_dispatch's shape
     (lazy-import the backing module so a missing dependency degrades to
     an honest error instead of blocking all of Chloe). email_send is
-    deliberately absent -- see email_client.py's docstring."""
+    deliberately absent -- see email_client.py's docstring.
+
+    `source_text` -- the current turn's raw user text, when the caller
+    has it -- is threaded through to email_draft only, so
+    email_client.resolve_contact can refuse a well-formed-but-fabricated
+    `to` address the LLM invented rather than one Ed actually said or
+    typed (2026-09-05; see resolve_contact's docstring)."""
     if not isinstance(args, dict):
         args = {}
     try:
@@ -6448,7 +6464,8 @@ def _extra_tool_dispatch(name: str, args: dict) -> str:
             return email_client.email_draft_tool(
                 to, subject, body,
                 attachment_folder=attachment_folder,
-                attachment_file=attachment_file)
+                attachment_file=attachment_file,
+                source_text=source_text)
 
         if name == "email_read":
             import email_client
@@ -7204,7 +7221,7 @@ async def _ollama_chat_stream_to_ws(websocket, messages: list, max_tokens: int =
 
 
 def _ollama_chat(messages: list, max_tokens: int = 400, *,
-                  model: str | None = None, timeout: float = 180,
+                  model: str | None = None, timeout: float = 280,
                   use_tools: bool = True) -> str:
     """Send a non-streaming chat completion to local Ollama. Returns the
     reply text (stripped) or empty string on any failure. Includes a
@@ -7231,7 +7248,7 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     `model` overrides OLLAMA_MODEL for this one call — used by the search-
     synthesis fast path (SEARCH_SYNTH_MODEL) so a narrow "summarize these
     search results" call doesn't pay the everyday-chat model's inference
-    cost. `timeout` overrides the 180s default request timeout for the
+    cost. `timeout` overrides the 280s default request timeout for the
     same reason: a fast path should fail over to Groq quickly, not hang.
     `use_tools=False` skips the grep_source/wallet tool schemas entirely
     for calls that will never need them.
@@ -7274,6 +7291,17 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     MAX_TOOL_ITERS = 3 if use_tools else 0
     t0 = time.time()
     final_msg = None
+
+    # The current turn's raw user text -- threaded into email_draft's
+    # dispatch below so resolve_contact can catch a fabricated `to`
+    # address (2026-09-05). Untouched by the tool loop's own
+    # assistant/tool messages since it's captured once, up front.
+    _current_user_text = ""
+    for _m in reversed(msgs):
+        if _m.get("role") == "user":
+            _current_user_text = _m.get("content") or ""
+            break
+    _email_draft_used = False
 
     for tool_iter in range(MAX_TOOL_ITERS + 1):
         try:
@@ -7423,7 +7451,9 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 print(f"[chloe]   ollama-tool {name}({safe_args})"
                       f" → {len(result)} chars", flush=True)
             elif name in EXTRA_TOOL_NAMES:
-                result = _extra_tool_dispatch(name, args)
+                result = _extra_tool_dispatch(name, args, source_text=_current_user_text)
+                if name == "email_draft":
+                    _email_draft_used = True
                 print(f"[chloe]   ollama-tool {name}({args}) → {len(result)} chars", flush=True)
             else:
                 result = f"unknown tool: {name}"
@@ -7485,6 +7515,23 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     dt = time.time() - t0
     print(f"[chloe] Ollama ({_model}) replied in {dt:.2f}s "
           f"({len(reply)} chars)", flush=True)
+
+    if _email_draft_used and reply:
+        # This turn called email_draft AND this same function call went on
+        # to successfully return non-empty reply text -- i.e. whatever
+        # tells Ed about the draft actually came back, rather than the
+        # confirmation-generating request itself timing out (2026-09-03
+        # incident: draft created, then a ReadTimeout on the very next
+        # Ollama call ate the "say send it to confirm" text, leaving the
+        # draft silently confirmable). This is a fallback signal, not
+        # proof Ed actually heard/saw `reply` -- see mark_draft_announced's
+        # docstring -- but it closes the specific failure observed live.
+        try:
+            import email_client
+            email_client.mark_draft_announced()
+        except Exception as e:
+            print(f"[chloe] mark_draft_announced failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
     return reply
 
 

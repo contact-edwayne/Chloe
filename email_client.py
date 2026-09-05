@@ -92,13 +92,17 @@ list_recent(n=5, unread_only=False) -> list[dict]         (raises on IMAP failur
 email_check_tool(n=5, unread_only=False) -> str            (LLM tool target, never raises; refreshes the index cache)
 read_email_body(uid) -> dict                                (raises on IMAP failure)
 email_read_tool(index) -> str                               (LLM tool target, never raises)
-draft_email(to, subject, body, attachment_folder=, attachment_file=) -> dict
-email_draft_tool(to, subject, body, attachment_folder=, attachment_file=) -> str
+draft_email(to, subject, body, attachment_folder=, attachment_file=, source_text=) -> dict
+email_draft_tool(to, subject, body, attachment_folder=, attachment_file=, source_text=) -> str
                                                              (LLM tool target, never raises)
 draft_reply(index, body, attachment_folder=, attachment_file=) -> dict
 email_reply_tool(index, body, attachment_folder=, attachment_file=) -> str
                                                              (LLM tool target, never raises)
-try_handle_email_confirm_command(text) -> str | None       (dispatcher contract: None = unclaimed)
+mark_draft_announced() -> bool                              (flips the pending draft's
+                                                             announced flag; see below)
+try_handle_email_confirm_command(text) -> str | None       (dispatcher contract: None = unclaimed;
+                                                             also unclaimed if the pending draft
+                                                             was never marked announced)
 
 CLI:
     python email_client.py --add-contact "John Smith" john@example.com
@@ -246,16 +250,45 @@ def add_contact(name: str, address: str) -> dict:
     return {"ok": True, "name": name, "address": address}
 
 
-def resolve_contact(text: str) -> Optional[str]:
+def resolve_contact(text: str, source_text: Optional[str] = None) -> Optional[str]:
     """Resolve `text` to an email address: as-is if it already looks like
     one, else an exact/substring match against saved contacts. Honest
     miss -- returns None rather than guessing, same contract as
-    stocks.resolve_ticker / lights._resolve_targets."""
+    stocks.resolve_ticker / lights._resolve_targets.
+
+    2026-09-05: `text` here is whatever the LLM decided to pass as the
+    `to` tool argument, NOT necessarily what Ed actually said. Observed
+    live on qwen2.5:14b: told to email someone with no saved contact
+    (e.g. "email Maddie"), it sometimes fabricates a plausible-looking
+    address ("mcregvulk@gmail.com") and passes THAT as `to` instead of
+    passing the name through and letting resolution honestly miss. Such
+    a string still satisfies _EMAIL_RE, so it used to sail through
+    untouched -- exactly the "honest miss, never guess" contract this
+    function exists to enforce, bypassed by construction.
+
+    `source_text` -- the raw user utterance/message for this turn, when
+    the caller has it -- closes that gap: a well-formed address is only
+    trusted as-is if it actually appears in what the user themselves
+    typed or said (case-insensitively). A real address Ed spoke or typed
+    will be present verbatim in the transcript; a model-invented one
+    will not. Callers that can't supply it (CLI usage, tests) keep the
+    old as-is behavior, just with a logged warning -- this is defense in
+    depth for the LLM tool path, not a hard requirement everywhere."""
     text = (text or "").strip()
     if not text:
         return None
     if _EMAIL_RE.match(text):
-        return text
+        if source_text is None:
+            return text
+        if text.lower() in source_text.lower():
+            return text
+        print(f"[email_client] resolve_contact: {text!r} is well-formed but "
+              f"doesn't appear in the user's own text -- treating as an "
+              f"unresolved contact rather than trusting a possibly "
+              f"fabricated address", flush=True)
+        # Fall through to the contact lookup below (almost certainly a
+        # miss too, since a fabricated address won't match a saved name)
+        # rather than returning early -- same honest-miss ending either way.
     low = text.lower()
     contacts = _load_contacts()
     if low in contacts:
@@ -505,8 +538,9 @@ def _resolve_attachment(attachment_folder: Optional[str],
 
 def draft_email(to: str, subject: str, body: str, *,
                 attachment_folder: Optional[str] = None,
-                attachment_file: Optional[str] = None) -> dict:
-    address = resolve_contact(to)
+                attachment_file: Optional[str] = None,
+                source_text: Optional[str] = None) -> dict:
+    address = resolve_contact(to, source_text=source_text)
     if not address:
         return {"ok": False, "error": f'no email address for "{to}"',
                 "error_kind": "contact"}
@@ -526,6 +560,11 @@ def draft_email(to: str, subject: str, body: str, *,
         "attachment_path": attachment_path,
         "created_at": time.time(),
         "expires_at": time.time() + _DRAFT_TTL_S,
+        # Flipped by mark_draft_announced() once the "Drafted to X -- say
+        # 'send it'" confirmation has actually made it back to Ed.
+        # try_handle_email_confirm_command refuses to send while this is
+        # False -- see its docstring for the incident that motivated it.
+        "announced": False,
     }
     _save_pending(entry)
     return {"ok": True, **entry}
@@ -533,14 +572,16 @@ def draft_email(to: str, subject: str, body: str, *,
 
 def email_draft_tool(to: str, subject: str, body: str, *,
                      attachment_folder: Optional[str] = None,
-                     attachment_file: Optional[str] = None) -> str:
+                     attachment_file: Optional[str] = None,
+                     source_text: Optional[str] = None) -> str:
     if not _configured():
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
                 "(a Gmail App Password, not the account password).")
     r = draft_email(to, subject, body,
                     attachment_folder=attachment_folder,
-                    attachment_file=attachment_file)
+                    attachment_file=attachment_file,
+                    source_text=source_text)
     if not r["ok"]:
         if r.get("error_kind") == "contact":
             return (f'{r["error"]} -- give me the address, or add them as a '
@@ -599,6 +640,7 @@ def draft_reply(index, body: str, *,
         "references": references or None,
         "created_at": time.time(),
         "expires_at": time.time() + _DRAFT_TTL_S,
+        "announced": False,
     }
     _save_pending(entry)
     return {"ok": True, **entry}
@@ -682,14 +724,50 @@ def _send_smtp(to: str, subject: str, body: str, *, in_reply_to: Optional[str] =
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+def mark_draft_announced() -> bool:
+    """Flip the pending draft's `announced` flag. Call this once the
+    "Drafted to X -- say 'send it' to confirm" text has actually reached
+    Ed (spoken and/or shown), not merely once it was generated.
+
+    2026-09-05, incident: a draft was created successfully, but the
+    Ollama call generating that confirmation text then hit a ReadTimeout
+    (180s timeout, ~310s actual) -- Ed never heard or saw it, yet the
+    draft stayed live and confirmable for its full 10-minute TTL. An
+    unrelated later "yes"-shaped utterance could have sent a
+    wrong-recipient email that no human ever reviewed.
+    try_handle_email_confirm_command now refuses to act on a draft until
+    this has been called, closing that window. Precise wiring would call
+    this only after confirmed TTS/display delivery; jarvis.py's
+    _ollama_chat calls it as soon as the confirmation-generating request
+    returns a non-empty reply without raising/timing out, which covers
+    the incident above even though it doesn't yet cover a downstream
+    TTS-only failure."""
+    pending = _load_pending()
+    if pending is None:
+        return False
+    pending["announced"] = True
+    _save_pending(pending)
+    return True
+
+
 def try_handle_email_confirm_command(text: str) -> Optional[str]:
     """Deterministic (non-LLM) confirm/cancel gate for the one pending
     email draft, if any. Returns None (unclaimed) whenever there's no
-    pending draft OR the text isn't a recognizable yes/no -- so ordinary
-    conversation never gets swallowed by this. See module docstring for
-    why sending lives here instead of as an LLM tool."""
+    pending draft, the draft was never announced to Ed (see
+    mark_draft_announced), OR the text isn't a recognizable yes/no -- so
+    ordinary conversation never gets swallowed by this. See module
+    docstring for why sending lives here instead of as an LLM tool."""
     pending = _load_pending()
     if pending is None:
+        return None
+    if not pending.get("announced"):
+        # Draft exists but Ed was never actually told about it -- don't
+        # treat this utterance as a send/cancel decision on it (leave the
+        # draft in place; it still expires on its own via the normal
+        # TTL). See mark_draft_announced's docstring for why.
+        print(f"[email_client] confirm phrase seen but draft {pending.get('id')} "
+              f"was never announced to Ed -- ignoring (not sending)",
+              flush=True)
         return None
     try:
         import chloe_pending_confirms as _cpc
