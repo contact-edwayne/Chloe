@@ -214,10 +214,30 @@ def disconnect() -> None:
 # ─── Public API: balance ───────────────────────────────────────────────────
 def get_balance() -> dict:
     """Return spendable + pending balance in sats."""
+    # Timing added 2026-09-06 (bug, confirmed live): jarvis.py's own
+    # round-by-round Ollama timers summed to 26.57s on a call whose
+    # TOTAL was logged as 115.49s -- an 89s gap with zero visibility,
+    # landing exactly between "tool call decided" and "tool call
+    # returned". This was the only wallet_* call with no timing at all
+    # (create_invoice below already times its _connect() call).
+    # _connect() is memoised per-process but the FIRST call after a
+    # fresh backend restart pays the SDK's initial sync cost (see
+    # _connect's docstring: "connecting is slow"), and get_info() may
+    # do its own round-trip on top of that. This makes both visible.
+    t0 = time.time()
     sdk = _connect()
+    _connect_dt = time.time() - t0
+    if _connect_dt > 1.0:
+        print(f"[wallet] get_balance: _connect() took {_connect_dt:.2f}s",
+              flush=True)
+    t1 = time.time()
     # SDK_API: get_info() → GetInfoResponse with wallet_info.{balance_sat,
     # pending_send_sat, pending_receive_sat}.
     info = sdk.get_info()
+    _info_dt = time.time() - t1
+    if _info_dt > 1.0:
+        print(f"[wallet] get_balance: get_info() took {_info_dt:.2f}s",
+              flush=True)
     wi = getattr(info, "wallet_info", None) or info
     balance_sat = int(getattr(wi, "balance_sat", 0))
     pending_send = int(getattr(wi, "pending_send_sat", 0))

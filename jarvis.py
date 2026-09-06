@@ -10393,6 +10393,37 @@ threading.Thread(target=_voice_thread_entry, daemon=True, name="chloe-voice").st
 threading.Thread(target=_warm_ollama_models, daemon=True,
                  name="ollama-warm").start()
 
+def _warm_wallet():
+    """Best-effort: connect the Breez SDK at boot instead of on Ed's
+    first wallet question. NEW 2026-09-06 (bug, confirmed live):
+    wallet.py's own docstring already says _connect() "is slow (it
+    syncs the wallet state)" and is memoised per-process -- but nothing
+    paid that cost proactively, so it landed on whichever live question
+    happened to be the first wallet_* call after a restart. Confirmed:
+    a fresh-boot "What's my wallet balance?" logged 115.49s total
+    against only 26.57s of actual Ollama round time -- an 89s gap with
+    zero visibility, now also instrumented directly in wallet.py's
+    get_balance(). Same daemon-thread, best-effort shape as the Ollama/
+    Kokoro warm-ups above: any failure (wallet unconfigured, SDK
+    missing, no network) is logged and ignored, never blocks startup,
+    and Ed's first live wallet question still works correctly (just
+    slowly) if this hasn't finished yet -- _connect() is memoised, so
+    whichever caller gets there first pays the cost once."""
+    try:
+        w = _wallet_module()
+        if w is None:
+            return
+        t0 = time.time()
+        w._connect()
+        print(f"[chloe] wallet warm-up: Breez SDK connected "
+              f"({time.time() - t0:.1f}s)", flush=True)
+    except Exception as e:
+        print(f"[chloe] wallet warm-up skipped: {type(e).__name__}: {e}",
+              flush=True)
+
+threading.Thread(target=_warm_wallet, daemon=True,
+                 name="wallet-warm").start()
+
 # Pre-load Kokoro ONNX model so the first reply's TTS doesn't pay the
 # ~1-3s cold load on top of LLM latency. Polish 2026-05-17 evening.
 threading.Thread(target=_warm_kokoro_model, daemon=True,
