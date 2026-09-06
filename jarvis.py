@@ -50,6 +50,7 @@ from lights import try_handle_lights_command
 import youtube_playlists as _youtube_playlists
 from youtube_playlists import try_handle_youtube_command
 from spotify_commands import try_handle_spotify_command
+import spotify_api
 import spotify_player
 import spotify_hud
 from local_media import try_handle_local_media_command
@@ -4155,6 +4156,34 @@ async def _dispatch(data, websocket):
 
 async def handle_spotify_control(data, websocket):
     action = data.get("action")
+
+    # Playlist listing/playback are handled separately from the simple
+    # fn-lookup below -- listing needs a Web API call (spotify_api, not
+    # spotify_player) and returns a different reply shape, and playing a
+    # specific playlist needs the uri argument threaded through.
+    if action == "list_playlists":
+        # Playlist CRUD/listing is unaffected by the free-tier 403s that
+        # gate playback-control and now-playing (see spotify_api.py's
+        # module docstring) -- this goes straight through the Web API.
+        try:
+            playlists = await asyncio.to_thread(spotify_api.list_playlists)
+        except Exception as e:
+            await _ws_send(websocket, {"type": "spotify_playlists", "ok": False, "error": str(e)})
+            return
+        await _ws_send(websocket, {"type": "spotify_playlists", "ok": True, "playlists": playlists})
+        return
+
+    if action == "play_playlist":
+        uri = data.get("uri")
+        if not uri:
+            await _ws_send(websocket, {"type": "spotify_control_result", "ok": False,
+                                        "action": action, "error": "missing uri"})
+            return
+        result = await asyncio.to_thread(spotify_player.play_uri, uri)
+        await _ws_send(websocket, {"type": "spotify_control_result", "ok": result.get("ok", False),
+                                    "action": action, "error": result.get("error")})
+        return
+
     fn = {
         "previous": spotify_player.previous_track,
         "play_pause": spotify_player.play_pause,

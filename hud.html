@@ -197,117 +197,199 @@
   .balance-pill.error { color: #ff3355; border-color: #ff335555; }
 
   /* MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; converted from an
-     always-visible docked bottom bar into a toggleable overlay/section,
-     per Ed's follow-up request: "the music bar should be in its own
-     section like Brain or chess or arcade". Matches the BRAIN/CHESS/
-     ARCADE overlay pattern (position: fixed; inset: 0; hidden until
-     .on) but centers a content panel instead of hosting an iframe --
-     see spotify_hud.py for the backend poll/broadcast side, and
-     handle_spotify_control in jarvis.py for what the transport buttons
-     do. */
+     always-visible docked bottom bar into a toggleable overlay/section
+     matching BRAIN/CHESS/ARCADE, then restyled 2026-09-06 to Ed's
+     supplied "CHLOE Music Player" design mockup -- see spotify_hud.py
+     for the backend poll/broadcast side, and handle_spotify_control in
+     jarvis.py for what the transport/playlist actions do.
+     NOTE ON SCOPE: the mockup also showed a live drag-reorderable
+     QUEUE, a DEVICE picker, and a 5-band EQ. None of those have a real
+     data source or control path in this codebase (Spotify's free-tier
+     API doesn't expose a live queue, and there's no audio-output-
+     device switch or EQ pipeline wired anywhere), so rather than fake
+     them, the center column shows Ed's actual PLAYLISTS (real data via
+     spotify_api.list_playlists(), click-to-play via spotify_player.
+     play_uri()) and the right column is SPECTRUM only. Everything
+     rendered here is backed by a real value or a real action -- same
+     honest-miss policy as the rest of this codebase. */
   #music-overlay {
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(6,7,11,0.92);
+    background: radial-gradient(120% 90% at 50% -10%, #061219 0%, #030a0f 68%);
     display: none;
-    align-items: center;
-    justify-content: center;
+    padding: 26px;
+    box-sizing: border-box;
+    overflow: auto;
   }
-  #music-overlay.on { display: flex; }
+  #music-overlay.on { display: block; }
   #music-close {
     position: absolute; top: 14px; right: 18px; z-index: 61;
     background: transparent; border: 1px solid var(--border2); color: var(--cyan);
     font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer;
   }
   #music-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
-  .spotify-player {
+
+  .mp-wrap { max-width: 1360px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  .mp-cols {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) minmax(260px, 1fr) minmax(260px, 340px);
+    gap: 14px;
+    align-items: stretch;
+  }
+  @media (max-width: 980px) { .mp-cols { grid-template-columns: 1fr; } }
+
+  .mp-panel {
+    border: 1px solid var(--border2);
+    background: linear-gradient(180deg, #061017, #040b10);
+    padding: 14px 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 440px;
+    box-sizing: border-box;
+  }
+  .mp-panel-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: #3f6f79;
+  }
+  .mp-live { color: var(--cyan); animation: mpBlink 1.4s steps(2) infinite; }
+  .mp-live.paused { animation: none; opacity: 0.4; }
+  @keyframes mpBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  /* NOW PLAYING */
+  .mp-ring-wrap {
+    position: relative;
+    width: 210px;
+    height: 210px;
+    margin: 6px auto 0;
+    flex-shrink: 0;
+  }
+  .mp-ring-wrap svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .mp-ring-a { animation: chSpin 22s linear infinite; }
+  .mp-ring-b { animation: chSpinRev 38s linear infinite; }
+  @keyframes chSpin    { to { transform: rotate(360deg); } }
+  @keyframes chSpinRev { to { transform: rotate(-360deg); } }
+  .mp-progress-ring { transform: rotate(-90deg); }
+  #mp-progress-circle { transition: stroke-dashoffset 0.4s linear; filter: drop-shadow(0 0 5px var(--magenta)); }
+  .mp-art-frame {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 138px; height: 138px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    overflow: hidden;
+    border: 1px solid var(--border2);
+    background: radial-gradient(circle at 34% 28%, #123842, #07171f 62%, #040c11);
     display: flex;
     align-items: center;
-    gap: 20px;
-    background: var(--panel);
+    justify-content: center;
+  }
+  .mp-art-frame.mp-playing { animation: chPulse 1.9s ease-in-out infinite; }
+  @keyframes chPulse {
+    0%, 100% { box-shadow: 0 0 0 1px #00f7ff55, 0 0 22px #00f7ff2e, inset 0 0 34px #00f7ff1a; }
+    50%      { box-shadow: 0 0 0 1px #00f7ffd9, 0 0 44px #00f7ff57, inset 0 0 52px #00f7ff2e; }
+  }
+  #sp-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; visibility: hidden; }
+  #mp-art-placeholder { font-size: 30px; color: var(--cyan); opacity: 0.5; }
+  .mp-track-block { text-align: center; display: flex; flex-direction: column; gap: 5px; padding: 0 4px; }
+  .mp-title {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.04em;
+    color: #dff7fa;
+    text-shadow: 0 0 16px #00f7ff4d;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mp-artist { font-size: 13px; letter-spacing: 0.18em; color: var(--magenta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mp-album  { font-size: 11px; letter-spacing: 0.16em; color: #48808b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* PLAYLISTS (center) */
+  .mp-search {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border2); background: #030c11;
+    padding: 7px 10px;
+  }
+  .mp-search input {
+    flex: 1; min-width: 0; background: transparent; border: none; outline: none;
+    color: #cfeff3; font-size: 13px; letter-spacing: 0.08em; font-family: 'Share Tech Mono', monospace;
+  }
+  .mp-search span { color: var(--cyan); font-size: 13px; }
+  #mp-playlist-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 3px; margin-top: 2px; }
+  .mp-pl-row {
+    display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px;
+    padding: 9px 10px; cursor: pointer; border-left: 2px solid transparent;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .mp-pl-row:hover { background: rgba(0, 247, 255, 0.07); border-left-color: var(--cyan); }
+  .mp-pl-name { font-size: 14px; letter-spacing: 0.03em; color: #9fd8de; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mp-pl-meta { font-size: 11px; letter-spacing: 0.1em; color: #5e959e; white-space: nowrap; }
+  .mp-pl-empty { padding: 26px 12px; text-align: center; font-size: 12px; letter-spacing: 0.16em; color: #35636d; }
+
+  /* SPECTRUM (right) */
+  .mp-spectrum-box { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .sp-viz {
+    display: block;
+    width: 100%;
+    flex: 1;
+    min-height: 160px;
+    border-bottom: 1px solid var(--border2);
+  }
+  .mp-freq-labels {
+    display: flex; justify-content: space-between;
+    font-size: 10px; letter-spacing: 0.14em; color: #2f6772;
+  }
+
+  /* TRANSPORT (bottom, spans full width) */
+  .mp-transport {
     border: 1px solid var(--border2);
-    border-radius: 8px;
-    padding: 28px 36px;
-    box-shadow: 0 0 40px #00f7ff1a;
-    width: min(680px, 90vw);
+    background: linear-gradient(180deg, #07141b, #040c11);
+    padding: 12px 16px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
   }
-  .sp-art {
-    width: 84px;
-    height: 84px;
-    border-radius: 4px;
-    object-fit: cover;
+  .sp-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .sp-btn {
+    background: rgba(0, 247, 255, 0.08);
     border: 1px solid var(--border2);
-    flex-shrink: 0;
-    background: #001018;
-  }
-  .sp-info { min-width: 0; width: 260px; flex-shrink: 0; }
-  .sp-track, .sp-album {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-family: 'Share Tech Mono', monospace;
-  }
-  .sp-track {
     color: var(--cyan);
-    font-size: 16px;
-    letter-spacing: 0.5px;
-    text-shadow: 0 0 6px #00f7ff55;
+    min-width: 38px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    transition: background 0.15s, transform 0.1s;
   }
-  .sp-album {
-    color: #00f7ff88;
-    font-size: 11px;
-    letter-spacing: 0.5px;
-    margin-top: 4px;
-  }
+  .sp-btn:hover  { background: rgba(0, 247, 255, 0.2); }
+  .sp-btn:active { transform: scale(0.94); }
+  .sp-btn.active { color: var(--green); border-color: #00ff8888; }
+  .sp-btn-play { border-color: var(--magenta); color: var(--magenta); font-size: 15px; }
+  .sp-btn-play:hover { box-shadow: 0 0 16px #ff00aa55; }
+  #mp-elapsed { font-size: 14px; letter-spacing: 0.1em; color: var(--cyan); min-width: 44px; }
+  #mp-remaining { font-size: 14px; letter-spacing: 0.1em; color: #4e8f9a; min-width: 50px; text-align: right; }
   .sp-progress {
-    height: 4px;
+    flex: 1; min-width: 160px;
+    height: 6px;
     background: #00f7ff22;
     border-radius: 2px;
-    margin-top: 10px;
+    margin-top: 0;
     overflow: hidden;
   }
   .sp-progress-fill {
     height: 100%;
     width: 0%;
-    background: var(--cyan);
+    background: linear-gradient(90deg, #00f7ff88, var(--cyan) 82%, var(--magenta));
     box-shadow: 0 0 6px #00f7ff88;
     transition: width 0.3s linear;
   }
-  .sp-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-  .sp-btn {
-    background: rgba(0, 247, 255, 0.08);
-    border: 1px solid var(--border2);
-    color: var(--cyan);
-    width: 38px;
-    height: 38px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 16px;
-    line-height: 1;
-    transition: background 0.15s, transform 0.1s;
-  }
-  .sp-btn:hover  { background: rgba(0, 247, 255, 0.2); }
-  .sp-btn:active { transform: scale(0.92); }
-  .sp-btn.active { color: var(--green); border-color: #00ff8888; }
-  .sp-viz {
-    display: block;
-    flex: 1;
-    min-width: 120px;
-    height: 60px;
-  }
-  .sp-status {
-    color: #00f7ff66;
-    font-size: 9px;
-    letter-spacing: 1px;
-    margin-top: 2px;
-  }
+  #mp-status { font-size: 11px; letter-spacing: 0.18em; color: #3f6f79; border-left: 1px solid var(--border2); padding-left: 14px; white-space: nowrap; }
 
   /* BODY: 2 columns (ring | chat) */
   .body {
@@ -1580,26 +1662,77 @@
     </span>
   </div>
 
-  <!-- MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; converted to a
-       toggleable overlay matching BRAIN/CHESS/ARCADE). See
-       spotify_hud.py for the backend poll/broadcast side, and
-       handle_spotify_control in jarvis.py for what the transport
-       buttons actually do. -->
+  <!-- MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; toggleable overlay
+       matching BRAIN/CHESS/ARCADE, restyled to Ed's supplied design --
+       see the CSS comment above for what was and wasn't carried over
+       and why. See spotify_hud.py for the backend poll/broadcast side,
+       and handle_spotify_control in jarvis.py for what the transport
+       and playlist actions actually do. -->
   <div id="music-overlay">
     <button id="music-close" onclick="toggleMusic(false)">CLOSE [Esc]</button>
-    <div class="spotify-player" id="spotify-player">
-      <img class="sp-art" id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
-      <div class="sp-info">
-        <div class="sp-track" id="sp-track">Not connected</div>
-        <div class="sp-album" id="sp-album">Spotify</div>
-        <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
+    <div class="mp-wrap">
+      <div class="mp-cols">
+
+        <!-- NOW PLAYING -->
+        <div class="mp-panel">
+          <div class="mp-panel-head"><span>● NOW PLAYING</span><span id="mp-conn">NOT CONNECTED</span></div>
+          <div class="mp-ring-wrap">
+            <svg class="mp-ring-a" viewBox="0 0 210 210">
+              <circle cx="105" cy="105" r="101" fill="none" stroke="var(--border2)" stroke-width="1" stroke-dasharray="2 9"/>
+              <circle cx="105" cy="3.5" r="2.4" fill="var(--cyan)"/>
+            </svg>
+            <svg class="mp-ring-b" viewBox="0 0 210 210">
+              <circle cx="105" cy="105" r="88" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="1 5"/>
+            </svg>
+            <svg class="mp-progress-ring" viewBox="0 0 210 210">
+              <circle cx="105" cy="105" r="80" fill="none" stroke="var(--border)" stroke-width="3"/>
+              <circle id="mp-progress-circle" cx="105" cy="105" r="80" fill="none" stroke="var(--magenta)"
+                      stroke-width="3" stroke-dasharray="502.7" stroke-dashoffset="502.7"/>
+            </svg>
+            <div class="mp-art-frame" id="mp-art-frame">
+              <img id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
+              <div id="mp-art-placeholder">♪</div>
+            </div>
+          </div>
+          <div class="mp-track-block">
+            <div class="mp-title" id="sp-track">Not connected</div>
+            <div class="mp-artist" id="sp-artist"></div>
+            <div class="mp-album" id="sp-album">Spotify</div>
+          </div>
+        </div>
+
+        <!-- PLAYLISTS -->
+        <div class="mp-panel">
+          <div class="mp-panel-head"><span id="mp-pl-count">PLAYLISTS // 00</span><span>CLICK TO PLAY</span></div>
+          <div class="mp-search">
+            <span>⌕</span>
+            <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS…" oninput="renderMusicPlaylists()">
+          </div>
+          <div id="mp-playlist-list"></div>
+        </div>
+
+        <!-- SPECTRUM -->
+        <div class="mp-panel">
+          <div class="mp-panel-head"><span>SPECTRUM</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
+          <div class="mp-spectrum-box">
+            <canvas class="sp-viz" id="sp-viz" width="300" height="160"></canvas>
+            <div class="mp-freq-labels"><span>32</span><span>250</span><span>1K</span><span>4K</span><span>16K</span></div>
+          </div>
+        </div>
       </div>
-      <canvas class="sp-viz" id="sp-viz" width="300" height="60"></canvas>
-      <div class="sp-controls">
-        <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">⏮</button>
-        <button class="sp-btn" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">⏯</button>
-        <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">⏭</button>
-        <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">🔀</button>
+
+      <!-- TRANSPORT -->
+      <div class="mp-transport">
+        <div class="sp-controls">
+          <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">◄◄</button>
+          <button class="sp-btn sp-btn-play" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">▶</button>
+          <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">▶▶</button>
+          <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">SHUF</button>
+        </div>
+        <span id="mp-elapsed">0:00</span>
+        <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
+        <span id="mp-remaining">-0:00</span>
+        <span id="mp-status">NOT CONNECTED</span>
       </div>
     </div>
   </div>
@@ -2460,6 +2593,8 @@
       onSpotifyVisualizer(data);
     } else if (data.type === 'spotify_control_result') {
       onSpotifyControlResult(data);
+    } else if (data.type === 'spotify_playlists') {
+      onSpotifyPlaylists(data);
     } else if (data.type === 'jobs_state_update') {
       onJobsState(data);
     } else if (data.type === 'jobs_run_result') {
@@ -3292,39 +3427,78 @@
   // something's actually playing.
   // ──────────────────────────────────────────────────────────────────────────
   let _spProgressTimer = null;
+  function _mpFmtTime(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  const MP_RING_CIRCUMFERENCE = 502.7;  // 2*pi*80, matches the r=80 progress circle
+
   function onSpotifyNowPlaying(data) {
     const track = document.getElementById('sp-track');
+    const artistEl = document.getElementById('sp-artist');
     const album = document.getElementById('sp-album');
     const art = document.getElementById('sp-art');
+    const placeholder = document.getElementById('mp-art-placeholder');
+    const artFrame = document.getElementById('mp-art-frame');
     const fill = document.getElementById('sp-progress-fill');
+    const ring = document.getElementById('mp-progress-circle');
+    const conn = document.getElementById('mp-conn');
+    const status = document.getElementById('mp-status');
+    const live = document.getElementById('mp-live');
     if (!track) return;
     if (_spProgressTimer) { clearInterval(_spProgressTimer); _spProgressTimer = null; }
+
     if (!data.playing) {
       track.textContent = 'Nothing playing';
+      artistEl.textContent = '';
       album.textContent = 'Spotify';
       art.style.visibility = 'hidden';
+      placeholder.style.display = 'flex';
+      artFrame.classList.remove('mp-playing');
       fill.style.width = '0%';
+      ring.setAttribute('stroke-dashoffset', MP_RING_CIRCUMFERENCE);
+      conn.textContent = 'NOT CONNECTED';
+      status.textContent = 'NOT CONNECTED';
+      document.getElementById('mp-elapsed').textContent = '0:00';
+      document.getElementById('mp-remaining').textContent = '-0:00';
+      live.classList.add('paused');
       return;
     }
+
+    conn.textContent = 'CONNECTED';
     track.textContent = data.track || '—';
-    album.textContent = (data.artists || []).join(', ') +
-      (data.album ? ' · ' + data.album : '');
+    artistEl.textContent = (data.artists || []).join(', ');
+    album.textContent = data.album || '';
     if (data.album_art_url) {
       art.src = data.album_art_url;
       art.style.visibility = 'visible';
+      placeholder.style.display = 'none';
     } else {
       art.style.visibility = 'hidden';
+      placeholder.style.display = 'flex';
     }
-    // Smooth-fill the progress bar client-side between the (infrequent,
-    // ~3s) backend polls rather than only jumping on each poll tick --
-    // spotify_hud.py sends progress_ms/duration_ms as of the LAST poll,
-    // so this is an estimate that re-syncs on every new broadcast, same
-    // idea as any media player's client-side progress interpolation.
+    artFrame.classList.toggle('mp-playing', !!data.is_playing);
+    status.textContent = data.is_playing ? 'STREAM STABLE' : 'PAUSED';
+    live.classList.toggle('paused', !data.is_playing);
+    const playBtn = document.getElementById('sp-playpause');
+    if (playBtn) playBtn.textContent = data.is_playing ? '❚❚' : '▶';
+
+    // Smooth-fill the progress bar/ring client-side between the
+    // (infrequent, ~3s) backend polls rather than only jumping on each
+    // poll tick -- spotify_hud.py sends progress_ms/duration_ms as of
+    // the LAST poll, so this is an estimate that re-syncs on every new
+    // broadcast, same idea as any media player's client-side progress
+    // interpolation.
     if (data.duration_ms > 0) {
       let elapsed = data.progress_ms || 0;
       const total = data.duration_ms;
       const update = () => {
-        fill.style.width = Math.min(100, (elapsed / total) * 100) + '%';
+        const frac = Math.min(1, elapsed / total);
+        fill.style.width = (frac * 100) + '%';
+        ring.setAttribute('stroke-dashoffset', (MP_RING_CIRCUMFERENCE * (1 - frac)).toFixed(1));
+        document.getElementById('mp-elapsed').textContent = _mpFmtTime(elapsed);
+        document.getElementById('mp-remaining').textContent = '-' + _mpFmtTime(Math.max(0, total - elapsed));
       };
       update();
       if (data.is_playing) {
@@ -3334,6 +3508,53 @@
           update();
         }, 1000);
       }
+    }
+  }
+
+  // ─── Playlists panel (real data: spotify_api.list_playlists() via
+  // handle_spotify_control's "list_playlists" action; click-to-play
+  // goes through spotify_player.play_uri() via "play_playlist"). ───
+  let _mpPlaylists = [];
+
+  function requestMusicPlaylists() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'spotify_control', action: 'list_playlists' }));
+    }
+  }
+
+  function onSpotifyPlaylists(data) {
+    _mpPlaylists = (data.ok && Array.isArray(data.playlists)) ? data.playlists : [];
+    renderMusicPlaylists();
+  }
+
+  function renderMusicPlaylists() {
+    const list = document.getElementById('mp-playlist-list');
+    const countEl = document.getElementById('mp-pl-count');
+    if (!list) return;
+    countEl.textContent = 'PLAYLISTS // ' + String(_mpPlaylists.length).padStart(2, '0');
+    const q = (document.getElementById('mp-pl-search').value || '').trim().toLowerCase();
+    const rows = q ? _mpPlaylists.filter(p => (p.name || '').toLowerCase().includes(q)) : _mpPlaylists;
+    if (rows.length === 0) {
+      list.innerHTML = '<div class="mp-pl-empty">' +
+        (_mpPlaylists.length === 0 ? 'NO PLAYLISTS FOUND' : 'NO MATCH') + '</div>';
+      return;
+    }
+    list.innerHTML = rows.map(p => {
+      const name = (p.name || 'Untitled').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+      const meta = (p.tracks_total != null ? p.tracks_total + ' TRK' : '');
+      const uri = (p.uri || '').replace(/"/g, '&quot;');
+      return '<div class="mp-pl-row" onclick="playMusicPlaylist(\'' + uri + '\')">' +
+        '<span class="mp-pl-name">' + name + '</span>' +
+        '<span class="mp-pl-meta">' + meta + '</span></div>';
+    }).join('');
+  }
+
+  function playMusicPlaylist(uri) {
+    if (!uri) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'spotify_control', action: 'play_playlist', uri: uri }));
     }
   }
 
@@ -3349,8 +3570,9 @@
       const mag = Math.max(0, Math.min(1, bins[i] || 0));
       const barH = mag * h;
       const grad = ctx.createLinearGradient(0, h - barH, 0, h);
-      grad.addColorStop(0, '#00f7ff');
-      grad.addColorStop(1, '#00ff8877');
+      grad.addColorStop(0, '#ff00aa');
+      grad.addColorStop(0.45, '#00f7ff');
+      grad.addColorStop(1, '#00f7ff33');
       ctx.fillStyle = grad;
       ctx.fillRect(i * barW + 1, h - barH, Math.max(1, barW - 2), barH);
     }
@@ -4753,6 +4975,7 @@ window.setState('idle');
       if (willOpen) {
         ov.classList.add('on');
         if (btn) btn.classList.add('on');
+        try { requestMusicPlaylists(); } catch (e) {}
       } else {
         ov.classList.remove('on');
         if (btn) btn.classList.remove('on');
