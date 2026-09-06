@@ -6504,15 +6504,17 @@ EMAIL_CHECK_SCHEMA = {
             "'do I have any new emails' or a follow-up about email "
             "content ('what are they', 'details please'; call it again "
             "for a follow-up, the prior result isn't kept in context). "
-            "Pass `folder` only if Ed names a different one (Sent, "
-            "Drafts, Spam, Trash, Starred, Important, or All Mail). Pass "
-            "`sender` and/or `subject` when he asks about email FROM "
-            "someone or about a specific topic (e.g. 'how many emails do "
-            "I have from Indeed Apply', 'any emails about the invoice') "
-            "-- without these this only lists the most recent messages, "
-            "it does NOT filter by sender/topic on its own, so never "
-            "claim a count or list is 'from X' unless you actually "
-            "passed that sender."
+            "Pass `folder` only if Ed names a different one -- a real "
+            "folder (Sent, Drafts, Spam, Trash, Starred, Important, All "
+            "Mail) OR one of his Inbox's own tabs (Social, Promotions, "
+            "Updates, Forums -- Primary is the default, no need to pass "
+            "it). Pass `sender` and/or `subject` when he asks about "
+            "email FROM someone or about a specific topic (e.g. 'how "
+            "many emails do I have from Indeed Apply', 'any emails "
+            "about the invoice') -- without these this only lists the "
+            "most recent messages, it does NOT filter by sender/topic "
+            "on its own, so never claim a count or list is 'from X' "
+            "unless you actually passed that sender."
         ),
         "parameters": {
             "type": "object",
@@ -6522,10 +6524,14 @@ EMAIL_CHECK_SCHEMA = {
                 "folder": {
                     "type": "string",
                     "description": (
-                        "Optional. Only set this if Ed names a folder "
-                        "other than his Inbox, e.g. 'Sent', 'Drafts', "
-                        "'Spam', 'Trash', 'Starred', 'Important', or "
-                        "'All Mail'. Omit for the normal inbox check."
+                        "Optional. Set this if Ed names a real folder "
+                        "other than his Inbox (e.g. 'Sent', 'Drafts', "
+                        "'Spam', 'Trash', 'Starred', 'Important', 'All "
+                        "Mail'), OR one of his Inbox's own tabs -- "
+                        "'Social', 'Promotions', 'Updates', or 'Forums' "
+                        "-- e.g. 'check my promotions' or 'anything new "
+                        "in updates'. Omit for the normal Primary-tab "
+                        "inbox check."
                     ),
                 },
                 "sender": {
@@ -6696,8 +6702,11 @@ EMAIL_DELETE_SCHEMA = {
                     "type": "string",
                     "description": (
                         "Optional, only with sender/subject. Which folder "
-                        "to search -- Inbox, Sent, Drafts, Spam, Trash, "
-                        "Starred, Important, or All Mail. Omit for Inbox."
+                        "or Inbox tab to search -- Inbox, Sent, Drafts, "
+                        "Spam, Trash, Starred, Important, All Mail, or "
+                        "one of the Inbox's own tabs (Social, "
+                        "Promotions, Updates, Forums). Omit for the "
+                        "normal Primary-tab inbox."
                     ),
                 },
             },

@@ -444,22 +444,70 @@ _FOLDER_ALIASES = {
     "starred": "[Gmail]/Starred",
     "important": "[Gmail]/Important",
 }
-_FOLDER_DISPLAY_NAMES = "Inbox, All Mail, Sent, Drafts, Spam, Trash, Starred, or Important"
+_FOLDER_DISPLAY_NAMES = ("Inbox (Primary/Social/Promotions/Updates/Forums), "
+                         "All Mail, Sent, Drafts, Spam, Trash, Starred, or Important")
+
+# Action item #9 (audit Part 13, "Generalize Gmail category mapping
+# beyond Primary"): Gmail's web UI splits the Inbox into five tabs --
+# Primary, Social, Promotions, Updates, Forums -- and list_recent /
+# find_uids_by_query below have hardcoded "category:primary" since
+# 2026-09-06 (a real live-confirmed fix: an unfiltered Inbox search
+# surfaced auto-sorted notification mail Ed's own Primary tab doesn't
+# show). That default was correct, but it left the other four
+# categories completely unreachable -- "check my promotions" or "any
+# new emails in updates" had no phrase mapped to them at all, an honest
+# miss with no path forward, even though Gmail's own X-GM-RAW search
+# supports every category equally. This maps the spoken category names
+# to the same `category:` search keyword, resolved by resolve_folder()
+# below alongside the existing real-IMAP-folder aliases.
+_GMAIL_CATEGORY_ALIASES = {
+    "primary": "primary",
+    "social": "social",
+    "promotions": "promotions",
+    "promotional": "promotions",
+    "promo": "promotions",
+    "promos": "promotions",
+    "updates": "updates",
+    "forums": "forums",
+    "forum": "forums",
+}
+_GMAIL_CATEGORY_DISPLAY_NAMES = {
+    "primary": "Primary",
+    "social": "Social",
+    "promotions": "Promotions",
+    "updates": "Updates",
+    "forums": "Forums",
+}
 
 
 def resolve_folder(spoken):
-    """Map a spoken/typed folder phrase to (imap_mailbox, display_name).
-    None/empty -> defaults to Inbox. Returns None on an unrecognized
-    phrase -- honest miss (caller lists the valid names) rather than
-    guessing which folder was meant."""
+    """Map a spoken/typed folder OR Gmail-category phrase to
+    (imap_mailbox, display_name, category). `category` is one of
+    Gmail's five Inbox tabs (primary/social/promotions/updates/forums)
+    when `mailbox` is "INBOX" -- categories are an Inbox-only Gmail
+    feature, so it's always None for every other mailbox (Sent/Drafts/
+    Spam/etc. don't have them).
+
+    None/empty -> defaults to ("INBOX", "Inbox", "primary") -- same
+    default as before this function returned a category at all (see
+    _GMAIL_CATEGORY_ALIASES above for why Primary, not no-filter, is
+    the default).
+
+    Returns None on an unrecognized phrase -- honest miss (caller lists
+    the valid names) rather than guessing which folder/category was
+    meant."""
     if not spoken or not str(spoken).strip():
-        return ("INBOX", "Inbox")
+        return ("INBOX", "Inbox", "primary")
     key = str(spoken).strip().lower()
+    category = _GMAIL_CATEGORY_ALIASES.get(key)
+    if category is not None:
+        return ("INBOX", _GMAIL_CATEGORY_DISPLAY_NAMES[category], category)
     mailbox = _FOLDER_ALIASES.get(key)
     if mailbox is None:
         return None
     display = "Inbox" if mailbox == "INBOX" else mailbox.split("/", 1)[-1]
-    return (mailbox, display)
+    category = "primary" if mailbox == "INBOX" else None
+    return (mailbox, display, category)
 
 
 # --------------------------------------------------------------------------- #
@@ -491,7 +539,8 @@ def _decode_subject(raw) -> str:
         return str(raw)
 
 
-def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") -> list[dict]:
+def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX",
+                 category: str | None = "primary") -> list[dict]:
     """Most-recent-first list of {uid, from, subject, date, unread}. Raises
     on any IMAP failure -- email_check_tool is the caller that turns that
     into an honest spoken/chat error instead of crashing the turn. Uses
@@ -520,7 +569,7 @@ def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") ->
             # filter to the same Primary category the web UI defaults
             # to -- other folders (Sent/Drafts/Spam/Trash/etc.) don't
             # have categories, so this only applies to plain INBOX reads.
-            gm_query = "category:primary" + (" is:unread" if unread_only else "")
+            gm_query = f"category:{category or 'primary'}" + (" is:unread" if unread_only else "")
             status, data = imap.uid("search", None, "X-GM-RAW", f'"{gm_query}"')
         else:
             crit = "UNSEEN" if unread_only else "ALL"
@@ -557,7 +606,7 @@ def email_check_tool(n: int = 5, unread_only: bool = False, folder=None,
     if resolved is None:
         return (f'I don\'t know a folder called "{folder}" -- I can check '
                 f'{_FOLDER_DISPLAY_NAMES}.')
-    mailbox, display = resolved
+    mailbox, display, category = resolved
     try:
         if sender or subject:
             # BUG FIXED 2026-09-06: Ed asked "how many emails do I have
@@ -570,17 +619,26 @@ def email_check_tool(n: int = 5, unread_only: bool = False, folder=None,
                 f'from:"{sender}"' if sender else None,
                 f'subject:"{subject}"' if subject else None,
             ) if p)
-            msgs = find_uids_by_query(query, folder=mailbox, limit=max(1, min(int(n or 5), 25)))
+            msgs = find_uids_by_query(query, folder=mailbox,
+                                       limit=max(1, min(int(n or 5), 25)),
+                                       category=category)
             if unread_only:
                 msgs = [m for m in msgs if m.get("unread")]
         else:
-            msgs = list_recent(n=n, unread_only=unread_only, folder=mailbox)
+            msgs = list_recent(n=n, unread_only=unread_only, folder=mailbox,
+                                category=category)
     except Exception as e:
         print(f"[email_client] email_check_tool failed: {type(e).__name__}: {e}",
               flush=True)
         return f"Couldn't check email: {type(e).__name__}: {e}"
     _save_last_list([m["uid"] for m in msgs], folder=mailbox)
-    where = "" if mailbox == "INBOX" else f" in {display}"
+    # Stay silent about the tab for the default Primary view (matches
+    # the UX from before categories were an explicit, askable thing --
+    # "the inbox" IS Primary as far as Ed's mental model goes), but
+    # name it whenever a non-default category or a different mailbox
+    # entirely was actually used, so "check my promotions" comes back
+    # clearly labeled instead of looking like a generic inbox check.
+    where = "" if (mailbox == "INBOX" and category == "primary") else f" in {display}"
     if not msgs:
         return f"No unread emails{where}." if unread_only else f"{display} looks empty."
     lines = []
@@ -768,7 +826,8 @@ def _trash_uid(imap, uid) -> None:
     imap.uid("STORE", uid, "+X-GM-LABELS", "(\\Trash)")
 
 
-def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25) -> list[dict]:
+def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25,
+                        category: str | None = "primary") -> list[dict]:
     """Search `folder` for messages matching a Gmail search query (e.g.
     'from:"Indeed Apply"') via X-GM-RAW -- the same engine as the Gmail
     search box. Most-recent-first, capped at `limit`. Same dict shape as
@@ -786,7 +845,7 @@ def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25) -> li
         # get matched and trashed instead of the Primary-tab one Ed was
         # actually talking about -- the two searches were silently
         # scoped differently even though both addressed "the inbox."
-        _q = f"category:primary {query}" if (folder or "INBOX") == "INBOX" else query
+        _q = f"category:{category or 'primary'} {query}" if (folder or "INBOX") == "INBOX" else query
         status, data = imap.uid("search", None, "X-GM-RAW", _gm_raw_arg(_q))
         if status != "OK":
             raise RuntimeError(f"IMAP search failed: {status}")
@@ -856,14 +915,15 @@ def email_delete_tool(indices=None, sender=None, subject=None, folder=None) -> s
         if resolved is None:
             return (f'I don\'t know a folder called "{folder}" -- I can check '
                     f'{_FOLDER_DISPLAY_NAMES}.')
-        mailbox, display = resolved
+        mailbox, display, category = resolved
         query = " ".join(p for p in (
             f'from:"{sender}"' if sender else None,
             f'subject:"{subject}"' if subject else None,
         ) if p)
         try:
             matches = find_uids_by_query(query, folder=mailbox,
-                                          limit=_MAX_BULK_DELETE + 1)
+                                          limit=_MAX_BULK_DELETE + 1,
+                                          category=category)
         except Exception as e:
             print(f"[email_client] email_delete_tool search failed: "
                   f"{type(e).__name__}: {e}", flush=True)
