@@ -7511,22 +7511,43 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             break
     _email_draft_used = False
     # Once a tool has actually executed and handed back real data, the
-    # remaining round(s) are pure "reword this JSON into a sentence" --
-    # switch to the small synth model for those, same reasoning as
-    # SEARCH_SYNTH_MODEL above. The FIRST round (deciding which tool to
-    # call, with what arguments) stays on the caller's model since that
-    # step genuinely needs it. Skipped when the caller already pinned a
-    # specific `model` (e.g. the search-synth call sites).
+    # final round is pure "reword this JSON into a sentence" -- handled
+    # below as a separate plain completion (the `_synth_round` branch),
+    # matching SEARCH_SYNTH_MODEL's own search-synthesis call exactly.
+    # The FIRST round (deciding which tool to call, with what arguments)
+    # stays on the caller's model since that step genuinely needs it.
+    # Skipped entirely when the caller already pinned a specific `model`
+    # (e.g. the search-synth call sites).
     _tool_executed = False
 
+    def _reword_messages(base_msgs: list) -> list:
+        """Copy of `base_msgs` with the tool-call JSON instructions
+        (appended once above via _TOOL_DOCS_FOR_PROMPT) overridden for the
+        synthesis round -- a tool already ran and the model just needs to
+        answer in plain language now, not emit another tool_call/reply
+        JSON object. Appended rather than replaced so persona/mode/
+        language instructions (including the translation block) survive
+        into this round too."""
+        out = list(base_msgs)
+        for i, m in enumerate(out):
+            if m.get("role") == "system":
+                out[i] = dict(m, content=(m.get("content") or "") +
+                              "\n\nA tool call above already returned the "
+                              "data you need (see the 'tool' message). "
+                              "Answer Ed's question now in one or two "
+                              "natural, spoken sentences using that data. "
+                              "Do not output JSON for this reply and do "
+                              "not call another tool.")
+                break
+        return out
+
     for tool_iter in range(MAX_TOOL_ITERS + 1):
-        _request_model = (TOOL_SYNTH_MODEL
-                           if (use_tools and _tool_executed and model is None)
-                           else _model)
+        _synth_round = use_tools and _tool_executed and model is None
+        _request_model = TOOL_SYNTH_MODEL if _synth_round else _model
         try:
             _payload = {
                 "model":      _request_model,
-                "messages":   msgs,
+                "messages":   (_reword_messages(msgs) if _synth_round else msgs),
                 "stream":     False,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
                 "options": {
@@ -7535,7 +7556,23 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                     "num_ctx": _num_ctx,
                 },
             }
-            if use_tools:
+            # Synthesis round: TOOL_SYNTH_MODEL just rewords already-
+            # fetched tool data into a sentence -- SEARCH_SYNTH_MODEL's
+            # search-synthesis call does the identical job as a plain,
+            # non schema-constrained completion, so this round now
+            # matches it exactly. BUG FIXED 2026-09-06: the first cut of
+            # this optimization kept _TOOL_CALL_FORMAT_SCHEMA active here
+            # even after swapping in TOOL_SYNTH_MODEL (llama3.2:3b) --
+            # that model, unlike qwen2.5:14b/32b, is not reliable at
+            # filling the schema's `reply` field under grammar
+            # constraint. Confirmed live: it legally emitted '{}' on
+            # nearly every call, burning through every retry (69-75s
+            # total -- WORSE than the 48s bug this was meant to fix), and
+            # the one non-degenerate response it did produce was a
+            # hallucinated answer unrelated to the tool result entirely.
+            # Plain completion removes the grammar constraint the weak
+            # model can't reliably satisfy.
+            if use_tools and not _synth_round:
                 _payload["format"] = _TOOL_CALL_FORMAT_SCHEMA
             r = _req.post(
                 f"{OLLAMA_URL}/api/chat",
@@ -7555,6 +7592,13 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             return ""
 
         msg = dict(data.get("message", {}) or {})
+
+        if _synth_round:
+            # Plain text back -- no tool_call/reply JSON to parse here,
+            # and no further tool calls are considered after synthesis;
+            # this is always the loop's last round.
+            final_msg = msg
+            break
         tool_calls = []
 
         got_valid_reply = False
