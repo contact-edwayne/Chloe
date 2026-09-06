@@ -10504,6 +10504,25 @@ try:
 except Exception as _e:
     print(f"[chloe] clock check FAILED: {type(_e).__name__}: {_e}", flush=True)
 
+# Action item #10 (audit Part 13, "Central env-var flag registry"): a
+# set-but-unrecognized CHLOE_*/OLLAMA_*/etc. env var is exactly the bug
+# class this codebase kept hitting silently -- a typo, or a renamed/
+# removed flag whose old .env line never got cleaned up, quietly doing
+# nothing instead of erroring. chloe_env_registry.py documents every
+# flag this codebase actually reads; this checks the live environment
+# against it once at boot so a mistake shows up here instead of days
+# later as unexplained behavior.
+try:
+    import chloe_env_registry as _env_registry
+    _unknown_env = _env_registry.unknown_chloe_env_vars()
+    if _unknown_env:
+        print(f"[chloe] WARNING: {len(_unknown_env)} env var(s) set but not "
+              f"in chloe_env_registry.py -- typo, or a renamed/removed "
+              f"flag? {_unknown_env}", flush=True)
+except Exception as _e:
+    print(f"[chloe] env registry check FAILED: {type(_e).__name__}: {_e}",
+          flush=True)
+
 # Kick off the voice loop in a daemon thread — chat path keeps working even
 # if the voice loop fails to initialize (e.g. no mic, missing libs, etc.)
 threading.Thread(target=_voice_thread_entry, daemon=True, name="chloe-voice").start()
