@@ -8032,6 +8032,17 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
         return out
 
     for tool_iter in range(MAX_TOOL_ITERS + 1):
+        # Per-iteration clock -- NEW 2026-09-06l. `t0` above is set once
+        # at function entry and only ever reported cumulatively (see the
+        # single `dt = time.time() - t0` near the end); with a
+        # multi-iteration tool loop that print can't tell a 220s round 1
+        # + 6s round 2 apart from the reverse. Live logs show round-1
+        # (tool-selection) calls are ALSO slow (20-226s+, no correlation
+        # to output length) with zero visibility into why -- the
+        # residency/VRAM check below has only ever run for the synth
+        # round. This closes both gaps for round 1 without changing any
+        # behavior: still read-only diagnostics, no new fix guessed.
+        _iter_t0 = time.time()
         _synth_round = use_tools and _tool_executed and model is None
         _use_synth_model = False
         if _synth_round:
@@ -8059,6 +8070,21 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             _vram_diag = _ollama_vram_diagnostic()
             if _vram_diag:
                 print(f"[chloe] synth-round VRAM: {_vram_diag}", flush=True)
+        elif use_tools:
+            # Round-1 (or a mid-loop tool-selection retry) residency
+            # check -- previously only the synth round above had this.
+            # Doesn't change which model gets requested (round 1 always
+            # uses the caller's `_model`, no swap decision to make) --
+            # pure visibility into whether the model was already warm
+            # going into a call that also happens to be grammar-
+            # constrained (_TOOL_CALL_FORMAT_SCHEMA, set below), the
+            # other live-supported latency hypothesis.
+            _loaded = _ollama_loaded_models()
+            _vram_diag = _ollama_vram_diagnostic()
+            print(f"[chloe] round1 residency check: loaded={_loaded!r} "
+                  f"requesting={_model!r}"
+                  + (f" VRAM: {_vram_diag}" if _vram_diag else ""),
+                  flush=True)
         _request_model = TOOL_SYNTH_MODEL if _use_synth_model else _model
         try:
             _payload = {
@@ -8100,6 +8126,12 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                       flush=True)
                 return ""
             data = r.json()
+            _iter_kind = ("synth" if _synth_round
+                          else "tool-select" if use_tools else "plain")
+            _iter_fmt = "schema" if (use_tools and not _synth_round) else "none"
+            print(f"[chloe] ollama round {tool_iter} ({_iter_kind}, "
+                  f"model={_request_model!r}, format={_iter_fmt}) "
+                  f"-> {time.time() - _iter_t0:.2f}s", flush=True)
         except Exception as e:
             dt = time.time() - t0
             print(f"[chloe] Ollama error after {dt:.2f}s: "
