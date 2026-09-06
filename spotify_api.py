@@ -166,7 +166,10 @@ def _refresh_access_token(refresh_token: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            print(f"[spotify_api] token refresh failed: {resp.status_code} "
+                  f"{resp.text[:500]}", flush=True)
+            return None
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token refresh failed: {e}", flush=True)
@@ -241,7 +244,15 @@ def _run_consent_flow(client_id: str, client_secret: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # raise_for_status()'s own message doesn't include the response
+            # BODY, which is exactly where Spotify puts the actual reason
+            # (invalid_client, invalid_grant, redirect_uri_mismatch, etc.)
+            # -- printing it directly makes this self-diagnosing instead of
+            # a guessing game over chat.
+            print(f"[spotify_api] token exchange failed: {resp.status_code} "
+                  f"{resp.text[:500]}", flush=True)
+            return None
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token exchange failed: {e}", flush=True)
@@ -321,9 +332,17 @@ def _request(method: str, path: str, *, params=None, json_body=None,
         return None, "not_connected"
 
     if resp.status_code == 403:
+        # Usually the expected "Premium required" for a playback-control
+        # endpoint on Ed's free account (silent by design -- callers give
+        # an honest voice reply for that case, not a crash). But GET /me
+        # and other non-player endpoints returning 403 is NOT that case --
+        # print it either way so an unexpected 403 (e.g. the app's own
+        # user-access list in Developer Mode) isn't silently invisible.
+        print(f"[spotify_api] {method} {path} -> 403: {resp.text[:300]}", flush=True)
         return None, "premium_required"
 
     if resp.status_code == 404:
+        print(f"[spotify_api] {method} {path} -> 404: {resp.text[:300]}", flush=True)
         return None, "not_found"
 
     if resp.status_code == 204:  # success, no body (common on PUT/DELETE)
