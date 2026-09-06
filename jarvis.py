@@ -533,59 +533,113 @@ def _resolve_tts_voice(text: str):
 
 
 # Default system prompt for the voice path. The HUD chat path sends its own.
-def _voice_system(model: str | None = None) -> str:
-    """Build the voice path's system prompt. The prompt adapts to whether
-    the chosen model can search the web (compound) or not (plain Llama)."""
+# Action item #8 (audit Part 13, "Consolidate system prompt (5->1
+# injection points)"): the ORIGINAL audit (Part 8) found the effective
+# system prompt for a turn assembled across _voice_system() (this
+# function), _augmented_voice_system() (wraps it + _mode_block()),
+# _mode_block(), _TOOL_DOCS_FOR_PROMPT (appended inside _ollama_chat),
+# and chloe_persona.py's own about.md trim -- "no single function or
+# file can be read to see 'the' system prompt for a turn." Two of those
+# five (_mode_block, _TOOL_DOCS_FOR_PROMPT) were already single, shared
+# call sites, not actually duplicated -- the real duplication was that
+# _handle_chat_inner (the chat path) built its OWN near-identical
+# date+search-capability preamble inline instead of sharing this
+# function, so the same kind of wording ("today's date is...", "you
+# can/can't search the web...") had to be maintained in two places in
+# lockstep. _build_turn_preamble() below is now the one function that
+# produces BOTH: `voice=True` reproduces this function's former output
+# byte-for-byte (verified in test_system_prompt_consolidation.py against
+# the exact strings this function used to return directly), `voice=False`
+# reproduces _handle_chat_inner's former inline `preamble` variable byte-
+# for-byte. The content is NOT unified across modalities -- voice needs
+# TTS-appropriate style rules and a spoken tools blurb chat doesn't get
+# here (chat's tool framing comes from _TOOL_DOCS_FOR_PROMPT instead),
+# so forcing identical wording would be a real behavior change, not a
+# refactor -- but there is now exactly one function to edit for either
+# modality's date/search-capability framing, instead of two.
+def _build_turn_preamble(model: str | None = None, *, voice: bool) -> str:
+    """Single source of truth for the date + web-search-capability
+    (+ voice-only framing/tools/style) preamble that opens every turn's
+    system prompt. See the module comment above this function for why
+    it exists and what it replaces."""
     today = _central_now().strftime("%A, %B %d, %Y")
-    # USE_COMPOUND removed (routing collapse, 2026-09-01) -- it always
-    # resolved True in practice (never set to 0 in .env), so the no-model
-    # branch's behavior is unchanged, just inlined.
-    can_search = (model == MODEL_SEARCH) if model else True
-    if can_search:
+    if voice:
+        # USE_COMPOUND removed (routing collapse, 2026-09-01) -- it
+        # always resolved True in practice (never set to 0 in .env), so
+        # the no-model branch's behavior is unchanged, just inlined.
+        can_search = (model == MODEL_SEARCH) if model else True
+        if can_search:
+            return (
+                f"You are Chloe, a personal home assistant speaking to Ed via voice. "
+                f"Today's date is {today} — you DO know the current date and should never "
+                f"apologize about not knowing it.\n\n"
+                f"You can search the web automatically when needed. For anything that may "
+                f"have changed since training (current prices, weather, news, sports scores, "
+                f"recent events, who currently holds a position), search the web and give "
+                f"Ed the answer. For knowledge you already have (general facts, math, "
+                f"conversation, advice, writing), answer directly without searching.\n\n"
+                f"NEVER invent numbers or facts — if you can't find something, say so plainly.\n\n"
+                f"STYLE:\n"
+                f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
+                f"- Keep replies short, friendly, and conversational — usually one or two "
+                f"sentences.\n"
+                f"- Do NOT cite URLs or list sources unless Ed asks; he's listening, not reading."
+            )
         return (
             f"You are Chloe, a personal home assistant speaking to Ed via voice. "
             f"Today's date is {today} — you DO know the current date and should never "
             f"apologize about not knowing it.\n\n"
-            f"You can search the web automatically when needed. For anything that may "
-            f"have changed since training (current prices, weather, news, sports scores, "
-            f"recent events, who currently holds a position), search the web and give "
-            f"Ed the answer. For knowledge you already have (general facts, math, "
-            f"conversation, advice, writing), answer directly without searching.\n\n"
-            f"NEVER invent numbers or facts — if you can't find something, say so plainly.\n\n"
+            f"For this turn you do NOT have web search available. If Ed asks for current/live "
+            f"data (prices, weather, news, scores, current officeholders), tell him plainly "
+            f"that you'd need to look it up — don't invent the answer. For things you already "
+            f"know (general knowledge, conversation, advice, writing, math), answer directly "
+            f"without disclaimers.\n\n"
+            f"TOOLS:\n"
+            f"- You have a `grep_source` tool. CALL IT whenever Ed asks about your own "
+            f"implementation, behaviour, configuration, or 'what does X do' / 'how do you Y' "
+            f"questions about your code. Quoting actual lines is more useful than guessing "
+            f"from memory. Pass a regex pattern (e.g., 'def handle_chat', 'CHLOE_MIC_GAIN'). "
+            f"After the tool returns matches, summarise them naturally in spoken English — "
+            f"don't read filenames or line numbers aloud unless Ed asks.\n"
+            f"- You have a Bitcoin Lightning wallet. Tools: `wallet_balance`, "
+            f"`wallet_invoice`, `wallet_send`, `wallet_history`. Speak amounts in "
+            f"sats. For `wallet_send`, ALWAYS require Ed to give you a PIN this "
+            f"turn — never invent or reuse a previous PIN. If he hasn't given "
+            f"one, ask for it BEFORE calling the tool. The system enforces a "
+            f"daily spend cap server-side; if a send is refused, relay the "
+            f"reason and stop.\n\n"
             f"STYLE:\n"
             f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
             f"- Keep replies short, friendly, and conversational — usually one or two "
-            f"sentences.\n"
-            f"- Do NOT cite URLs or list sources unless Ed asks; he's listening, not reading."
+            f"sentences."
+        )
+    # Chat path (voice=False): formerly _handle_chat_inner's own inline
+    # `preamble` variable, moved here unchanged.
+    if model == MODEL_SEARCH:
+        return (
+            f"Today's date is {today}.\n"
+            f"You can search the web automatically when needed. Use search for anything "
+            f"that may have changed since your training (current prices, weather, news, "
+            f"sports scores, recent events, who currently holds a position). For things "
+            f"you already know, just answer directly. NEVER invent numbers or facts — "
+            f"search instead, or say you couldn't find it."
         )
     return (
-        f"You are Chloe, a personal home assistant speaking to Ed via voice. "
-        f"Today's date is {today} — you DO know the current date and should never "
-        f"apologize about not knowing it.\n\n"
-        f"For this turn you do NOT have web search available. If Ed asks for current/live "
-        f"data (prices, weather, news, scores, current officeholders), tell him plainly "
-        f"that you'd need to look it up — don't invent the answer. For things you already "
-        f"know (general knowledge, conversation, advice, writing, math), answer directly "
-        f"without disclaimers.\n\n"
-        f"TOOLS:\n"
-        f"- You have a `grep_source` tool. CALL IT whenever Ed asks about your own "
-        f"implementation, behaviour, configuration, or 'what does X do' / 'how do you Y' "
-        f"questions about your code. Quoting actual lines is more useful than guessing "
-        f"from memory. Pass a regex pattern (e.g., 'def handle_chat', 'CHLOE_MIC_GAIN'). "
-        f"After the tool returns matches, summarise them naturally in spoken English — "
-        f"don't read filenames or line numbers aloud unless Ed asks.\n"
-        f"- You have a Bitcoin Lightning wallet. Tools: `wallet_balance`, "
-        f"`wallet_invoice`, `wallet_send`, `wallet_history`. Speak amounts in "
-        f"sats. For `wallet_send`, ALWAYS require Ed to give you a PIN this "
-        f"turn — never invent or reuse a previous PIN. If he hasn't given "
-        f"one, ask for it BEFORE calling the tool. The system enforces a "
-        f"daily spend cap server-side; if a send is refused, relay the "
-        f"reason and stop.\n\n"
-        f"STYLE:\n"
-        f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
-        f"- Keep replies short, friendly, and conversational — usually one or two "
-        f"sentences."
+        f"Today's date is {today} — you know the current date and should not claim otherwise.\n"
+        f"For this turn you do NOT have web search available. If the question requires "
+        f"current/live data (prices, weather, news, scores, who currently holds a "
+        f"position) tell the user you'd need to look it up — don't invent the answer. "
+        f"For general knowledge, conversation, or anything you already know, answer "
+        f"directly without disclaimers."
     )
+
+
+def _voice_system(model: str | None = None) -> str:
+    """Build the voice path's system prompt. The prompt adapts to whether
+    the chosen model can search the web (compound) or not (plain Llama).
+    Thin wrapper -- see _build_turn_preamble() above, which now holds
+    the actual content for both this (voice) and the chat path."""
+    return _build_turn_preamble(model, voice=True)
 
 if not GROQ_API_KEY:
     print("[chloe] GROQ_API_KEY not set — fine for chat/STT (fully local "
@@ -3168,34 +3222,16 @@ async def _handle_chat_inner(data, websocket):
 
     # Date + behavior preamble. Tailored to which model was chosen so we don't
     # tell a fast-path model "you can search the web" (it can't).
-    today = _central_now().strftime("%A, %B %d, %Y")
-    if model == MODEL_SEARCH:
-        preamble = (
-            f"Today's date is {today}.\n"
-            f"You can search the web automatically when needed. Use search for anything "
-            f"that may have changed since your training (current prices, weather, news, "
-            f"sports scores, recent events, who currently holds a position). For things "
-            f"you already know, just answer directly. NEVER invent numbers or facts — "
-            f"search instead, or say you couldn't find it."
-        )
-    else:
-        preamble = (
-            f"Today's date is {today} — you know the current date and should not claim otherwise.\n"
-            f"For this turn you do NOT have web search available. If the question requires "
-            f"current/live data (prices, weather, news, scores, who currently holds a "
-            f"position) tell the user you'd need to look it up — don't invent the answer. "
-            f"For general knowledge, conversation, or anything you already know, answer "
-            f"directly without disclaimers."
-        )
+    # Action item #8: shared with the voice path via _build_turn_preamble()
+    # instead of duplicating this logic inline -- see that function's
+    # docstring/comment for the audit finding this closes.
+    preamble = _build_turn_preamble(model, voice=False)
     # Append self-knowledge + mode tone + long-term facts to every chat
     # turn. Recall block only fires if the user's question looks like a
     # memory probe.
     user_text_for_recall = _last_user_text(messages)
-    about_block = format_about_block(
-        chloe_persona.compose(_memory.about_body(),
-                              user_text=user_text_for_recall or "", voice=False))
-    mode_block = _mode_block()
-    facts_block = format_facts_block(_memory.facts_body())
+    about_block, mode_block, facts_block = _persona_mode_facts_blocks(
+        user_text_for_recall, voice=False)
     recall_block = ""
     wiki_block = ""
     read_signals = {}
@@ -4394,6 +4430,21 @@ def _now_block() -> str:
             f"confidently, never guess or say you don't know.")
 
 
+def _persona_mode_facts_blocks(user_text: str, *, voice: bool) -> tuple[str, str, str]:
+    """Single source for the about/mode/facts blocks previously built by
+    an identical copy-pasted 3-line sequence in both _handle_chat_inner
+    and _augmented_voice_system -- action item #8 (see _build_turn_preamble
+    above for the larger consolidation this is part of). Returns
+    (about_block, mode_block, facts_block) unchanged from what each call
+    site used to compute inline."""
+    about_block = format_about_block(
+        chloe_persona.compose(_memory.about_body(),
+                              user_text=user_text or "", voice=voice))
+    mode_block = _mode_block()
+    facts_block = format_facts_block(_memory.facts_body())
+    return about_block, mode_block, facts_block
+
+
 def _augmented_voice_system(model: str | None = None,
                             user_text: str = "") -> str:
     """Voice-path system prompt + self-knowledge + mode tone + long-term
@@ -4408,11 +4459,8 @@ def _augmented_voice_system(model: str | None = None,
       6. wiki block (on topic Q)  — top wiki pages for "what is X" etc.
     """
     base = _voice_system(model)
-    about_block = format_about_block(
-        chloe_persona.compose(_memory.about_body(),
-                              user_text=user_text or "", voice=True))
-    mode_block = _mode_block()
-    facts_block = format_facts_block(_memory.facts_body())
+    about_block, mode_block, facts_block = _persona_mode_facts_blocks(
+        user_text, voice=True)
     recall_block = ""
     _v_suppressed = 0
     _v_ttl = 0
