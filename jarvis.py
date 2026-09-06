@@ -4710,6 +4710,24 @@ def _broadcast_exchange(user_text: str, assistant_text: str):
         print(f"[voice] broadcast_exchange failed: {e}", flush=True)
 
 
+def _broadcast_heard(user_text: str):
+    """Push just the transcript to the HUD immediately after STT --
+    BEFORE the LLM call, which can run 10-70s (longer on a cold model
+    load). Added 2026-09-06: Ed had no way to know Chloe misheard him
+    until the full reply came back, by which point it was too late to
+    usefully interrupt/correct. Separate WS message (not part of
+    voice_exchange, which still carries both sides once the reply is
+    ready) so the HUD can show a "heard" preview without double-adding
+    the same line to the chat log later."""
+    try:
+        hud_server.broadcast_sync(json.dumps({
+            "type": "voice_heard",
+            "user": user_text,
+        }))
+    except Exception as e:
+        print(f"[voice] broadcast_heard failed: {e}", flush=True)
+
+
 def _create_wake_detector():
     """Initialize the wake-word backend. Returns a dict:
        {'engine': 'porcupine'|'openwakeword',
@@ -5191,6 +5209,7 @@ def _ptt_record_phase(sd, device):
         _speak_error("Sorry, I didn't catch that.")
         return
     print(f"[voice] PTT heard: {transcript!r}", flush=True)
+    _broadcast_heard(transcript)
 
     # "remember: <fact>" short-circuit — same as in _handle_wake.
     ack = _try_handle_remember(transcript)
@@ -5655,7 +5674,22 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
     """Process one user utterance: transcribe, handle remember-command, run
     LLM, speak the reply. Returns True on a successful completed turn (the
     caller may attempt a follow-up); False on any failure that should drop
-    the conversation back to wake-detection."""
+    the conversation back to wake-detection.
+
+    The LLM round-trip (_ask_groq) runs in a background thread while a
+    barge-in monitor listens for the wake word, same mechanism as
+    during-speech barge-in (see _barge_in_monitor) -- added 2026-09-06 so
+    Ed isn't stuck waiting out a slow (10-70s) reply if he wants to
+    correct or follow up sooner. If wake fires while still processing,
+    this turn's reply is abandoned (never waited on, never spoken) and
+    True is returned immediately so the caller's _next_turn_audio sees
+    _barge_in_via_wake and starts recording the new utterance right away.
+    IMPORTANT: abandoning only stops US from waiting for / speaking a now
+    -stale reply -- it does NOT undo a tool action the abandoned turn had
+    already dispatched (an email delete, a wallet send, etc.). Those
+    happen inside the tool loop, well before the slow reword step, so by
+    the time Ed can usefully interrupt, a destructive tool call has very
+    likely already completed."""
     min_samples = int(MIN_UTTERANCE_S * SAMPLE_RATE)
     if audio is None:
         # Wake fired but no voice followed — likely a false-positive on the
@@ -5694,6 +5728,7 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
         _speak_error("Sorry, I didn't catch that.")
         return False
     print(f"[voice] heard: {transcript!r}", flush=True)
+    _broadcast_heard(transcript)
 
     # "remember: <fact>" short-circuits the LLM path entirely.
     ack = _try_handle_remember(transcript)
@@ -5777,7 +5812,59 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
         hud_server.broadcast_sync("idle")
         return True
 
-    reply = _ask_groq(transcript)
+    my_gen = _bump_turn_gen()
+    _processing.set()
+    _barge_in_request.clear()
+    _barge_in_via_wake.clear()
+    threading.Thread(target=_barge_in_monitor, daemon=True,
+                      name="barge-in-processing").start()
+
+    _turn_result = {}
+
+    def _run_turn():
+        try:
+            _turn_result["reply"] = _ask_groq(transcript)
+        except Exception as e:
+            _turn_result["error"] = e
+        finally:
+            # Only the turn that's still current clears _processing -- if
+            # a newer turn already superseded this one (barge-in fired,
+            # _bump_turn_gen was called again), leave it alone; the newer
+            # turn's own worker owns clearing it now.
+            if my_gen == _turn_gen:
+                _processing.clear()
+
+    _turn_thread = threading.Thread(target=_run_turn, daemon=True,
+                                     name="turn-worker")
+    _turn_thread.start()
+    while _turn_thread.is_alive():
+        _turn_thread.join(timeout=0.15)
+        if _barge_in_request.is_set():
+            print("[voice] processing interrupted by barge-in -- "
+                  "abandoning this reply (the worker keeps running in the "
+                  "background; any tool action it already issued still "
+                  "completes -- this only stops us waiting for / "
+                  "speaking a now-stale reply)", flush=True)
+            # Deliberately NOT clearing _barge_in_request/_barge_in_via_wake
+            # here -- _next_turn_audio (called next by _handle_wake) reads
+            # them to decide to record immediately instead of waiting for
+            # a fresh wake word, and clears them itself once it does.
+            return True
+
+    if my_gen != _turn_gen:
+        # Superseded by a later turn in the brief window between the
+        # worker finishing and us checking (rare race) -- stay silent
+        # rather than risk talking over/after the turn that superseded us.
+        return True
+
+    if "error" in _turn_result:
+        err = _turn_result["error"]
+        print(f"[voice] turn worker error: {type(err).__name__}: {err}", flush=True)
+        _broadcast_exchange(transcript, "[no reply — see terminal for error]")
+        _speak_error("Sorry, something went wrong there.")
+        return False
+
+    reply = _turn_result.get("reply")
     if not reply:
         # _ask_groq logs the underlying error; surface it audibly so the
         # user knows we heard them but couldn't answer.
@@ -6250,7 +6337,14 @@ EMAIL_CHECK_SCHEMA = {
             "content ('what are they', 'details please'; call it again "
             "for a follow-up, the prior result isn't kept in context). "
             "Pass `folder` only if Ed names a different one (Sent, "
-            "Drafts, Spam, Trash, Starred, Important, or All Mail)."
+            "Drafts, Spam, Trash, Starred, Important, or All Mail). Pass "
+            "`sender` and/or `subject` when he asks about email FROM "
+            "someone or about a specific topic (e.g. 'how many emails do "
+            "I have from Indeed Apply', 'any emails about the invoice') "
+            "-- without these this only lists the most recent messages, "
+            "it does NOT filter by sender/topic on its own, so never "
+            "claim a count or list is 'from X' unless you actually "
+            "passed that sender."
         ),
         "parameters": {
             "type": "object",
@@ -6265,6 +6359,14 @@ EMAIL_CHECK_SCHEMA = {
                         "'Spam', 'Trash', 'Starred', 'Important', or "
                         "'All Mail'. Omit for the normal inbox check."
                     ),
+                },
+                "sender": {
+                    "type": "string",
+                    "description": "Optional. Only list/count emails from this sender name or address.",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Optional. Only list/count emails whose subject matches this text.",
                 },
             },
         },
@@ -6369,13 +6471,70 @@ EMAIL_REPLY_SCHEMA = {
     },
 }
 
+EMAIL_DELETE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "email_delete",
+        "description": (
+            "Move one or more emails to Trash (recoverable there for "
+            "about 30 days, same as Gmail's own Trash). Two ways to say "
+            "which ones: (a) `indices` -- one or more numbers from the "
+            "last email_check listing, e.g. 'delete the first one' or "
+            "'delete numbers 1 and 3'; or (b) `sender` and/or `subject` "
+            "-- a fresh search, e.g. 'delete all the emails from Indeed "
+            "Apply'. Give ONLY indices, or ONLY sender/subject, never a "
+            "mix. Refuses (rather than guessing) if Ed didn't say which "
+            "emails, and refuses a filter that matches too many at once "
+            "-- read the tool result back to Ed either way, it tells you "
+            "exactly what happened."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "1-based number(s) from the last email_check "
+                        "listing. Use this when Ed refers to specific "
+                        "emails by position ('the first one', 'numbers 2 "
+                        "and 4')."
+                    ),
+                },
+                "sender": {
+                    "type": "string",
+                    "description": (
+                        "Sender name or address to search for and delete "
+                        "all matches of, e.g. 'Indeed Apply'. Use when Ed "
+                        "names who the emails are from rather than "
+                        "referring to a numbered list."
+                    ),
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Subject text to search for and delete all matches of.",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": (
+                        "Optional, only with sender/subject. Which folder "
+                        "to search -- Inbox, Sent, Drafts, Spam, Trash, "
+                        "Starred, Important, or All Mail. Omit for Inbox."
+                    ),
+                },
+            },
+        },
+    },
+}
+
 EXTRA_TOOL_SCHEMAS = {
-    "run_python":  RUN_PYTHON_SCHEMA,
-    "notify_me":   NOTIFY_TOOL_SCHEMA,
-    "email_check": EMAIL_CHECK_SCHEMA,
-    "email_draft": EMAIL_DRAFT_SCHEMA,
-    "email_read":  EMAIL_READ_SCHEMA,
-    "email_reply": EMAIL_REPLY_SCHEMA,
+    "run_python":   RUN_PYTHON_SCHEMA,
+    "notify_me":    NOTIFY_TOOL_SCHEMA,
+    "email_check":  EMAIL_CHECK_SCHEMA,
+    "email_draft":  EMAIL_DRAFT_SCHEMA,
+    "email_read":   EMAIL_READ_SCHEMA,
+    "email_reply":  EMAIL_REPLY_SCHEMA,
+    "email_delete": EMAIL_DELETE_SCHEMA,
 }
 EXTRA_TOOL_NAMES = set(EXTRA_TOOL_SCHEMAS.keys())
 
@@ -6658,7 +6817,11 @@ def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str
                 n = 5
             unread_only = bool(args.get("unread_only"))
             folder = str(args.get("folder") or "").strip() or None
-            return email_client.email_check_tool(n=n, unread_only=unread_only, folder=folder)
+            sender = str(args.get("sender") or "").strip() or None
+            subject = str(args.get("subject") or "").strip() or None
+            return email_client.email_check_tool(
+                n=n, unread_only=unread_only, folder=folder,
+                sender=sender, subject=subject)
 
         if name == "email_draft":
             import email_client
@@ -6696,6 +6859,15 @@ def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str
                 index, body,
                 attachment_folder=attachment_folder,
                 attachment_file=attachment_file)
+
+        if name == "email_delete":
+            import email_client
+            indices = args.get("indices")
+            sender = str(args.get("sender") or "").strip() or None
+            subject = str(args.get("subject") or "").strip() or None
+            folder = str(args.get("folder") or "").strip() or None
+            return email_client.email_delete_tool(
+                indices=indices, sender=sender, subject=subject, folder=folder)
 
         return f"unknown tool: {name}"
     except Exception as e:
@@ -7428,6 +7600,50 @@ async def _ollama_chat_stream_to_ws(websocket, messages: list, max_tokens: int =
     return full_reply
 
 
+def _ollama_loaded_models(timeout: float = 1.5) -> set:
+    """Currently Ollama-resident model names (GET /api/ps). Used to decide
+    whether swapping to TOOL_SYNTH_MODEL for the reword round is free
+    (already resident, or nothing useful is resident anyway) or would
+    evict the caller's already-warm model and force a fresh load.
+
+    BUG FIXED 2026-09-06: after removing the schema-constraint bug from
+    the synth round, replies stayed in the 20-75s range on Ed's box --
+    far too slow for a 3B model doing a two-sentence plain completion.
+    Root cause: Ollama (default config) keeps one model resident at a
+    time, so every tool-based turn was paying a full model reload in
+    *both* directions -- qwen2.5:14b (tool round) -> llama3.2:3b (synth
+    round) -> qwen2.5:14b again next turn -- which dominates total
+    latency far more than the schema-constraint bug ever did. This check
+    makes the swap adaptive: free swaps still happen (e.g. if Ed later
+    sets OLLAMA_MAX_LOADED_MODELS>=2 so both fit in VRAM at once), but we
+    stop paying an avoidable reload when they don't.
+
+    Empty set (including on any request failure) is the safe default --
+    callers that can't confirm residency skip the swap rather than risk
+    an unnecessary reload."""
+    try:
+        r = _req_get_cached_import().get(f"{OLLAMA_URL}/api/ps", timeout=timeout)
+        if r.status_code != 200:
+            return set()
+        data = r.json() or {}
+        out = set()
+        for m in (data.get("models") or []):
+            name = m.get("name") or m.get("model")
+            if name:
+                out.add(name)
+        return out
+    except Exception:
+        return set()
+
+
+def _req_get_cached_import():
+    """requests is imported lazily throughout this module (see
+    _ollama_chat's own `import requests as _req`) rather than at module
+    load -- mirrors that pattern for this helper's own standalone use."""
+    import requests
+    return requests
+
+
 def _ollama_chat(messages: list, max_tokens: int = 400, *,
                   model: str | None = None, timeout: float = 280,
                   use_tools: bool = True) -> str:
@@ -7543,7 +7759,17 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
 
     for tool_iter in range(MAX_TOOL_ITERS + 1):
         _synth_round = use_tools and _tool_executed and model is None
-        _request_model = TOOL_SYNTH_MODEL if _synth_round else _model
+        _use_synth_model = False
+        if _synth_round:
+            _loaded = _ollama_loaded_models()
+            # Use the small synth model only when the swap is free --
+            # already resident, or nothing useful resident anyway (e.g.
+            # cold start). If the caller's model is currently warm and
+            # the synth model isn't, swapping would evict it and force a
+            # full reload -- measured live as the dominant cost, worse
+            # than just finishing the reword on the already-warm model.
+            _use_synth_model = (TOOL_SYNTH_MODEL in _loaded) or (_model not in _loaded)
+        _request_model = TOOL_SYNTH_MODEL if _use_synth_model else _model
         try:
             _payload = {
                 "model":      _request_model,
@@ -7777,7 +8003,11 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                   f"on a tools-forced turn; using canned fallback", flush=True)
             reply = "Sorry, I got stuck on that one — can you ask again?"
     dt = time.time() - t0
-    _final_model = TOOL_SYNTH_MODEL if (use_tools and _tool_executed and model is None) else _model
+    # _request_model already reflects whichever model the last
+    # iteration actually used (residency-aware as of 2026-09-06 --
+    # see _ollama_loaded_models -- so it's no longer always
+    # TOOL_SYNTH_MODEL just because a tool executed).
+    _final_model = _request_model
     print(f"[chloe] Ollama ({_final_model}) replied in {dt:.2f}s "
           f"({len(reply)} chars)", flush=True)
 
@@ -8398,10 +8628,30 @@ def _speak_elevenlabs(text: str) -> None:
 # TTS consumer below AND the barge-in monitor in the voice loop.
 _speaking          = threading.Event()
 _barge_in_request  = threading.Event()
+# Set while Chloe is waiting on the LLM for a reply (the often 10-70s
+# "thinking" gap before TTS ever starts) -- added 2026-09-06 so Ed can
+# interrupt/correct a turn without having to wait for a slow reply to
+# finish and start speaking first. _barge_in_monitor below watches this
+# the same way it watches `_speaking`; see _process_voice_turn for how
+# the turn itself gets abandoned when barge-in fires mid-processing.
+_processing = threading.Event()
 # Set by the barge-in monitor when the wake word interrupted speech, so the
 # voice loop knows to go straight into recording instead of waiting for a
 # second wake.
 _barge_in_via_wake = threading.Event()
+# Bumped each time a new turn starts processing; a turn started in the
+# background thread compares its own snapshot against this before
+# speaking its result, so a stale (barge-in'd) turn silently discards its
+# reply instead of speaking over/after whatever turn superseded it.
+_turn_gen_lock = threading.Lock()
+_turn_gen = 0
+
+
+def _bump_turn_gen() -> int:
+    global _turn_gen
+    with _turn_gen_lock:
+        _turn_gen += 1
+        return _turn_gen
 # Cached after _voice_loop creates the wake detector. _speak_* reads these
 # to decide whether to spawn a barge-in monitor during TTS playback.
 _wake_detector_global = None  # type: ignore[var-annotated]
@@ -8434,8 +8684,10 @@ def _barge_hit(wake, chunk) -> bool:
 
 
 def _barge_in_monitor():
-    """Run wake-word detection during TTS playback. Sets _barge_in_request
-    + _barge_in_via_wake if wake fires. Exits when _speaking clears.
+    """Run wake-word detection during TTS playback OR while a reply is
+    still processing (_speaking or _processing set). Sets
+    _barge_in_request + _barge_in_via_wake if wake fires. Exits once both
+    clear.
 
     Concurrent input + output streams have historically been flaky on
     Windows audio drivers (see comment block above _voice_loop). If we
@@ -8473,7 +8725,7 @@ def _barge_in_monitor():
     consec = 0
     try:
         with stream:
-            while _speaking.is_set():
+            while _speaking.is_set() or _processing.is_set():
                 if _barge_in_request.is_set():
                     return
                 try:

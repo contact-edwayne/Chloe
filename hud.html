@@ -328,6 +328,22 @@
   .status-line.speaking   { color: var(--cyan); }
   .status-line.wake_acked { color: var(--green); font-weight: 700; }
   .status-line.followup   { color: var(--green); opacity: 0.85; }
+  #heard-preview {
+    display: block;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: #ffffffaa;
+    text-shadow: none;
+    margin-top: 4px;
+    max-width: 320px;
+    margin-left: auto;
+    margin-right: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #heard-preview:empty { display: none; }
 
   /* State-controls below status */
   .state-controls {
@@ -1501,6 +1517,7 @@
         <div class="status-line" id="status-line">
           <span id="status-text">AWAITING COMMAND</span>
         </div>
+        <span id="heard-preview"></span>
       </div>
 
       <div class="state-controls">
@@ -1870,6 +1887,15 @@
     const statusLine = document.getElementById('status-line');
     statusLine.classList.remove(..._STATES);
     statusLine.classList.add(s);
+
+    // Safety net: clear the "heard" preview whenever we land back on
+    // idle/listening even if a turn errored out before sending
+    // voice_exchange (which normally clears it) -- never leave stale
+    // heard text showing once the conversation has moved on.
+    if (s === 'idle' || s === 'listening') {
+      const hp = document.getElementById('heard-preview');
+      if (hp) hp.textContent = '';
+    }
 
     const labels = {
       idle:       'AWAITING COMMAND',
@@ -2245,9 +2271,18 @@
       // Clear the audio-pending guard so a subsequent send isn't stuck.
       expectingAudio = false;
       setState('idle');
+    } else if (data.type === 'voice_heard') {
+      // Transcript, sent right after STT -- well before the (often
+      // 10-70s) LLM reply. Lets Ed see what Chloe heard immediately so
+      // he can tell right away if she misheard, instead of only finding
+      // out once the full reply comes back.
+      const hp = document.getElementById('heard-preview');
+      if (hp) hp.textContent = data.user ? ('heard: "' + data.user + '"') : '';
     } else if (data.type === 'voice_exchange') {
       // Voice/PTT exchange from the backend — show user's transcribed question
       // and Chloe's reply in the chat log so voice activity is visible.
+      const hp2 = document.getElementById('heard-preview');
+      if (hp2) hp2.textContent = '';
       if (data.user) {
         appendMsg('me', '🎤 ' + data.user);
         chatHistory.push({ role: 'user', content: data.user });

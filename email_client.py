@@ -408,7 +408,8 @@ def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") ->
         return out
 
 
-def email_check_tool(n: int = 5, unread_only: bool = False, folder=None) -> str:
+def email_check_tool(n: int = 5, unread_only: bool = False, folder=None,
+                      sender=None, subject=None) -> str:
     if not _configured():
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
@@ -419,7 +420,22 @@ def email_check_tool(n: int = 5, unread_only: bool = False, folder=None) -> str:
                 f'{_FOLDER_DISPLAY_NAMES}.')
     mailbox, display = resolved
     try:
-        msgs = list_recent(n=n, unread_only=unread_only, folder=mailbox)
+        if sender or subject:
+            # BUG FIXED 2026-09-06: Ed asked "how many emails do I have
+            # from Indeed Apply?" and got an answer that just eyeballed
+            # the 5 most recent -- email_check had no way to actually
+            # filter by sender, so any count/claim about "from X" was
+            # unverified. Reuse the same Gmail search find_uids_by_query
+            # already built for email_delete's sender/subject filter.
+            query = " ".join(p for p in (
+                f'from:"{sender}"' if sender else None,
+                f'subject:"{subject}"' if subject else None,
+            ) if p)
+            msgs = find_uids_by_query(query, folder=mailbox, limit=max(1, min(int(n or 5), 25)))
+            if unread_only:
+                msgs = [m for m in msgs if m.get("unread")]
+        else:
+            msgs = list_recent(n=n, unread_only=unread_only, folder=mailbox)
     except Exception as e:
         print(f"[email_client] email_check_tool failed: {type(e).__name__}: {e}",
               flush=True)
@@ -548,6 +564,185 @@ def email_read_tool(index) -> str:
     body = msg["body"] or "(empty message)"
     note = " (truncated -- long email)" if msg["truncated"] else ""
     return f'From {msg["from"]}, subject "{msg["subject"]}":\n{body}{note}'
+
+
+# --------------------------------------------------------------------------- #
+# Deleting (move to Trash)                                                    #
+# --------------------------------------------------------------------------- #
+#
+# Ed, 2026-09-06: asked Chloe to delete a batch of Indeed-Apply emails --
+# she said she did, but there was no delete tool at all, so the LLM
+# (forced to pick from what's available) called email_check(folder=
+# 'Trash') and hallucinated "already moved to Trash" from nothing. This
+# section is the real thing.
+#
+# Deliberately NOT behind the same hard confirm-gate as email send
+# (see the module docstring above -- send is kept out of the LLM tool set
+# entirely). Trashing a message is meaningfully lower-stakes than sending
+# one as Ed or moving money: it's recoverable from Gmail's Trash for
+# ~30 days, and Ed asked for exactly this ("delete messages on my
+# command") as a normal voice capability, not a two-step ritual. The
+# safety net here instead is _MAX_BULK_DELETE -- a too-broad filter
+# refuses rather than silently trashing a big, unintended batch -- and
+# honest-miss when neither indices nor a filter is given, so the model
+# can never default to "delete everything."
+
+_MAX_BULK_DELETE = 20  # refuse and ask Ed to narrow the filter beyond this
+
+
+def _gm_raw_arg(query: str) -> str:
+    """Quote+escape `query` as a single IMAP string argument for Gmail's
+    X-GM-RAW search extension. Needed here (unlike the plain category:
+    filter in list_recent) because sender/subject come from free text and
+    may themselves contain a double quote or backslash."""
+    escaped = query.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _trash_uid(imap, uid) -> None:
+    """Move one message to Trash via Gmail's IMAP extension: adding the
+    \\Trash label. Per Gmail's own IMAP docs this is the recommended way
+    to delete a message -- Gmail automatically removes it from every
+    other folder (including Inbox) once \\Trash is applied, no separate
+    expunge needed, and the message stays recoverable from Trash for the
+    normal ~30 days rather than being immediately, permanently gone."""
+    imap.uid("STORE", uid, "+X-GM-LABELS", "(\\Trash)")
+
+
+def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25) -> list[dict]:
+    """Search `folder` for messages matching a Gmail search query (e.g.
+    'from:"Indeed Apply"') via X-GM-RAW -- the same engine as the Gmail
+    search box. Most-recent-first, capped at `limit`. Same dict shape as
+    list_recent (uid/from/subject/date/unread) so email_check_tool can
+    use either interchangeably. Raises on IMAP failure, same contract as
+    list_recent."""
+    with imaplib.IMAP4_SSL(_imap_host()) as imap:
+        imap.login(_address(), _app_password())
+        imap.select(folder or "INBOX", readonly=True)
+        status, data = imap.uid("search", None, "X-GM-RAW", _gm_raw_arg(query))
+        if status != "OK":
+            raise RuntimeError(f"IMAP search failed: {status}")
+        uids = data[0].split()
+        uids = uids[-limit:][::-1]
+        out = []
+        for uid in uids:
+            status, msg_data = imap.uid(
+                "fetch", uid, "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)] FLAGS)")
+            if status != "OK" or not msg_data or not msg_data[0]:
+                continue
+            raw_headers = msg_data[0][1]
+            flags_blob = str(msg_data[0][0])
+            msg = _email.message_from_bytes(raw_headers)
+            out.append({
+                "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
+                "from": msg.get("From", "(unknown)"),
+                "subject": msg.get("Subject", "(no subject)"),
+                "date": msg.get("Date", ""),
+                "unread": "\\Seen" not in flags_blob,
+            })
+        return out
+
+
+def email_delete_tool(indices=None, sender=None, subject=None, folder=None) -> str:
+    """Move one or more emails to Trash. Two ways to say which ones:
+    - `indices`: 1-based number(s) from the last email_check listing,
+      same addressing as email_read_tool/draft_reply.
+    - `sender` and/or `subject`: a fresh Gmail search against `folder`
+      (default Inbox).
+    Honest-miss if neither is given -- never guess "all of them." Capped
+    at _MAX_BULK_DELETE matches so a too-broad filter can't silently
+    trash a large batch; Ed gets the count and is asked to narrow it."""
+    if not _configured():
+        return ("Email isn't configured yet -- Ed needs to set "
+                "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
+                "(a Gmail App Password, not the account password).")
+
+    targets = []  # list of (uid, from_or_None, subject_or_None)
+    list_folder = None
+
+    if indices:
+        uids, list_folder = _load_last_list()
+        if not uids:
+            return ("I don't have a recent email list to pick numbers from "
+                    "-- check the inbox first (email_check), or tell me a "
+                    "sender or subject to search for instead.")
+        idx_list = indices if isinstance(indices, list) else [indices]
+        bad = []
+        seen = set()
+        for raw in idx_list:
+            try:
+                idx = int(raw)
+            except (TypeError, ValueError):
+                bad.append(raw)
+                continue
+            if idx < 1 or idx > len(uids) or idx in seen:
+                bad.append(raw)
+                continue
+            seen.add(idx)
+            targets.append((uids[idx - 1], None, None))
+        if bad:
+            return (f"I only have {len(uids)} email(s) from the last check "
+                    f"-- {bad!r} isn't a valid number in that range.")
+    elif sender or subject:
+        resolved = resolve_folder(folder)
+        if resolved is None:
+            return (f'I don\'t know a folder called "{folder}" -- I can check '
+                    f'{_FOLDER_DISPLAY_NAMES}.')
+        mailbox, display = resolved
+        query = " ".join(p for p in (
+            f'from:"{sender}"' if sender else None,
+            f'subject:"{subject}"' if subject else None,
+        ) if p)
+        try:
+            matches = find_uids_by_query(query, folder=mailbox,
+                                          limit=_MAX_BULK_DELETE + 1)
+        except Exception as e:
+            print(f"[email_client] email_delete_tool search failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return f"Couldn't search for those emails: {type(e).__name__}: {e}"
+        if not matches:
+            return f'No emails matching {query} in {display}.'
+        if len(matches) > _MAX_BULK_DELETE:
+            return (f'That matches {len(matches)}+ emails in {display} -- '
+                    f'more than I\'ll delete in one go ({_MAX_BULK_DELETE} max). '
+                    f'Narrow it down (a more specific sender or subject) and '
+                    f'try again.')
+        list_folder = mailbox
+        targets = [(m["uid"], m["from"], m["subject"]) for m in matches]
+    else:
+        return ("Which emails? Give me a sender or subject to search for, "
+                "or refer to numbers from your last email check.")
+
+    trashed = []
+    failed = []
+    try:
+        with imaplib.IMAP4_SSL(_imap_host()) as imap:
+            imap.login(_address(), _app_password())
+            imap.select(list_folder or "INBOX", readonly=False)
+            for uid, frm, subj in targets:
+                try:
+                    _trash_uid(imap, uid)
+                    trashed.append((uid, frm, subj))
+                except Exception as e:
+                    failed.append((uid, str(e)))
+    except Exception as e:
+        print(f"[email_client] email_delete_tool IMAP session failed: "
+              f"{type(e).__name__}: {e}", flush=True)
+        return f"Couldn't delete: {type(e).__name__}: {e}"
+
+    if not trashed:
+        return f"Couldn't delete any of those: {failed}"
+
+    n = len(trashed)
+    named = [(frm, subj) for _, frm, subj in trashed if frm]
+    if named:
+        preview = "; ".join(f'"{subj}" from {frm}' for frm, subj in named[:5])
+        more = f" and {n - 5} more" if n > 5 else ""
+        detail = f": {preview}{more}"
+    else:
+        detail = ""
+    fail_note = f" ({len(failed)} couldn't be deleted)" if failed else ""
+    return f"Moved {n} email(s) to Trash{detail}{fail_note}."
 
 
 # --------------------------------------------------------------------------- #
