@@ -2194,6 +2194,8 @@ def _pick_route(user_text: str) -> str:
     # down, this falls through same as everything else.
     if (nsfw_mode.is_enabled() and nsfw_mode.looks_adult(user_text)
             and _ollama_available()):
+        print(f"[chloe] route: 'ollama' (nsfw permissive-mode override) "
+              f"for: {user_text[:80]!r}", flush=True)
         return 'ollama'
     # Introspection questions about Chloe's own source — route to the
     # tool-calling path, FORCED (not just available): see the docstring
@@ -2207,12 +2209,19 @@ def _pick_route(user_text: str) -> str:
     # tool-calling uses format-constrained decoding (stage a,
     # 2026-08-31) -- 20/20 on qwen2.5:14b in testing.
     if _is_introspection_query(user_text):
-        return 'ollama_tools' if _ollama_available() else 'local_chat'
+        _route = 'ollama_tools' if _ollama_available() else 'local_chat'
+        print(f"[chloe] route: {_route!r} (introspection query, tools "
+              f"forced) for: {user_text[:80]!r}", flush=True)
+        return _route
     # Email/notify/run_python trigger phrases -- same forced-tools treatment
     # as introspection, and checked at the same priority (see
     # _EXTRA_TOOL_KEYWORDS' comment for the live bug this fixes).
     if _is_extra_tool_query(user_text):
-        return 'ollama_tools' if _ollama_available() else 'local_chat'
+        _route = 'ollama_tools' if _ollama_available() else 'local_chat'
+        print(f"[chloe] route: {_route!r} (email/notify/run_python "
+              f"keyword match, tools forced) for: {user_text[:80]!r}",
+              flush=True)
+        return _route
     # Deictic follow-up whose antecedent is Chloe's own just-fetched
     # email-tool reply, not a web-search topic -- see _EMAIL_REPLY_KEYWORDS'
     # comment above for the live bug this fixes. Checked at the same
@@ -2261,14 +2270,23 @@ def _pick_route(user_text: str) -> str:
             and _prior_assistant_reply
             and (_prior_was_hedge or any(kw in _prior_assistant_reply.lower()
                     for kw in _EMAIL_REPLY_KEYWORDS))):
-        return 'ollama_tools' if _ollama_available() else 'local_chat'
+        _route = 'ollama_tools' if _ollama_available() else 'local_chat'
+        _why = ("hedge-reply re-confirm" if _prior_was_hedge
+                else "deictic follow-up to email-flavored prior reply")
+        print(f"[chloe] route: {_route!r} (deictic follow-up, {_why}) "
+              f"for: {user_text[:80]!r}", flush=True)
+        return _route
     # Self-knowledge questions ("what have you learned about trading")
     # never go to web search, even when they contain a real-time-looking
     # keyword like "trading" or "finances" -- they need Chloe's own
     # memory/recall, not the live web. Checked before the realtime gate
     # so it can't be overridden by a keyword match.
-    if (not _is_self_knowledge_query(user_text)
-            and (_needs_realtime(user_text) or _looks_like_info_question(user_text))):
+    _rt_realtime = _needs_realtime(user_text)
+    _rt_info_q = _looks_like_info_question(user_text)
+    if not _is_self_knowledge_query(user_text) and (_rt_realtime or _rt_info_q):
+        _why = "realtime-keyword match" if _rt_realtime else "looks like an info question"
+        print(f"[chloe] route: 'local_search' ({_why}) for: "
+              f"{user_text[:80]!r}", flush=True)
         return 'local_search'
     # Boot warm-up guard (2026-08-31, fixed 2026-08-31): qwen2.5:14b can
     # take ~25s to load. _warm_ollama_models() already runs off the main
@@ -2281,9 +2299,15 @@ def _pick_route(user_text: str) -> str:
     # instead of silence during the one ~25s window per boot where this
     # can fire.
     if not _ollama_primary_warm.is_set():
+        print(f"[chloe] route: 'warming_up' (Ollama boot warm-up still "
+              f"in flight) for: {user_text[:80]!r}", flush=True)
         return 'warming_up'
     if _ollama_available():
+        print(f"[chloe] route: 'ollama' (default, tool-calling available "
+              f"if requested) for: {user_text[:80]!r}", flush=True)
         return 'ollama'
+    print(f"[chloe] route: 'local_chat' (default, Ollama unavailable) "
+          f"for: {user_text[:80]!r}", flush=True)
     return 'local_chat'
 
 
