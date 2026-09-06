@@ -367,8 +367,25 @@ def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") ->
                   flush=True)
             raise
         imap.select(folder or "INBOX", readonly=True)
-        crit = "UNSEEN" if unread_only else "ALL"
-        status, data = imap.uid("search", None, crit)
+        if (folder or "INBOX") == "INBOX":
+            # Gmail's web UI splits the Inbox into Primary/Social/
+            # Promotions/Updates/Forums tabs -- purely a client-side
+            # feature standard IMAP SEARCH knows nothing about. A plain
+            # ALL/UNSEEN search against INBOX returns every message with
+            # the Inbox label regardless of tab, including auto-sorted
+            # notification mail (job alerts, etc.) that Ed doesn't
+            # consider "new email" -- confirmed live 2026-09-06, "do I
+            # have any new emails?" surfaced an Indeed/LinkedIn alert his
+            # own Gmail Primary tab doesn't show. Gmail's IMAP extension
+            # (X-GM-RAW) runs an actual Gmail search query, so it can
+            # filter to the same Primary category the web UI defaults
+            # to -- other folders (Sent/Drafts/Spam/Trash/etc.) don't
+            # have categories, so this only applies to plain INBOX reads.
+            gm_query = "category:primary" + (" is:unread" if unread_only else "")
+            status, data = imap.uid("search", None, "X-GM-RAW", f'"{gm_query}"')
+        else:
+            crit = "UNSEEN" if unread_only else "ALL"
+            status, data = imap.uid("search", None, crit)
         if status != "OK":
             raise RuntimeError(f"IMAP search failed: {status}")
         uids = data[0].split()
