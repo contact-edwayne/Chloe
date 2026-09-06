@@ -13,6 +13,15 @@ house patterns already proven out elsewhere in this codebase:
    -- "honest miss, never guess" -- same contract as every other resolver
    in this codebase.
 
+   2026-09-06: resolve_contact() now falls through to Ed's real Google
+   Contacts (google_contacts.py, People API via OAuth -- saved Contacts
+   plus Gmail-derived "Other contacts") when the local file above
+   doesn't have a match, so "email Madison Wayne" works without Ed
+   registering her here first. A hit is written back into this local
+   file so the next lookup for the same person is instant and never
+   touches Google again. See google_contacts.py's own docstring for the
+   one-time OAuth setup this requires.
+
 2. A hard, code-enforced confirm gate before anything irreversible sends
    -- mirrors wallet_send's PIN requirement and chloe_pending_confirms'
    Stage-3 "announce, then a LITERAL yes/no reply resolves it" state
@@ -304,7 +313,32 @@ def resolve_contact(text: str, source_text: Optional[str] = None) -> Optional[st
     matches = [addr for name, addr in contacts.items() if name in low or low in name]
     if len(matches) == 1:
         return matches[0]
-    return None
+
+    # 2026-09-06: fall through to Ed's real Google Contacts (saved
+    # Contacts + Gmail-derived Other Contacts) when the local alias file
+    # doesn't have it -- Ed asked for "send an email to Madison Wayne"
+    # to just work without pre-registering every person he might email.
+    # Lazy/guarded import: google_contacts.py degrades to an honest
+    # None on its own (not authorized yet, libs not installed, API
+    # error) rather than raising, so this never breaks the local-file
+    # path it's layered on top of.
+    try:
+        import google_contacts
+    except ImportError:
+        return None
+    address = google_contacts.resolve_google_contact(text)
+    if address and low not in contacts:
+        # Write-through cache into the fast local file so the next
+        # lookup for this person is instant and doesn't touch Google
+        # Contacts at all -- same "resolve once, alias it" pattern as
+        # stocks.py's ticker aliases. Only when the name wasn't already
+        # a (non-matching) key -- never overwrites something Ed set
+        # deliberately.
+        try:
+            add_contact(text, address)
+        except Exception:
+            pass
+    return address
 
 
 # --------------------------------------------------------------------------- #
