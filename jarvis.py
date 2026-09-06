@@ -2005,6 +2005,24 @@ _EXTRA_TOOL_KEYWORDS = (
     "respond to that", "respond to it", "respond to the",
 )
 
+# 2026-09-06d (bug, confirmed live): "Do any of them say anything about
+# training?" following "You have 5 emails in your inbox" -- a bare
+# deictic ("them") with no local referent -- matched nothing in
+# _EXTRA_TOOL_KEYWORDS (that list only covers phrasings actually seen
+# live, an inherently endless whack-a-mole) and fell through to
+# 'local_search', which sent it to Brave web search and got back a
+# garbled reply about an unrelated topic. Enumerating every possible
+# follow-up phrasing can't work; the real signal is that the CURRENT
+# turn's antecedent is Chloe's own just-spoken email-tool reply, not
+# anything on the web. Used below in _pick_route alongside
+# _has_unresolved_deictic to recognize Chloe's own prior reply (not the
+# user's new text) as email-related, regardless of how the follow-up
+# itself is phrased.
+_EMAIL_REPLY_KEYWORDS = (
+    "email", "emails", "e-mail", "e-mails", "inbox", "gmail",
+    "subject", "unread", "draft", "moved to trash", "sent it",
+)
+
 
 def _is_extra_tool_query(text: str) -> bool:
     """Return True if `text` looks like it needs email/notify/run_python
@@ -2165,6 +2183,18 @@ def _pick_route(user_text: str) -> str:
     # as introspection, and checked at the same priority (see
     # _EXTRA_TOOL_KEYWORDS' comment for the live bug this fixes).
     if _is_extra_tool_query(user_text):
+        return 'ollama_tools' if _ollama_available() else 'local_chat'
+    # Deictic follow-up whose antecedent is Chloe's own just-fetched
+    # email-tool reply, not a web-search topic -- see _EMAIL_REPLY_KEYWORDS'
+    # comment above for the live bug this fixes. Checked at the same
+    # priority as the phrase-based extra-tool check above (it's the same
+    # class of routing decision, just keyed off the PRIOR turn instead of
+    # curated phrases in this one).
+    if (_has_unresolved_deictic(user_text, user_text.split())
+            and _voice_history
+            and _voice_history[-1].get("role") == "assistant"
+            and any(kw in (_voice_history[-1].get("content") or "").lower()
+                    for kw in _EMAIL_REPLY_KEYWORDS)):
         return 'ollama_tools' if _ollama_available() else 'local_chat'
     # Self-knowledge questions ("what have you learned about trading")
     # never go to web search, even when they contain a real-time-looking
@@ -7754,14 +7784,36 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     _tool_executed = False
 
     def _reword_messages(base_msgs: list) -> list:
-        """Copy of `base_msgs` with the tool-call JSON instructions
-        (appended once above via _TOOL_DOCS_FOR_PROMPT) overridden for the
-        synthesis round -- a tool already ran and the model just needs to
-        answer in plain language now, not emit another tool_call/reply
-        JSON object. Appended rather than replaced so persona/mode/
-        language instructions (including the translation block) survive
-        into this round too."""
-        out = list(base_msgs)
+        """Trimmed, hardened copy of `base_msgs` for the synthesis round.
+
+        BUG FIXED 2026-09-06c: this used to return the FULL conversation
+        (every prior turn, still under the tool-call-JSON system
+        instructions) with only the system message's content string
+        appended to -- confirmed live as the real driver of the still-
+        present 20-200s+ synth-round latency, not model residency (that
+        was fixed separately in _ollama_loaded_models and is necessary
+        but not sufficient). Every earlier turn's tokens got reprocessed
+        on EVERY tool call, and two different models can never share a
+        KV cache even when both are VRAM-resident, so residency could
+        never have masked this cost.
+
+        The synth round only ever needs to reword a tool result that was
+        just fetched in direct response to the CURRENT question -- it
+        has no need to re-read earlier turns to do that -- so this now
+        keeps just the system message(s) plus everything from the most
+        recent user message onward (that user message, the assistant's
+        tool_call message, and the tool result message(s) appended for
+        it this iteration). Falls back to the untrimmed list if no user
+        message is found (shouldn't happen in practice)."""
+        _last_user = None
+        for _i, _m in enumerate(base_msgs):
+            if _m.get("role") == "user":
+                _last_user = _i
+        if _last_user is None:
+            out = list(base_msgs)
+        else:
+            out = ([m for m in base_msgs if m.get("role") == "system"] +
+                   list(base_msgs[_last_user:]))
         for i, m in enumerate(out):
             if m.get("role") == "system":
                 out[i] = dict(m, content=(m.get("content") or "") +
