@@ -1973,6 +1973,18 @@ _EXTRA_TOOL_KEYWORDS = (
     # Email
     "email", "emails", "e-mail", "e-mails", "inbox", "gmail",
     "unread message", "unread messages", "new message", "new messages",
+    # Wallet (2026-09-06j, confirmed live): "what's my wallet balance?"
+    # matched no keyword here, so it never got forced to the tools route
+    # -- it streamed a plain 'ollama' reply that answered from injected
+    # memory-recall/wiki context (an OLD balance from a past session)
+    # instead of calling wallet_balance fresh, phrased as "...0.12 BTC
+    # as of now" -- confidently wrong-or-stale framing on financial data,
+    # the exact class of bug email_check was forced-routed to prevent
+    # back on 2026-09-02 (see that comment below). Same fix, same reason.
+    "wallet", "wallet balance", "my balance", "check my wallet",
+    "how much bitcoin", "how many sats", "how many satoshis",
+    "bitcoin balance", "lightning balance", "wallet history",
+    "payment history", "sat balance",
     # Notifications
     "notify me", "notify my phone", "text my phone", "push a notification",
     "send a notification", "alert my phone", "ping my phone",
