@@ -115,3 +115,6 @@ raw_pending_chloe_capabilities.md
 python
 # Old face-asset directory; review and add back selectively if needed.
 JarvisFace/
+
+# Deliverable docs dropped by a Claude Code session, not part of the app.
+Claude outputs/
