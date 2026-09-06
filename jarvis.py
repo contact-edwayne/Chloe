@@ -6707,7 +6707,7 @@ def _wallet_guard_module():
         return None
 
 
-def _wallet_dispatch(name: str, args: dict) -> str:
+def _wallet_dispatch(name: str, args: dict, *, my_turn_gen: int | None = None) -> str:
     """Route a wallet_* tool call to the right Python function and
     return a human-readable result string for the LLM to consume."""
     if not isinstance(args, dict):
@@ -6802,7 +6802,8 @@ def _wallet_dispatch(name: str, args: dict) -> str:
             if not ok:
                 return f"Wallet send refused: {reason}"
             _abort = _barge_in_blocks_destructive_action(
-                f"send {check_amount} sat to {dest[:40]}")
+                f"send {check_amount} sat to {dest[:40]}",
+                my_turn_gen=my_turn_gen)
             if _abort is not None:
                 return _abort
             r = w.pay(dest, amount if isinstance(amount, int) else None)
@@ -6849,7 +6850,8 @@ def _wallet_dispatch(name: str, args: dict) -> str:
         return f"Wallet error: {type(e).__name__}: {e}"
 
 
-def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str:
+def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "",
+                          my_turn_gen: int | None = None) -> str:
     """Route run_python / notify_me / email_check / email_draft /
     email_read / email_reply tool calls. Mirrors _wallet_dispatch's shape
     (lazy-import the backing module so a missing dependency degrades to
@@ -6941,7 +6943,8 @@ def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str
             subject = str(args.get("subject") or "").strip() or None
             folder = str(args.get("folder") or "").strip() or None
             _abort = _barge_in_blocks_destructive_action(
-                f"delete indices={indices} sender={sender!r} subject={subject!r}")
+                f"delete indices={indices} sender={sender!r} subject={subject!r}",
+                my_turn_gen=my_turn_gen)
             if _abort is not None:
                 return _abort
             return email_client.email_delete_tool(
@@ -7950,6 +7953,7 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
         if _m.get("role") == "user":
             _current_user_text = _m.get("content") or ""
             break
+    _my_turn_gen_snapshot = _turn_gen
     _email_draft_used = False
     # Once a tool has actually executed and handed back real data, the
     # final round is pure "reword this JSON into a sentence" -- handled
@@ -7965,6 +7969,15 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     # the end so a completion claim in the final reply can be checked
     # against what genuinely ran, not what the model merely says ran.
     _tools_called_this_turn: set = set()
+    # Snapshot of the global turn-generation counter at the moment THIS
+    # call began -- fed to _barge_in_blocks_destructive_action so a
+    # background worker for an already-superseded turn (barge-in'd, or
+    # simply overtaken by a newer follow-up) can detect that fact even
+    # after _barge_in_request itself has been cleared by whatever turn
+    # superseded it. See that function's docstring for the live bug this
+    # closes. Harmless read for the chat path (no barge-in there) --
+    # _turn_gen just stays constant across such a call, so the
+    # comparison at dispatch time is always equal and never blocks.
 
     def _reword_messages(base_msgs: list) -> list:
         """Trimmed, hardened copy of `base_msgs` for the synthesis round.
@@ -8212,13 +8225,16 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 print(f"[chloe]   ollama-tool grep_source(/{preview}/, file={args.get('file')!r})"
                       f" → {len(result)} chars", flush=True)
             elif name in WALLET_TOOL_NAMES:
-                result = _wallet_dispatch(name, args)
+                result = _wallet_dispatch(name, args,
+                                          my_turn_gen=_my_turn_gen_snapshot)
                 safe_args = {k: ("<redacted>" if k == "pin" else v)
                              for k, v in args.items()}
                 print(f"[chloe]   ollama-tool {name}({safe_args})"
                       f" → {len(result)} chars", flush=True)
             elif name in EXTRA_TOOL_NAMES:
-                result = _extra_tool_dispatch(name, args, source_text=_current_user_text)
+                result = _extra_tool_dispatch(
+                    name, args, source_text=_current_user_text,
+                    my_turn_gen=_my_turn_gen_snapshot)
                 if name == "email_draft":
                     _email_draft_used = True
                 print(f"[chloe]   ollama-tool {name}({args}) → {len(result)} chars", flush=True)
@@ -8962,12 +8978,42 @@ def _bump_turn_gen() -> int:
 # (after PIN/cap authorization for wallet_send, so a legitimate,
 # already-authorized send that simply finished quickly isn't punished --
 # only one Ed visibly tried to interrupt).
-def _barge_in_blocks_destructive_action(action_desc: str) -> str | None:
-    """Return an abort message if Ed has already barged in on this turn,
-    else None (safe to proceed). `action_desc` is a short human-readable
-    description of the action being guarded, echoed back in the abort
-    message and the log line so both Ed and the transcript are clear on
-    what got skipped and why."""
+def _barge_in_blocks_destructive_action(action_desc: str,
+                                         my_turn_gen: int | None = None) -> str | None:
+    """Return an abort message if this turn should no longer go through
+    with `action_desc`, else None (safe to proceed).
+
+    BUG FIXED 2026-09-06k (confirmed live): the original version only
+    checked `_barge_in_request.is_set()` -- but `_next_turn_audio` clears
+    that SAME shared flag the instant the NEXT turn starts recording
+    (barge-in re-record or a normal follow-up), which happens almost
+    immediately, while the ORIGINAL interrupted turn's background worker
+    (per _process_voice_turn's own documented behavior: "the worker keeps
+    running in the background; any tool action it already issued still
+    completes") is still 20-75s+ away from even reaching this dispatch
+    point. By the time it gets here, `_barge_in_request` has long since
+    been cleared by whatever turn superseded it -- so the check read
+    "not interrupted" and let the action through. Confirmed live: "Go
+    ahead and delete that email" was barge-in interrupted ("Stop."), and
+    the delete still executed, interleaved with a completely unrelated
+    LATER turn's own log lines.
+
+    Fixed with a second, race-proof signal: `_turn_gen` only ever
+    increases (bumped once per NEW turn, by _process_voice_turn, and
+    never reset or cleared by anything) -- so comparing the turn-gen
+    snapshot taken when THIS turn's `_ollama_chat` call began
+    (`my_turn_gen`) against the CURRENT value catches "any turn at all
+    has started since mine did," which is true whether that happened via
+    explicit barge-in or an ordinary follow-up -- exactly the condition
+    that means this action's request is stale. `_barge_in_request` is
+    kept as a secondary, faster-to-fire check (useful in the brief window
+    before a new turn's recording actually begins clearing it); either
+    signal alone is sufficient to block.
+
+    `action_desc` is a short human-readable description of the action
+    being guarded, echoed back in the abort message and the log line.
+    `my_turn_gen` is optional so old call sites that can't easily supply
+    it still get the original (weaker) protection rather than an error."""
     try:
         if _barge_in_request.is_set():
             print(f"[chloe] destructive action skipped -- barge-in fired "
@@ -8975,6 +9021,13 @@ def _barge_in_blocks_destructive_action(action_desc: str) -> str | None:
             return (f"Skipped -- you interrupted before I sent that, so "
                     f"I did not go through with it. If you still want "
                     f"\"{action_desc}\", ask again.")
+        if my_turn_gen is not None and my_turn_gen != _turn_gen:
+            print(f"[chloe] destructive action skipped -- turn superseded "
+                  f"(started at gen={my_turn_gen}, now gen={_turn_gen}): "
+                  f"{action_desc}", flush=True)
+            return (f"Skipped -- a later request came in before I sent "
+                    f"that, so I did not go through with it. If you "
+                    f"still want \"{action_desc}\", ask again.")
     except Exception:
         pass
     return None
