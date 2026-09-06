@@ -333,15 +333,23 @@
     font-family: 'Orbitron', sans-serif;
     font-size: 10px;
     letter-spacing: 1px;
+    line-height: 1.5;
     color: #ffffffaa;
     text-shadow: none;
     margin-top: 4px;
-    max-width: 320px;
+    max-width: min(90%, 480px);
     margin-left: auto;
     margin-right: auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    /* Full transcript, wrapped rather than truncated -- Ed needs to
+       actually read the whole thing to catch a mishear, not just the
+       first few words. Capped height + scroll (not ellipsis) for the
+       rare very-long utterance, so nothing is silently hidden. */
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-height: 4.5em;
+    overflow-y: auto;
+    text-align: center;
   }
   #heard-preview:empty { display: none; }
 
