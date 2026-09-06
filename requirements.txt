@@ -10,6 +10,14 @@ faster-whisper==1.2.1            # local STT fallback if Groq is unreachable
 elevenlabs==2.45.0               # primary, opt-in via USE_ELEVENLABS=1
 kokoro-onnx==0.4.7               # high-quality local fallback
 edge-tts==7.2.8                  # free always-available default
+langdetect==1.0.9                # optional (2026-09-06): accurate reply-language
+                                  # detection for multilingual TTS voice selection.
+                                  # Without it, TTS still auto-switches voice for
+                                  # non-Latin scripts (Chinese/Japanese/Korean/
+                                  # Russian/Arabic/Hebrew/Greek/Hindi/Thai) via a
+                                  # zero-dependency Unicode heuristic -- this just
+                                  # adds accurate detection for Latin-script
+                                  # languages (Spanish/French/German/etc.) too.
 
 # ─── Wake word ───────────────────────────────────────────────────────────────
 openwakeword==0.6.0              # default — uses bundled "hey jarvis" model

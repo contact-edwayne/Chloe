@@ -1299,6 +1299,18 @@
 .sess-newchat { margin-bottom: 8px; background: rgba(0,247,255,0.1); border: 1px solid #00f7ff55;
   color: #00f7ff; font-family: inherit; letter-spacing: 1px; padding: 8px 12px; cursor: pointer; border-radius: 4px; }
 .sess-newchat:hover { background: rgba(0,247,255,0.18); }
+.sess-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  padding-bottom: 8px; border-bottom: 1px solid #00f7ff2a; flex-wrap: wrap; }
+.sess-selall { display: flex; align-items: center; gap: 5px; color: #00f7ff99;
+  font-size: 10px; letter-spacing: 1px; cursor: pointer; }
+.sess-selall input, .sess-cb { accent-color: #00f7ff; cursor: pointer; }
+.sess-bulk-btn { background: rgba(255,51,85,0.08); border: 1px solid rgba(255,51,85,0.4);
+  color: #ff3355; font-family: inherit; font-size: 10px; letter-spacing: 1px;
+  padding: 6px 10px; cursor: pointer; border-radius: 4px; }
+.sess-bulk-btn:hover { background: rgba(255,51,85,0.16); }
+.sess-bulk-btn:disabled { opacity: 0.35; cursor: default; }
+.sess-bulk-btn:disabled:hover { background: rgba(255,51,85,0.08); }
+.sess-bulk-danger { margin-left: auto; }
 .sess-del-btn { margin-top: 8px; align-self: flex-start; background: rgba(255,51,85,0.08);
   border: 1px solid rgba(255,51,85,0.4); color: #ff3355; font-family: inherit;
   padding: 8px 16px; cursor: pointer; border-radius: 4px; letter-spacing: 1px; }
@@ -1563,6 +1575,13 @@
       <div class="sessions-panel" id="sessions-panel">
         <div id="sess-listview">
           <button class="sess-newchat" onclick="sessNewChat()">＋ NEW CHAT</button>
+          <div class="sess-toolbar" id="sess-toolbar">
+            <label class="sess-selall"><input type="checkbox" id="sess-selall-cb"
+              onchange="sessToggleSelectAll(this.checked)"> select all</label>
+            <button class="sess-bulk-btn" id="sess-delsel-btn" onclick="sessDeleteSelected()" disabled>
+              DELETE SELECTED (<span id="sess-selcount">0</span>)</button>
+            <button class="sess-bulk-btn sess-bulk-danger" onclick="sessDeleteAll()">DELETE ALL</button>
+          </div>
           <div id="sess-list"><span style="color:#00f7ff44;font-size:10px;">loading…</span></div>
         </div>
         <div id="sess-view" style="display:none;">
@@ -2274,6 +2293,9 @@
     } else if (data.type === 'session_deleted') {
       if (data.ok) { sessBackToList(); requestSessionsHud(); }
       else { const _s = document.getElementById('sess-resume-status'); if (_s) _s.textContent = 'delete failed: ' + (data.error || '?'); }
+    } else if (data.type === 'sessions_deleted') {
+      if (data.ok) requestSessionsHud();
+      else console.warn('[sessions] bulk delete failed:', data.error);
     } else if (data.type === 'session_new_done') {
       sessBackToList();
     } else if (data.type === 'lights_state_result') {
@@ -2415,15 +2437,59 @@
     if (d.toDateString() === now.toDateString()) return 'Today ' + t;
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
   }
+  // Bulk-delete state (2026-09-06): which sessions are checked, and the
+  // full set of start_ts currently listed (for "select all" / the
+  // "delete all" count). Reset on every re-render since the list itself
+  // is what changed.
+  let _sessSelected = new Set();
+  let _sessAllTs = [];
+
+  function sessUpdateBulkUI() {
+    const btn = document.getElementById('sess-delsel-btn');
+    const cnt = document.getElementById('sess-selcount');
+    if (cnt) cnt.textContent = String(_sessSelected.size);
+    if (btn) btn.disabled = _sessSelected.size === 0;
+  }
+  function sessToggleOne(ts, checked) {
+    if (checked) _sessSelected.add(ts); else _sessSelected.delete(ts);
+    const selall = document.getElementById('sess-selall-cb');
+    if (selall) selall.checked = _sessAllTs.length > 0 && _sessSelected.size === _sessAllTs.length;
+    sessUpdateBulkUI();
+  }
+  function sessToggleSelectAll(checked) {
+    _sessSelected = new Set(checked ? _sessAllTs : []);
+    document.querySelectorAll('#sess-list .sess-cb').forEach(cb => { cb.checked = checked; });
+    sessUpdateBulkUI();
+  }
+  function sessDeleteSelected() {
+    if (!_sessSelected.size) return;
+    const n = _sessSelected.size;
+    if (!confirm(`Delete ${n} chat${n === 1 ? '' : 's'}? This removes ${n === 1 ? 'it' : 'them'} permanently.`)) return;
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'sessions_delete_bulk', start_ts_list: Array.from(_sessSelected) }));
+  }
+  function sessDeleteAll() {
+    if (!_sessAllTs.length) return;
+    if (!confirm(`Delete ALL ${_sessAllTs.length} chats? This removes every conversation permanently and can't be undone.`)) return;
+    if (ws && ws.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ type: 'sessions_delete_bulk', all: true }));
+  }
   function renderSessionsList(sessions) {
     const list = document.getElementById('sess-list');
     list.innerHTML = '';
+    _sessSelected = new Set();
+    _sessAllTs = (sessions || []).map(s => s.start_ts);
+    sessUpdateBulkUI();
+    const selall = document.getElementById('sess-selall-cb');
+    if (selall) selall.checked = false;
     if (!sessions || !sessions.length) {
       list.innerHTML = '<span style="color:#00f7ff44;font-size:10px;">no conversations yet</span>';
       return;
     }
     for (const s of sessions) {
       const row = document.createElement('div'); row.className = 'sess-row';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.className = 'sess-cb';
+      cb.onclick = (e) => { e.stopPropagation(); sessToggleOne(s.start_ts, cb.checked); };
       const main = document.createElement('div'); main.className = 'sess-main';
       const st = document.createElement('div'); st.className = 'st';
       st.textContent = s.title || s.preview || '(untitled)';
@@ -2435,7 +2501,7 @@
       const del = document.createElement('button'); del.className = 'sess-rdel';
       del.textContent = '×'; del.title = 'delete';
       del.onclick = (e) => { e.stopPropagation(); sessDelete(s.start_ts, s.title || s.preview || ''); };
-      row.appendChild(main); row.appendChild(del);
+      row.appendChild(cb); row.appendChild(main); row.appendChild(del);
       list.appendChild(row);
     }
   }

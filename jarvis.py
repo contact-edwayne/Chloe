@@ -226,6 +226,15 @@ SEARCH_SYNTH_TIMEOUT_S  = float(os.environ.get("CHLOE_SEARCH_SYNTH_TIMEOUT_S", "
 # than 3b (this is why 3b was chosen originally, see the note above), so
 # a bad Brave round-trip now costs more before falling through to Groq.
 SEARCH_MODEL            = os.environ.get("CHLOE_SEARCH_MODEL", "qwen2.5:14b").strip()
+# Ed (2026-09-06): the tools-forced voice path (grep_source/wallet/email
+# tools) pays OLLAMA_MODEL's full cost TWICE per turn -- once to pick a
+# tool + arguments, once more to turn the tool's JSON result into a
+# sentence -- both non-streamed. Measured live: 48.29s for "do I have
+# any new emails?" on qwen2.5:32b. The second round is the exact same
+# "reasoning is already done, just reword the data" job
+# SEARCH_SYNTH_MODEL already solves for web search (see its comment
+# above) -- reused here rather than adding a second small-model knob.
+TOOL_SYNTH_MODEL        = os.environ.get("CHLOE_TOOL_SYNTH_MODEL", SEARCH_SYNTH_MODEL).strip()
 # 2026-08-31: SEARCH_SYNTH_NUM_CTX (a dedicated smaller context for
 # search-synth, distinct from everyday chat's 16384) used to live here.
 # Removed: since SEARCH_MODEL and OLLAMA_MODEL now default to the same
@@ -362,6 +371,167 @@ KOKORO_VOICES_PATH = Path(os.environ.get("KOKORO_VOICES_PATH", str(KOKORO_DIR / 
 KOKORO_VOICE       = os.environ.get("KOKORO_VOICE", "").strip() or "af_jessica"
 KOKORO_SPEED       = float(os.environ.get("KOKORO_SPEED", "1.0"))
 
+# ─── MULTILINGUAL TTS ────────────────────────────────────────────────────────
+# Ed (2026-09-06): the LANGUAGE block (_LANGUAGE_BLOCK, below) gets Chloe
+# translating INTO whichever language Ed is using -- but every TTS engine
+# was hardcoded to one fixed English voice (EDGE_TTS_VOICE / KOKORO_VOICE),
+# so a Spanish/French/etc. reply would come out mispronounced through an
+# English voice model. This section detects the reply's language and picks
+# a matching voice instead. Applies to every TTS entry point: _speak,
+# _synthesize_tts_bytes (mobile), and _speak_kokoro_stream (the inline
+# CHLOE_VOICE_STREAMING=1 path -- confirmed live 2026-09-05 as the path Ed
+# actually hears day to day).
+#
+# Detection tiers, cheapest/most-reliable first:
+#   1. langdetect (pure-Python, no model download) if installed -- accurate
+#      even across same-script languages (Spanish vs. French vs. Italian).
+#      `pip install langdetect` in the jarvis venv to activate this tier.
+#   2. Unicode-script heuristic (zero dependency, always on) -- catches the
+#      non-Latin-script majors (Chinese, Japanese, Korean, Russian, Arabic,
+#      Hebrew, Greek, Hindi, Thai) by majority character block. Can't tell
+#      Latin-script languages apart from each other or from English, so
+#      without langdetect installed, Latin-script replies stay on the
+#      default English voice exactly as before this change -- no regression,
+#      partial multilingual coverage out of the box.
+# Short text (<12 chars -- "okay", "yes", a greeting) skips detection
+# entirely and stays English; both tiers are unreliable at that length and
+# the voice shouldn't flip languages on a one-word reply.
+_langdetect_available = None  # type: ignore[var-annotated]
+
+
+def _try_langdetect(text: str):
+    global _langdetect_available
+    if _langdetect_available is False:
+        return None
+    try:
+        from langdetect import detect, DetectorFactory
+        DetectorFactory.seed = 0  # deterministic across calls
+        _langdetect_available = True
+        return detect(text)
+    except ImportError:
+        _langdetect_available = False
+        return None
+    except Exception:
+        # langdetect raises LangDetectException on e.g. pure-numeric/
+        # punctuation-only text -- fall through to the script heuristic.
+        return None
+
+
+_SCRIPT_RANGES = (
+    ("ja", (0x3040, 0x30FF)),   # Hiragana + Katakana -- checked before the
+                                 # wider CJK block below so Japanese (which
+                                 # mixes kana with kanji) doesn't get
+                                 # misread as plain Chinese.
+    ("zh", (0x4E00, 0x9FFF)),   # CJK Unified Ideographs
+    ("ko", (0xAC00, 0xD7A3)),   # Hangul syllables
+    ("ru", (0x0400, 0x04FF)),   # Cyrillic
+    ("ar", (0x0600, 0x06FF)),   # Arabic
+    ("he", (0x0590, 0x05FF)),   # Hebrew
+    ("el", (0x0370, 0x03FF)),   # Greek
+    ("hi", (0x0900, 0x097F)),   # Devanagari
+    ("th", (0x0E00, 0x0E7F)),   # Thai
+)
+
+
+def _script_guess(text: str):
+    """Zero-dependency fallback: majority Unicode block among the text's
+    letters. Only distinguishes SCRIPTS, not same-script languages."""
+    counts: dict[str, int] = {}
+    for ch in text:
+        cp = ord(ch)
+        for code, (lo, hi) in _SCRIPT_RANGES:
+            if lo <= cp <= hi:
+                counts[code] = counts.get(code, 0) + 1
+                break
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
+def _detect_reply_lang(text: str) -> str:
+    """Best-effort ISO 639-1 code for `text`, defaulting to 'en'."""
+    t = (text or "").strip()
+    if len(t) < 12:
+        return "en"
+    code = _try_langdetect(t)
+    if code:
+        code = code.split("-")[0].lower()
+        return code
+    guess = _script_guess(t)
+    return guess or "en"
+
+
+# One solid default edge-tts voice per language. edge-tts has many options
+# per locale; these are just reasonable single picks, override-able by
+# adding to this dict. None (the "en" entry) means "use EDGE_TTS_VOICE
+# as configured" -- i.e. a no-op for the overwhelmingly common case.
+_EDGE_TTS_LANG_VOICES = {
+    "en": None,
+    "es": "es-ES-ElviraNeural",
+    "fr": "fr-FR-DeniseNeural",
+    "de": "de-DE-KatjaNeural",
+    "it": "it-IT-ElsaNeural",
+    "pt": "pt-BR-FranciscaNeural",
+    "nl": "nl-NL-ColetteNeural",
+    "pl": "pl-PL-ZofiaNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "tr": "tr-TR-EmelNeural",
+    "sv": "sv-SE-SofieNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "ar": "ar-SA-ZariyahNeural",
+    "he": "he-IL-HilaNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "th": "th-TH-PremwadeeNeural",
+    "vi": "vi-VN-HoaiMyNeural",
+    "el": "el-GR-AthinaNeural",
+    "uk": "uk-UA-PolinaNeural",
+    "cs": "cs-CZ-VlastaNeural",
+    "da": "da-DK-ChristelNeural",
+    "fi": "fi-FI-SelmaNeural",
+    "no": "nb-NO-PernilleNeural",
+    "id": "id-ID-GadisNeural",
+    "ro": "ro-RO-AlinaNeural",
+    "hu": "hu-HU-NoemiNeural",
+}
+
+# Kokoro's bundled voices-v1.0.bin ships packs for a handful of languages
+# beyond English (misaki g2p): Japanese, Mandarin, Spanish, French, Hindi,
+# Italian, Brazilian Portuguese. `lang` values below are Kokoro's own
+# locale codes, distinct from ISO 639-1. A language NOT in this table has
+# no Kokoro voice -- callers fall back to edge-tts for that reply, the
+# same soft-fallback pattern _speak_kokoro already uses when Kokoro itself
+# fails to load. Not independently verified live on Ed's box (no safe way
+# to import/run jarvis.py from this bridge -- see the 2026-09-04 lesson in
+# the KB audit); if a given voice id turns out wrong/missing, Kokoro's own
+# exception handling in _speak_kokoro/_speak_kokoro_stream already logs
+# and skips the sentence rather than crashing the turn.
+_KOKORO_LANG_VOICES = {
+    "ja": ("ja", "jf_alpha"),
+    "zh": ("cmn", "zf_xiaobei"),
+    "es": ("es", "ef_dora"),
+    "fr": ("fr-fr", "ff_siwis"),
+    "hi": ("hi", "hf_alpha"),
+    "it": ("it", "if_sara"),
+    "pt": ("pt-br", "pm_alex"),
+}
+
+
+def _resolve_tts_voice(text: str):
+    """Detect `text`'s language and return
+    (lang, edge_voice_or_None, kokoro_lang_or_None, kokoro_voice_or_None).
+    All three overrides are None for English/unmapped languages, so callers
+    that ignore the return value entirely keep today's exact behavior."""
+    lang = _detect_reply_lang(text)
+    if lang == "en":
+        return ("en", None, None, None)
+    edge_voice = _EDGE_TTS_LANG_VOICES.get(lang)
+    kk = _KOKORO_LANG_VOICES.get(lang)
+    kokoro_lang, kokoro_voice = kk if kk else (None, None)
+    return (lang, edge_voice, kokoro_lang, kokoro_voice)
+
+
 # Default system prompt for the voice path. The HUD chat path sends its own.
 def _voice_system(model: str | None = None) -> str:
     """Build the voice path's system prompt. The prompt adapts to whether
@@ -469,11 +639,36 @@ _MODE_TONE_BLOCKS = {
 }
 
 
+# Ed (2026-09-06): "universal in language" -- Chloe should understand and
+# speak every major language, and specifically: when she's reading
+# something aloud (an email, an article, any tool result that hands her
+# text to relay), she should recognize the source language on her own and
+# translate it as she goes, rather than reading foreign text verbatim or
+# needing to be asked. Folded into _mode_block()'s return (rather than a
+# separate call site everywhere mode_block is used) so every system-prompt
+# assembly point -- chat and voice alike -- picks it up automatically.
+_LANGUAGE_BLOCK = (
+    "\n\n## Language:\n"
+    "You understand and speak every major world language fluently. Match "
+    "whichever language Ed is speaking or typing in -- if he addresses you "
+    "in Spanish, French, Mandarin, etc., reply in that same language "
+    "unless he asks you to switch.\n"
+    "When you read or relay text that isn't in English -- an email body, "
+    "an article, anything a tool hands back to you -- silently detect its "
+    "language, then speak/write a natural translation into the language "
+    "Ed is currently using with you (English by default). Don't read the "
+    "untranslated original aloud and don't narrate that you're "
+    "translating unless he asks; just relay the content the way a "
+    "bilingual friend would, translated as you go. It's fine to mention "
+    "the source language briefly if it's genuinely useful context (e.g. "
+    "'this one's in Portuguese')."
+)
+
+
 def _mode_block() -> str:
     block = _MODE_TONE_BLOCKS.get(CHLOE_MODE, "")
-    if not block:
-        return ""
-    return f"\n\n## Mode tone:\n{block}"
+    tone = f"\n\n## Mode tone:\n{block}" if block else ""
+    return tone + _LANGUAGE_BLOCK
 
 
 # ─── PERSISTENT MEMORY ──────────────────────────────────────────────────────
@@ -3765,6 +3960,7 @@ async def _dispatch(data, websocket):
     elif t == "session_get":            await handle_session_get(data, websocket)
     elif t == "session_resume":         await handle_session_resume(data, websocket)
     elif t == "session_delete":         await handle_session_delete(data, websocket)
+    elif t == "sessions_delete_bulk":   await handle_sessions_delete_bulk(data, websocket)
     elif t == "session_new":            await handle_session_new(data, websocket)
     else: await _ws_send(websocket, {"type": "error", "text": f"unknown type: {t}"})
 
@@ -6049,16 +6245,27 @@ EMAIL_CHECK_SCHEMA = {
     "function": {
         "name": "email_check",
         "description": (
-            "Check Ed's inbox. Use when he asks 'do I have any new "
-            "emails' or a follow-up about email content ('what are "
-            "they', 'details please') -- call it again for a follow-up, "
-            "the prior result isn't kept in context."
+            "Check Ed's email. Defaults to the Inbox -- use when he asks "
+            "'do I have any new emails' or a follow-up about email "
+            "content ('what are they', 'details please'; call it again "
+            "for a follow-up, the prior result isn't kept in context). "
+            "Pass `folder` only if Ed names a different one (Sent, "
+            "Drafts, Spam, Trash, Starred, Important, or All Mail)."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "n": {"type": "integer", "description": "How many to list. Default 5, max 25."},
                 "unread_only": {"type": "boolean", "description": "True to list only unread."},
+                "folder": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Only set this if Ed names a folder "
+                        "other than his Inbox, e.g. 'Sent', 'Drafts', "
+                        "'Spam', 'Trash', 'Starred', 'Important', or "
+                        "'All Mail'. Omit for the normal inbox check."
+                    ),
+                },
             },
         },
     },
@@ -6450,7 +6657,8 @@ def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str
             if not isinstance(n, int) or n < 1:
                 n = 5
             unread_only = bool(args.get("unread_only"))
-            return email_client.email_check_tool(n=n, unread_only=unread_only)
+            folder = str(args.get("folder") or "").strip() or None
+            return email_client.email_check_tool(n=n, unread_only=unread_only, folder=folder)
 
         if name == "email_draft":
             import email_client
@@ -7302,11 +7510,22 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             _current_user_text = _m.get("content") or ""
             break
     _email_draft_used = False
+    # Once a tool has actually executed and handed back real data, the
+    # remaining round(s) are pure "reword this JSON into a sentence" --
+    # switch to the small synth model for those, same reasoning as
+    # SEARCH_SYNTH_MODEL above. The FIRST round (deciding which tool to
+    # call, with what arguments) stays on the caller's model since that
+    # step genuinely needs it. Skipped when the caller already pinned a
+    # specific `model` (e.g. the search-synth call sites).
+    _tool_executed = False
 
     for tool_iter in range(MAX_TOOL_ITERS + 1):
+        _request_model = (TOOL_SYNTH_MODEL
+                           if (use_tools and _tool_executed and model is None)
+                           else _model)
         try:
             _payload = {
-                "model":      _model,
+                "model":      _request_model,
                 "messages":   msgs,
                 "stream":     False,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
@@ -7464,6 +7683,7 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 "name":    name,
                 "content": result[:4000],
             })
+        _tool_executed = True
 
     if final_msg is None:
         return ""
@@ -7513,7 +7733,8 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                   f"on a tools-forced turn; using canned fallback", flush=True)
             reply = "Sorry, I got stuck on that one — can you ask again?"
     dt = time.time() - t0
-    print(f"[chloe] Ollama ({_model}) replied in {dt:.2f}s "
+    _final_model = TOOL_SYNTH_MODEL if (use_tools and _tool_executed and model is None) else _model
+    print(f"[chloe] Ollama ({_final_model}) replied in {dt:.2f}s "
           f"({len(reply)} chars)", flush=True)
 
     if _email_draft_used and reply:
@@ -7869,17 +8090,29 @@ def _speak(text: str) -> None:
         1. ElevenLabs   if USE_ELEVENLABS=1 + ELEVENLABS_API_KEY set
         2. Kokoro local if USE_KOKORO=1 + model files present
         3. edge-tts     (always-available free default)
-    All three share the same sentence-streaming + barge-in pipeline."""
+    All three share the same sentence-streaming + barge-in pipeline.
+
+    Multilingual (2026-09-06): detects the reply's language once up front
+    and routes to a matching voice -- ElevenLabs' eleven_turbo_v2_5 is
+    already multilingual on its own (no change needed there); Kokoro and
+    edge-tts get an explicit voice override when one's available, and
+    Kokoro hands off to edge-tts for a language it has no voice pack for."""
     text = _clean_for_tts(text)
     text = chloe_tone_guard.strip_mood_opener(text)
     if not text:
         return
+    _lang, _edge_v, _kk_lang, _kk_voice = _resolve_tts_voice(text)
     if USE_ELEVENLABS and ELEVENLABS_API_KEY:
         _speak_elevenlabs(text)
     elif USE_KOKORO:
-        _speak_kokoro(text)
+        if _kk_voice:
+            _speak_kokoro(text, kokoro_lang=_kk_lang, kokoro_voice=_kk_voice)
+        elif _edge_v:
+            _speak_edge_tts(text, voice=_edge_v)
+        else:
+            _speak_kokoro(text)
     else:
-        _speak_edge_tts(text)
+        _speak_edge_tts(text, voice=_edge_v)
 
 
 def _synthesize_tts_bytes(text: str):
@@ -7895,13 +8128,17 @@ def _synthesize_tts_bytes(text: str):
     text = _clean_for_tts(text)
     if not text:
         return None
+    _lang, _edge_v, _kk_lang, _kk_voice = _resolve_tts_voice(text)
     if USE_ELEVENLABS and ELEVENLABS_API_KEY:
         b = _elevenlabs_to_bytes(text)
         if b: return (b, "mp3")
-    if USE_KOKORO:
+    if USE_KOKORO and _kk_voice:
+        b = _kokoro_to_wav_bytes(text, kokoro_lang=_kk_lang, kokoro_voice=_kk_voice)
+        if b: return (b, "wav")
+    elif USE_KOKORO and not _edge_v:
         b = _kokoro_to_wav_bytes(text)
         if b: return (b, "wav")
-    b = _edge_tts_to_bytes(text)
+    b = _edge_tts_to_bytes(text, voice=_edge_v)
     if b: return (b, "mp3")
     return None
 
@@ -7947,11 +8184,17 @@ def _elevenlabs_to_bytes(text: str):
         return None
 
 
-def _kokoro_to_wav_bytes(text: str):
+def _kokoro_to_wav_bytes(text: str, kokoro_lang: str | None = None,
+                         kokoro_voice: str | None = None):
     """Kokoro synthesis → WAV bytes (no local playback). Mobile path.
 
     Parses a leading tone tag (e.g. [intimate]) and uses the matching
-    Kokoro voice + speed for synthesis. See tts_tones.PALETTE."""
+    Kokoro voice + speed for synthesis. See tts_tones.PALETTE.
+
+    `kokoro_lang`/`kokoro_voice` (2026-09-06) override the tone-blended
+    default voice entirely -- set by _synthesize_tts_bytes when the text
+    was detected as a non-English language Kokoro has a voice pack for;
+    tone blending only makes sense across the English af_*/am_* packs."""
     engine = _get_kokoro()
     if engine is None:
         return None
@@ -7959,14 +8202,15 @@ def _kokoro_to_wav_bytes(text: str):
         text, default_speed=KOKORO_SPEED)
     if not text.strip():
         return None
-    _kvoice = _kokoro_voice_arg(engine, _blend, _mix, KOKORO_VOICE)
+    _kvoice = kokoro_voice or _kokoro_voice_arg(engine, _blend, _mix, KOKORO_VOICE)
+    _klang = kokoro_lang or "en-us"
     try:
         t0 = time.time()
         samples, sr = engine.create(
             text,
             voice=_kvoice,
             speed=_kspeed,
-            lang="en-us",
+            lang=_klang,
         )
         dt = time.time() - t0
         secs = len(samples) / sr if sr else 0
@@ -7989,16 +8233,19 @@ def _kokoro_to_wav_bytes(text: str):
         return None
 
 
-def _edge_tts_to_bytes(text: str):
-    """edge-tts synthesis → MP3 bytes (no local playback)."""
+def _edge_tts_to_bytes(text: str, voice: str | None = None):
+    """edge-tts synthesis → MP3 bytes (no local playback). `voice`
+    (2026-09-06) overrides EDGE_TTS_VOICE when the text was detected as a
+    non-English language -- see _resolve_tts_voice."""
     try:
         import edge_tts
     except ImportError as e:
         print(f"[voice] edge-tts dep missing (to_bytes): {e}")
         return None
+    _voice_to_use = voice or EDGE_TTS_VOICE
 
     async def _synth():
-        comm = edge_tts.Communicate(text, EDGE_TTS_VOICE)
+        comm = edge_tts.Communicate(text, _voice_to_use)
         chunks = []
         async for ev in comm.stream():
             if ev.get("type") == "audio":
@@ -8478,8 +8725,12 @@ def _play_audio_with_barge_in(data, sr) -> bool:
     return True
 
 
-def _speak_edge_tts(text: str) -> None:
+def _speak_edge_tts(text: str, voice: str | None = None) -> None:
     """Free TTS via edge-tts with sentence-level streaming.
+
+    `voice` (2026-09-06) overrides EDGE_TTS_VOICE for this call -- set by
+    _speak when the reply was detected as a non-English language. See
+    _resolve_tts_voice.
 
     Architecture: a producer thread synthesizes sentences in order and pushes
     decoded (data, sr, tmpfile) tuples to a small bounded queue. The caller
@@ -8501,6 +8752,7 @@ def _speak_edge_tts(text: str) -> None:
     sentences = _split_sentences_for_tts(text)
     if not sentences:
         return
+    _voice_to_use = voice or EDGE_TTS_VOICE
 
     # Bounded queue: 3 is enough that the producer stays a sentence ahead of
     # the consumer without buffering the whole reply if a long answer comes in.
@@ -8511,7 +8763,7 @@ def _speak_edge_tts(text: str) -> None:
     async def _synth_one(idx: int, sent: str):
         tmp = Path(tempfile.gettempdir()) / f"chloe_tts_{int(time.time()*1000)}_{idx}.mp3"
         try:
-            comm = edge_tts.Communicate(sent, EDGE_TTS_VOICE)
+            comm = edge_tts.Communicate(sent, _voice_to_use)
             await comm.save(str(tmp))
             data, sr = sf.read(str(tmp))
             return data, sr, tmp
@@ -8692,14 +8944,20 @@ def _kokoro_voice_arg(engine, blend_with, mix, default_voice):
         return base
 
 
-def _speak_kokoro(text: str) -> None:
+def _speak_kokoro(text: str, kokoro_lang: str | None = None,
+                  kokoro_voice: str | None = None) -> None:
     """Local TTS via Kokoro. Uses the same producer-consumer + barge-in
     architecture as _speak_edge_tts: a worker synthesizes sentences in
     order and pushes (samples, sample_rate) tuples; the consumer plays
     them back one at a time, polling for barge-in throughout.
 
     Falls through to edge-tts if Kokoro isn't loadable, so a missing
-    model file or import error never silences Chloe."""
+    model file or import error never silences Chloe.
+
+    `kokoro_lang`/`kokoro_voice` (2026-09-06) override the tone-blended
+    default voice for a detected non-English language -- see
+    _resolve_tts_voice. Tone blending is skipped in that case (it only
+    makes sense across the English af_*/am_* packs)."""
     kokoro = _get_kokoro()
     if kokoro is None:
         # Soft fallback to edge-tts so the assistant keeps working.
@@ -8714,7 +8972,8 @@ def _speak_kokoro(text: str) -> None:
     # Parse leading tone tag once (sticky across all sentences in this reply).
     text, _blend, _mix, _kspeed = tts_tones.parse_and_get(
         text, default_speed=KOKORO_SPEED)
-    _kvoice = _kokoro_voice_arg(kokoro, _blend, _mix, KOKORO_VOICE)
+    _kvoice = kokoro_voice or _kokoro_voice_arg(kokoro, _blend, _mix, KOKORO_VOICE)
+    _klang = kokoro_lang or "en-us"
     sentences = _split_sentences_for_tts(text)
     if not sentences:
         return
@@ -8732,7 +8991,7 @@ def _speak_kokoro(text: str) -> None:
                         text=sent,
                         voice=_kvoice,
                         speed=_kspeed,
-                        lang="en-us",
+                        lang=_klang,
                     )
                     audio_queue.put((samples, sample_rate))
                 except Exception as e:
@@ -8928,8 +9187,24 @@ def _speak_kokoro_stream(sentence_iter) -> str:
     spoken: list[str] = []
     audio_queue: queue.Queue = queue.Queue(maxsize=3)
     SENTINEL = object()
+    # Multilingual (2026-09-06): detected once, from the first sentence
+    # with actual text, then locked for the rest of the reply -- sentences
+    # arrive one at a time from the live Ollama token stream here, so
+    # there's no full-reply text to detect against up front the way
+    # _speak()/_synthesize_tts_bytes can. Re-detecting per sentence would
+    # also risk the voice flip-flopping on short sentences mid-reply.
+    # Only locks in when Kokoro actually has a voice for the detected
+    # language (_kk_voice truthy) -- an unmapped language just keeps the
+    # normal English tone-blended voice for this streaming path (the
+    # non-streaming _speak() path is what handles an edge-tts handoff for
+    # a language Kokoro can't do; switching engines mid-stream here isn't
+    # worth the complexity for what should be a rare case).
+    _lang_locked = False
+    _locked_lang = None
+    _locked_voice = None
 
     def _producer():
+        nonlocal _lang_locked, _locked_lang, _locked_voice
         try:
             for sent in sentence_iter:
                 if _barge_in_request.is_set():
@@ -8964,11 +9239,21 @@ def _speak_kokoro_stream(sentence_iter) -> str:
                 tts_text = _clean_for_tts(clean)
                 if not tts_text.strip():
                     continue  # sentence was pure markdown/emoji -- nothing to speak
-                vstr = _kokoro_voice_arg(kokoro, _blend, _mix, KOKORO_VOICE)
+                if not _lang_locked:
+                    _lang_locked = True
+                    _dl, _de, _dkl, _dkv = _resolve_tts_voice(tts_text)
+                    if _dkv:
+                        _locked_lang, _locked_voice = _dkl, _dkv
+                if _locked_voice:
+                    vstr = _locked_voice
+                    klang = _locked_lang
+                else:
+                    vstr = _kokoro_voice_arg(kokoro, _blend, _mix, KOKORO_VOICE)
+                    klang = "en-us"
                 try:
                     samples, sample_rate = kokoro.create(
                         text=tts_text,
-                        voice=vstr, speed=spd, lang="en-us")
+                        voice=vstr, speed=spd, lang=klang)
                     audio_queue.put((samples, sample_rate))
                 except Exception as e:
                     print(f"[voice] Kokoro stream synth error: "
@@ -9580,6 +9865,35 @@ async def handle_session_delete(data, websocket):
     out = dict(res)
     out["type"] = "session_deleted"
     out["start_ts"] = start_ts
+    await _ws_send(websocket, out)
+
+
+async def handle_sessions_delete_bulk(data, websocket):
+    """Delete multiple sessions in one shot -- either an explicit list of
+    start_ts values (`start_ts_list`) or every session (`all: true`).
+    HUD chat-history panel's select-multiple / select-all bulk-delete
+    (2026-09-06), so Ed doesn't have to delete one at a time. Replies
+    {type:'sessions_deleted', ok, deleted, sessions_deleted}."""
+    import chloe_sessions
+    all_flag = bool(data.get("all"))
+    ts_list = data.get("start_ts_list") or []
+    try:
+        if all_flag:
+            res = await asyncio.to_thread(
+                chloe_sessions.delete_all_sessions, str(_MEMORY_DB))
+        else:
+            if not isinstance(ts_list, list) or not ts_list:
+                await _ws_send(websocket, {"type": "sessions_deleted", "ok": False,
+                                           "error": "no sessions selected"})
+                return
+            res = await asyncio.to_thread(
+                chloe_sessions.delete_sessions, str(_MEMORY_DB), ts_list)
+    except Exception as e:
+        await _ws_send(websocket, {"type": "sessions_deleted", "ok": False,
+                                   "error": f"{type(e).__name__}: {e}"})
+        return
+    out = dict(res)
+    out["type"] = "sessions_deleted"
     await _ws_send(websocket, out)
 
 

@@ -181,6 +181,43 @@ def delete_session(db_path, start_ts, gap_min=SESSION_GAP_MIN):
     return {"ok": True, "deleted": len(ids)}
 
 
+def delete_sessions(db_path, start_ts_list, gap_min=SESSION_GAP_MIN):
+    """Bulk-delete: same as delete_session but for a list of start_ts
+    values in one call -- the HUD chat-history panel's "delete selected"
+    action (2026-09-06), so Ed doesn't have to delete sessions one by
+    one. Returns {ok, deleted (total turns), sessions_deleted (how many
+    of the requested sessions were actually found and removed)}."""
+    total_deleted = 0
+    sessions_deleted = 0
+    for ts in (start_ts_list or []):
+        r = delete_session(db_path, ts, gap_min)
+        if r.get("ok"):
+            sessions_deleted += 1
+            total_deleted += r.get("deleted", 0)
+    return {"ok": True, "deleted": total_deleted,
+            "sessions_deleted": sessions_deleted}
+
+
+def delete_all_sessions(db_path, gap_min=SESSION_GAP_MIN):
+    """Delete every turn and every cached session title -- the HUD's
+    "delete all" bulk action (2026-09-06). Counts sessions via
+    list_sessions BEFORE deleting (same gap-grouping the panel itself
+    used to show them) so the reported count matches what Ed saw.
+    Returns {ok, deleted (total turns), sessions_deleted}."""
+    sessions = list_sessions(db_path, limit=1_000_000, gap_min=gap_min)
+    n_sessions = len(sessions)
+    conn = _connect(db_path)
+    try:
+        _ensure_title_table(conn)
+        with conn:
+            n_turns = conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
+            conn.execute("DELETE FROM turns")
+            conn.execute("DELETE FROM session_titles")
+    finally:
+        conn.close()
+    return {"ok": True, "deleted": n_turns, "sessions_deleted": n_sessions}
+
+
 if __name__ == "__main__":
     import sys
     db = sys.argv[1] if len(sys.argv) > 1 else "chloe_memory.db"

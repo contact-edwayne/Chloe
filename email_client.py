@@ -160,25 +160,32 @@ def _last_list_path() -> Path:
     return p / "last_email_list.json"
 
 
-def _save_last_list(uids: list) -> None:
+def _save_last_list(uids: list, folder: str = "INBOX") -> None:
     p = _last_list_path()
     tmp = p.with_suffix(f".tmp.{os.getpid()}.{secrets.token_hex(4)}")
-    tmp.write_text(json.dumps({"uids": uids, "expires_at": time.time() + _LAST_LIST_TTL_S}),
+    tmp.write_text(json.dumps({"uids": uids, "folder": folder,
+                               "expires_at": time.time() + _LAST_LIST_TTL_S}),
                     encoding="utf-8")
     os.replace(tmp, p)
 
 
 def _load_last_list():
+    """Returns (uids, folder) from the last email_check, or (None, None)
+    if there isn't one / it expired. `folder` is the IMAP mailbox that
+    list came from (e.g. "INBOX" or "[Gmail]/Trash") -- a follow-up
+    email_read/email_reply has to look in the SAME mailbox, not assume
+    Inbox, or it'll 404 on a UID that only exists in whatever folder Ed
+    last checked."""
     p = _last_list_path()
     if not p.exists():
-        return None
+        return None, None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
-        return None
+        return None, None
     if not data or data.get("expires_at", 0) <= time.time():
-        return None
-    return data.get("uids")
+        return None, None
+    return data.get("uids"), data.get("folder", "INBOX")
 
 
 # --------------------------------------------------------------------------- #
@@ -300,10 +307,52 @@ def resolve_contact(text: str, source_text: Optional[str] = None) -> Optional[st
 
 
 # --------------------------------------------------------------------------- #
+# Folder/label resolution (Gmail IMAP)                                        #
+# --------------------------------------------------------------------------- #
+# Ed (2026-09-06): email_check/email_read used to hardcode "INBOX" with no
+# way to ask for anything else -- correct as a DEFAULT, wrong as the only
+# option. Gmail exposes every label as its own IMAP mailbox under the
+# "[Gmail]/" prefix (English UI); these are the standard ones, keyed by
+# every phrasing Ed's likely to say.
+_FOLDER_ALIASES = {
+    "inbox": "INBOX",
+    "all mail": "[Gmail]/All Mail",
+    "all": "[Gmail]/All Mail",
+    "everything": "[Gmail]/All Mail",
+    "sent": "[Gmail]/Sent Mail",
+    "sent mail": "[Gmail]/Sent Mail",
+    "drafts": "[Gmail]/Drafts",
+    "spam": "[Gmail]/Spam",
+    "junk": "[Gmail]/Spam",
+    "trash": "[Gmail]/Trash",
+    "deleted": "[Gmail]/Trash",
+    "deleted items": "[Gmail]/Trash",
+    "starred": "[Gmail]/Starred",
+    "important": "[Gmail]/Important",
+}
+_FOLDER_DISPLAY_NAMES = "Inbox, All Mail, Sent, Drafts, Spam, Trash, Starred, or Important"
+
+
+def resolve_folder(spoken):
+    """Map a spoken/typed folder phrase to (imap_mailbox, display_name).
+    None/empty -> defaults to Inbox. Returns None on an unrecognized
+    phrase -- honest miss (caller lists the valid names) rather than
+    guessing which folder was meant."""
+    if not spoken or not str(spoken).strip():
+        return ("INBOX", "Inbox")
+    key = str(spoken).strip().lower()
+    mailbox = _FOLDER_ALIASES.get(key)
+    if mailbox is None:
+        return None
+    display = "Inbox" if mailbox == "INBOX" else mailbox.split("/", 1)[-1]
+    return (mailbox, display)
+
+
+# --------------------------------------------------------------------------- #
 # Reading (IMAP)                                                              #
 # --------------------------------------------------------------------------- #
 
-def list_recent(n: int = 5, unread_only: bool = False) -> list[dict]:
+def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") -> list[dict]:
     """Most-recent-first list of {uid, from, subject, date, unread}. Raises
     on any IMAP failure -- email_check_tool is the caller that turns that
     into an honest spoken/chat error instead of crashing the turn. Uses
@@ -317,7 +366,7 @@ def list_recent(n: int = 5, unread_only: bool = False) -> list[dict]:
             print(f"[email_client] IMAP login failed for {_address()!r}: {e}",
                   flush=True)
             raise
-        imap.select("INBOX", readonly=True)
+        imap.select(folder or "INBOX", readonly=True)
         crit = "UNSEEN" if unread_only else "ALL"
         status, data = imap.uid("search", None, crit)
         if status != "OK":
@@ -342,25 +391,32 @@ def list_recent(n: int = 5, unread_only: bool = False) -> list[dict]:
         return out
 
 
-def email_check_tool(n: int = 5, unread_only: bool = False) -> str:
+def email_check_tool(n: int = 5, unread_only: bool = False, folder=None) -> str:
     if not _configured():
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
                 "(a Gmail App Password, not the account password).")
+    resolved = resolve_folder(folder)
+    if resolved is None:
+        return (f'I don\'t know a folder called "{folder}" -- I can check '
+                f'{_FOLDER_DISPLAY_NAMES}.')
+    mailbox, display = resolved
     try:
-        msgs = list_recent(n=n, unread_only=unread_only)
+        msgs = list_recent(n=n, unread_only=unread_only, folder=mailbox)
     except Exception as e:
         print(f"[email_client] email_check_tool failed: {type(e).__name__}: {e}",
               flush=True)
         return f"Couldn't check email: {type(e).__name__}: {e}"
-    _save_last_list([m["uid"] for m in msgs])
+    _save_last_list([m["uid"] for m in msgs], folder=mailbox)
+    where = "" if mailbox == "INBOX" else f" in {display}"
     if not msgs:
-        return "No unread emails." if unread_only else "Your inbox looks empty."
+        return f"No unread emails{where}." if unread_only else f"{display} looks empty."
     lines = []
     for i, m in enumerate(msgs, 1):
         tag = "(unread) " if m["unread"] else ""
         lines.append(f"{i}. {tag}From {m['from']}, subject: {m['subject']}")
-    header = f"You have {len(msgs)} unread email(s):" if unread_only else f"{len(msgs)} most recent email(s):"
+    header = (f"You have {len(msgs)} unread email(s){where}:" if unread_only
+              else f"{len(msgs)} most recent email(s){where}:")
     trailer = ("\n\n(Sender + subject + date only -- no message body was "
                "fetched. To read one aloud or reply to one, refer to it by "
                "its number above -- I can call email_read or email_reply.)")
@@ -417,9 +473,11 @@ def _extract_body_text(msg) -> str:
     return ""
 
 
-def read_email_body(uid) -> dict:
-    """Fetch one message's full body by IMAP UID. Raises on IMAP failure --
-    email_read_tool is the caller that turns that into an honest error."""
+def read_email_body(uid, folder: str = "INBOX") -> dict:
+    """Fetch one message's full body by IMAP UID, from `folder` (whatever
+    mailbox the UID's own email_check listing came from -- see
+    _load_last_list). Raises on IMAP failure -- email_read_tool is the
+    caller that turns that into an honest error."""
     with imaplib.IMAP4_SSL(_imap_host()) as imap:
         try:
             imap.login(_address(), _app_password())
@@ -427,7 +485,7 @@ def read_email_body(uid) -> dict:
             print(f"[email_client] IMAP login failed for {_address()!r}: {e}",
                   flush=True)
             raise
-        imap.select("INBOX", readonly=True)
+        imap.select(folder or "INBOX", readonly=True)
         status, msg_data = imap.uid("fetch", uid, "(BODY.PEEK[] FLAGS)")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"IMAP fetch failed for uid {uid}")
@@ -453,7 +511,7 @@ def email_read_tool(index) -> str:
         return ("Email isn't configured yet -- Ed needs to set "
                 "CHLOE_EMAIL_ADDRESS and CHLOE_EMAIL_APP_PASSWORD in .env "
                 "(a Gmail App Password, not the account password).")
-    uids = _load_last_list()
+    uids, list_folder = _load_last_list()
     if not uids:
         return ("I don't have a recent email list -- check the inbox first "
                 "(email_check), then ask me to read one by number.")
@@ -465,7 +523,7 @@ def email_read_tool(index) -> str:
         return f"I only have {len(uids)} email(s) from the last check -- pick a number in that range."
     uid = uids[idx - 1]
     try:
-        msg = read_email_body(uid)
+        msg = read_email_body(uid, folder=list_folder or "INBOX")
     except Exception as e:
         print(f"[email_client] email_read_tool failed: {type(e).__name__}: {e}",
               flush=True)
@@ -600,7 +658,7 @@ def draft_reply(index, body: str, *,
     """Same draft-then-confirm split as draft_email, but addresses the
     sender of a prior email_check listing by 1-based index and carries
     Message-ID/References so the reply threads properly."""
-    uids = _load_last_list()
+    uids, list_folder = _load_last_list()
     if not uids:
         return {"ok": False, "error": "no recent email list -- check the inbox first"}
     try:
@@ -611,7 +669,7 @@ def draft_reply(index, body: str, *,
         return {"ok": False, "error": f"only {len(uids)} email(s) in the last check"}
     uid = uids[idx - 1]
     try:
-        original = read_email_body(uid)
+        original = read_email_body(uid, folder=list_folder or "INBOX")
     except Exception as e:
         return {"ok": False, "error": f"couldn't load that email: {type(e).__name__}: {e}"}
     to_addr = email.utils.parseaddr(original["from"])[1]
