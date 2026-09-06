@@ -7825,6 +7825,24 @@ _ACTION_CLAIM_PATTERNS: tuple = (
      ("wallet_send",)),
     (_re.compile(r"\b(sats?|satoshis?|bitcoin|btc)\b[^.!?]{0,40}\b(sent|paid|transferred)\b", _re.IGNORECASE),
      ("wallet_send",)),
+    # BUG FIXED 2026-09-06n (confirmed live, 2 misses in one session):
+    # "The first email has been moved to Trash." -- claimed on a
+    # zero-tool-call turn, tools-forced route, but matched NONE of the
+    # deleted/removed/trashed patterns above ("moved to Trash" uses none
+    # of those verbs). Separately, "The reply has been sent, and the
+    # email has been deleted from your inbox" was only half-caught (the
+    # "email...deleted" half matches an existing pattern -- enough to
+    # block the whole reply -- but "reply...sent" alone, with no
+    # accompanying delete claim, would have slipped through on some
+    # other turn). Both added below.
+    (_re.compile(r"\bmoved\b[^.!?]{0,40}\btrash\b", _re.IGNORECASE),
+     ("email_delete",)),
+    (_re.compile(r"\btrash\b[^.!?]{0,40}\bmoved\b", _re.IGNORECASE),
+     ("email_delete",)),
+    (_re.compile(r"\breply\b[^.!?]{0,40}\b(sent|been sent)\b", _re.IGNORECASE),
+     ("email_reply",)),
+    (_re.compile(r"\b(sent|been sent)\b[^.!?]{0,40}\breply\b", _re.IGNORECASE),
+     ("email_reply",)),
 )
 
 
