@@ -245,26 +245,105 @@ def _smtp_port() -> int:
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# F-09 fix (audit Part 10, 2026-09-06g). The Google Contacts write-through
+# cache (resolve_contact's fall-through below) used to write a bare
+# {name: address} string into this file with no expiry -- if the
+# contact's address ever changed in Google Contacts, the stale local
+# alias would keep winning silently forever, since this file is checked
+# BEFORE Google on every lookup. Contacts Ed adds by hand (--add-contact,
+# or programmatically with the default source="manual") are NOT subject
+# to this -- only entries THIS module auto-cached from a live Google
+# Contacts hit, since Google is the actual source of truth for those.
+# Same default window as google_contacts.py's own list-cache TTL, for
+# consistency; override independently via CHLOE_CONTACT_ALIAS_TTL_HOURS
+# if 24h is wrong for how often Ed's contacts actually change.
+_ALIAS_CACHE_TTL_S = float(os.environ.get("CHLOE_CONTACT_ALIAS_TTL_HOURS", "24")) * 3600
 
-def _load_contacts() -> dict:
+
+def _load_contacts_raw() -> dict:
+    """{name: {"address", "source", "cached_at"}}. Normalizes legacy flat
+    `{name: "addr"}` entries (written before this metadata existed, or by
+    anything that predates this fix) to source="manual", cached_at=None
+    -- i.e. never expires -- so contacts saved before this change keep
+    resolving exactly as before, completely unaffected by the new TTL."""
     if not CONTACTS_PATH.exists():
         return {}
     try:
-        return json.loads(CONTACTS_PATH.read_text(encoding="utf-8")).get("contacts", {})
+        raw = json.loads(CONTACTS_PATH.read_text(encoding="utf-8")).get("contacts", {})
     except Exception:
         return {}
+    out: dict = {}
+    for name, val in raw.items():
+        if isinstance(val, str):
+            out[name] = {"address": val, "source": "manual", "cached_at": None}
+        elif isinstance(val, dict) and val.get("address"):
+            out[name] = {
+                "address":   val["address"],
+                "source":    val.get("source", "manual"),
+                "cached_at": val.get("cached_at"),
+            }
+    return out
 
 
-def add_contact(name: str, address: str) -> dict:
+def _load_contacts() -> dict:
+    """{name: address} -- the flat view resolve_contact's matching logic
+    uses. A google_contacts-sourced entry older than
+    _ALIAS_CACHE_TTL_S is dropped here (not just ignored downstream) so
+    every caller sees a clean miss for it, same as if it had never been
+    cached -- resolve_contact's normal fall-through then re-resolves it
+    against Google and re-caches a fresh address. Manually-added entries
+    (cached_at=None) never hit this branch."""
+    now = time.time()
+    out: dict = {}
+    for name, entry in _load_contacts_raw().items():
+        if (entry["source"] == "google_contacts"
+                and entry["cached_at"] is not None
+                and now - entry["cached_at"] > _ALIAS_CACHE_TTL_S):
+            continue
+        out[name] = entry["address"]
+    return out
+
+
+def add_contact(name: str, address: str, *, source: str = "manual") -> dict:
+    """Save `name` -> `address`. `source="manual"` (default, used by
+    --add-contact and any hand-invoked call) never expires. Only pass
+    source="google_contacts" for the automatic write-through cache path
+    below -- that's what makes it subject to _ALIAS_CACHE_TTL_S."""
     name = (name or "").strip().lower()
     address = (address or "").strip()
     if not name or not _EMAIL_RE.match(address):
         return {"ok": False, "error": "need a name and a valid email address"}
     SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-    data = {"contacts": _load_contacts()}
-    data["contacts"][name] = address
+    raw = _load_contacts_raw()
+    raw[name] = {
+        "address":   address,
+        "source":    source,
+        "cached_at": time.time() if source != "manual" else None,
+    }
+    data = {"contacts": raw}
     CONTACTS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return {"ok": True, "name": name, "address": address}
+
+
+def refresh_contact(name: str) -> dict:
+    """Force a fresh Google Contacts lookup for `name`, bypassing (and
+    overwriting) whatever's in the local cache -- the explicit escape
+    hatch the audit called for alongside the TTL, for whenever Ed knows
+    a contact's address changed and doesn't want to wait out the window.
+    Never touches manually-added contacts unless the same name is passed
+    -- this is opt-in per name, not a bulk wipe."""
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "error": "need a name"}
+    try:
+        import google_contacts
+    except ImportError:
+        return {"ok": False, "error": "google_contacts module unavailable"}
+    address = google_contacts.resolve_google_contact(name)
+    if not address:
+        return {"ok": False, "error": f"no unambiguous Google Contacts match for {name!r}"}
+    add_contact(name, address, source="google_contacts")
+    return {"ok": True, "name": name.strip().lower(), "address": address}
 
 
 def resolve_contact(text: str, source_text: Optional[str] = None) -> Optional[str]:
@@ -335,7 +414,7 @@ def resolve_contact(text: str, source_text: Optional[str] = None) -> Optional[st
         # a (non-matching) key -- never overwrites something Ed set
         # deliberately.
         try:
-            add_contact(text, address)
+            add_contact(text, address, source="google_contacts")
         except Exception:
             pass
     return address
@@ -1139,6 +1218,9 @@ def _cli() -> int:
         return 0
     if args[0] == "--add-contact" and len(args) == 3:
         print(add_contact(args[1], args[2]))
+        return 0
+    if args[0] == "--refresh-contact" and len(args) == 2:
+        print(refresh_contact(args[1]))
         return 0
     if args[0] == "--check":
         print(email_check_tool())
