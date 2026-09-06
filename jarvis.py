@@ -6771,6 +6771,10 @@ def _wallet_dispatch(name: str, args: dict) -> str:
             _scrub_pin_from_last_user_turn()
             if not ok:
                 return f"Wallet send refused: {reason}"
+            _abort = _barge_in_blocks_destructive_action(
+                f"send {check_amount} sat to {dest[:40]}")
+            if _abort is not None:
+                return _abort
             r = w.pay(dest, amount if isinstance(amount, int) else None)
             if not r.get("ok"):
                 return f"Wallet send failed: {r.get('error', 'unknown')}"
@@ -6906,6 +6910,10 @@ def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "") -> str
             sender = str(args.get("sender") or "").strip() or None
             subject = str(args.get("subject") or "").strip() or None
             folder = str(args.get("folder") or "").strip() or None
+            _abort = _barge_in_blocks_destructive_action(
+                f"delete indices={indices} sender={sender!r} subject={subject!r}")
+            if _abort is not None:
+                return _abort
             return email_client.email_delete_tool(
                 indices=indices, sender=sender, subject=subject, folder=folder)
 
@@ -8820,6 +8828,50 @@ def _bump_turn_gen() -> int:
     with _turn_gen_lock:
         _turn_gen += 1
         return _turn_gen
+
+
+# F-02 safety interlock (audit Part 10/11, 2026-09-06f). BUG (documented,
+# never fixed until now): _process_voice_turn's own comment next to
+# `_barge_in_request.is_set()` says the quiet part outright -- "the
+# worker keeps running in the background; any tool action it already
+# issued still completes." That's the right call for almost everything
+# (better to let a drafted email or a read-aloud finish than half-abort
+# it), but it's the wrong call for the two tools that move real money or
+# actually mutate Ed's inbox the moment they're dispatched, with no
+# confirm gate in front of them: `wallet_send` (irreversible the instant
+# it clears) and `email_delete` (moves to Trash immediately -- recoverable
+# there, but still an unwanted action fired off after Ed had already
+# tried to interrupt). If Ed barges in specifically BECAUSE the turn in
+# flight was about to do the wrong destructive thing ("wait, stop" / "no
+# not that one"), the current design guarantees it fires anyway.
+#
+# `_barge_in_request` is cleared at the very start of every turn
+# (_process_voice_turn) and only ever set again if the barge-in monitor
+# catches a wake word WHILE that same turn is still processing/speaking
+# -- so by construction, checking it here mid-dispatch can only mean
+# "Ed tried to interrupt THIS turn, sometime between it starting and
+# now." Checked once, immediately before the action actually executes
+# (after PIN/cap authorization for wallet_send, so a legitimate,
+# already-authorized send that simply finished quickly isn't punished --
+# only one Ed visibly tried to interrupt).
+def _barge_in_blocks_destructive_action(action_desc: str) -> str | None:
+    """Return an abort message if Ed has already barged in on this turn,
+    else None (safe to proceed). `action_desc` is a short human-readable
+    description of the action being guarded, echoed back in the abort
+    message and the log line so both Ed and the transcript are clear on
+    what got skipped and why."""
+    try:
+        if _barge_in_request.is_set():
+            print(f"[chloe] destructive action skipped -- barge-in fired "
+                  f"mid-turn: {action_desc}", flush=True)
+            return (f"Skipped -- you interrupted before I sent that, so "
+                    f"I did not go through with it. If you still want "
+                    f"\"{action_desc}\", ask again.")
+    except Exception:
+        pass
+    return None
+
+
 # Cached after _voice_loop creates the wake detector. _speak_* reads these
 # to decide whether to spawn a barge-in monitor during TTS playback.
 _wake_detector_global = None  # type: ignore[var-annotated]
