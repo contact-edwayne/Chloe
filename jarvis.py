@@ -7691,6 +7691,71 @@ def _req_get_cached_import():
     return requests
 
 
+# F-01 structural fix (audit Part 10/11, 2026-09-06e): a "grounded
+# reply" check. All 4 hallucination incidents observed this session
+# (deleting emails via a tool that doesn't exist, "permanently deleted"
+# for a Trash move, a fabricated "let me check again," and the
+# wording-level fixes for both) share one structural gap the audit
+# names directly: nothing checks that a completion claim in the spoken
+# reply is actually backed by a tool call that ran THIS turn. Round 4
+# hardened the reword-round instruction wording, which helps but isn't
+# structural -- a wording nudge is still just asking the model nicely.
+#
+# This is a small, deterministic, zero-latency check (no extra model
+# call): a short table of "phrasing that claims an action completed" ->
+# "the tool name(s) that would have to have run for that claim to be
+# true." Deliberately narrow -- it only covers the specific action
+# classes seen live (email delete/draft/reply, wallet send), not every
+# verb Chloe might use, so a false positive (blocking a true claim)
+# should stay rare. Conservative in the other direction too: each
+# pattern requires the claim verb AND a same-sentence domain anchor
+# (e.g. "deleted" near "email", not just "deleted" alone), so an
+# unrelated turn that happens to use one of these words in a different
+# context doesn't trip it.
+_ACTION_CLAIM_PATTERNS: tuple = (
+    (_re.compile(r"\b(deleted|removed|trashed)\b[^.!?]{0,40}\bemail", _re.IGNORECASE),
+     ("email_delete",)),
+    (_re.compile(r"\bemail[^.!?]{0,40}\b(deleted|removed|trashed)\b", _re.IGNORECASE),
+     ("email_delete",)),
+    (_re.compile(r"\b(drafted|composed)\b[^.!?]{0,40}\bemail", _re.IGNORECASE),
+     ("email_draft",)),
+    (_re.compile(r"\bemail[^.!?]{0,40}\b(drafted|composed)\b", _re.IGNORECASE),
+     ("email_draft",)),
+    (_re.compile(r"\b(replied|responded|wrote back)\b[^.!?]{0,40}\bemail", _re.IGNORECASE),
+     ("email_reply",)),
+    (_re.compile(r"\b(sent|paid|transferred)\b[^.!?]{0,40}\b(sats?|satoshis?|bitcoin|btc)\b", _re.IGNORECASE),
+     ("wallet_send",)),
+    (_re.compile(r"\b(sats?|satoshis?|bitcoin|btc)\b[^.!?]{0,40}\b(sent|paid|transferred)\b", _re.IGNORECASE),
+     ("wallet_send",)),
+)
+
+
+def _grounding_violation(reply_text: str, tools_called) -> str | None:
+    """Return a short description of the first unbacked completion claim
+    in `reply_text`, or None if every claim it makes is backed by a tool
+    that actually ran this turn (or it makes no claim this table covers).
+
+    `tools_called` is the set of tool NAMES dispatched this turn -- may
+    be empty, which means NO claim in _ACTION_CLAIM_PATTERNS can be
+    backed (a turn with zero tool calls can't have actually deleted,
+    drafted, replied to, or sent anything). Never raises -- any internal
+    failure is treated as "no violation found" so this check can only
+    ever catch a real mismatch, never break a reply that would
+    otherwise have gone out fine."""
+    try:
+        if not reply_text:
+            return None
+        tools_called = tools_called or set()
+        for pattern, required_tools in _ACTION_CLAIM_PATTERNS:
+            if pattern.search(reply_text) and not (tools_called & set(required_tools)):
+                return (f"reply matched {pattern.pattern!r} but none of "
+                        f"{required_tools} ran this turn "
+                        f"(ran: {sorted(tools_called)})")
+        return None
+    except Exception:
+        return None
+
+
 def _ollama_chat(messages: list, max_tokens: int = 400, *,
                   model: str | None = None, timeout: float = 280,
                   use_tools: bool = True) -> str:
@@ -7782,6 +7847,11 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
     # Skipped entirely when the caller already pinned a specific `model`
     # (e.g. the search-synth call sites).
     _tool_executed = False
+    # Every tool NAME actually dispatched this turn (across all
+    # iterations of the loop below) -- feeds _grounding_violation() at
+    # the end so a completion claim in the final reply can be checked
+    # against what genuinely ran, not what the model merely says ran.
+    _tools_called_this_turn: set = set()
 
     def _reword_messages(base_msgs: list) -> list:
         """Trimmed, hardened copy of `base_msgs` for the synthesis round.
@@ -8019,6 +8089,7 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             if not isinstance(args, dict):
                 args = {}
 
+            _tools_called_this_turn.add(name)
             if name == "grep_source":
                 result = _grep_source(args.get("pattern", ""), args.get("file"))
                 preview = (args.get("pattern") or "")[:60]
@@ -8093,6 +8164,12 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             print(f"[chloe] Ollama emitted an empty object after {dt:.2f}s "
                   f"on a tools-forced turn; using canned fallback", flush=True)
             reply = "Sorry, I got stuck on that one — can you ask again?"
+    _violation = _grounding_violation(reply, _tools_called_this_turn)
+    if _violation:
+        print(f"[chloe] UNGROUNDED CLAIM blocked: {_violation}", flush=True)
+        reply = ("I want to double-check that before I tell you it's "
+                 "done -- can you ask me again in a moment?")
+
     dt = time.time() - t0
     # _request_model already reflects whichever model the last
     # iteration actually used (residency-aware as of 2026-09-06 --
