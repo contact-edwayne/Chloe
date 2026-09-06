@@ -40,6 +40,7 @@ async def handler(websocket):
             try:
                 data = json.loads(message)
                 if data.get("type") in ("chat", "volume", "ptt_start", "ptt_stop", "ptt_audio",
+                                        "spotify_control",
                                         "wallet_balance", "wallet_create_invoice",
                                         "wallet_send", "wallet_history",
                                         "lights_state", "lights_action", "lights_discover",

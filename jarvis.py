@@ -50,6 +50,7 @@ from lights import try_handle_lights_command
 import youtube_playlists as _youtube_playlists
 from youtube_playlists import try_handle_youtube_command
 from spotify_commands import try_handle_spotify_command
+import spotify_player
 import spotify_hud
 from local_media import try_handle_local_media_command
 from email_client import try_handle_email_confirm_command
@@ -4109,6 +4110,7 @@ async def _dispatch(data, websocket):
     elif t == "ptt_start": await handle_ptt_start(data, websocket)
     elif t == "ptt_stop":  await handle_ptt_stop(data, websocket)
     elif t == "ptt_audio": await handle_ptt_audio(data, websocket)
+    elif t == "spotify_control":         await handle_spotify_control(data, websocket)
     elif t == "wallet_balance":         await handle_wallet_balance(data, websocket)
     elif t == "wallet_create_invoice":  await handle_wallet_create_invoice(data, websocket)
     elif t == "wallet_send":            await handle_wallet_send(data, websocket)
@@ -4142,6 +4144,30 @@ async def _dispatch(data, websocket):
     elif t == "sessions_delete_bulk":   await handle_sessions_delete_bulk(data, websocket)
     elif t == "session_new":            await handle_session_new(data, websocket)
     else: await _ws_send(websocket, {"type": "error", "text": f"unknown type: {t}"})
+
+
+# ─── DIRECT SPOTIFY PLAYER-BAR WS ENDPOINT (Ed, 2026-09-06 follow-up) ──────
+# The HUD's player bar buttons (prev/play-pause/next/shuffle) call this
+# directly, same "bypass the LLM" shape as the wallet/lights endpoints
+# below -- no PIN/confirmation gating needed since these are the exact
+# same non-destructive, instantly-undoable actions voice already exposes
+# with zero gating (see spotify_commands.py's own dispatcher).
+
+async def handle_spotify_control(data, websocket):
+    action = data.get("action")
+    fn = {
+        "previous": spotify_player.previous_track,
+        "play_pause": spotify_player.play_pause,
+        "next": spotify_player.next_track,
+        "shuffle": spotify_player.toggle_shuffle,
+    }.get(action)
+    if fn is None:
+        await _ws_send(websocket, {"type": "spotify_control_result", "ok": False,
+                                    "action": action, "error": f"unknown action: {action!r}"})
+        return
+    result = await asyncio.to_thread(fn)
+    await _ws_send(websocket, {"type": "spotify_control_result", "ok": result.get("ok", False),
+                                "action": action, "error": result.get("error")})
 
 
 # ─── DIRECT WALLET WS ENDPOINTS ─────────────────────────────────────────────

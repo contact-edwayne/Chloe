@@ -196,59 +196,104 @@
   .balance-pill .lbl { opacity: 0.65; margin-right: 6px; }
   .balance-pill.error { color: #ff3355; border-color: #ff335555; }
 
-  /* SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) -- fixed-position card,
-     deliberately NOT part of the .body 2-column grid so it can't disturb
-     the existing ring/chat layout. Hidden (display:none) until the first
-     spotify_now_playing broadcast arrives with playing:true. */
-  .now-playing {
+  /* SPOTIFY PLAYER BAR (Ed, 2026-09-06; redesigned as a dedicated docked
+     bar per follow-up request -- "a separate area that is just for the
+     music"). Fixed full-width strip along the bottom, deliberately NOT
+     part of the .body 2-column grid so it can't disturb the existing
+     ring/chat layout. ALWAYS visible (an idle placeholder state when
+     nothing's playing / not connected yet), not hidden-until-first-
+     broadcast like the original corner-card version -- Ed asked for a
+     player area, and a player area that only appears once music is
+     already playing isn't really "there" as a player. */
+  .spotify-player {
     position: fixed;
-    right: 18px;
-    bottom: 18px;
+    left: 0;
+    right: 0;
+    bottom: 0;
     z-index: 40;
-    display: none;
+    display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 14px;
     background: var(--panel);
-    border: 1px solid var(--border2);
-    border-radius: 6px;
-    padding: 8px 12px;
-    max-width: 260px;
-    box-shadow: 0 0 18px #00f7ff22;
+    border-top: 1px solid var(--border2);
+    padding: 8px 16px;
+    box-shadow: 0 -2px 18px #00f7ff1a;
   }
-  .now-playing.show { display: flex; }
-  .np-art {
-    width: 40px;
-    height: 40px;
+  .sp-art {
+    width: 44px;
+    height: 44px;
     border-radius: 3px;
     object-fit: cover;
     border: 1px solid var(--border2);
     flex-shrink: 0;
     background: #001018;
   }
-  .np-info { min-width: 0; flex: 1; }
-  .np-track, .np-album {
+  .sp-info { min-width: 0; width: 220px; flex-shrink: 0; }
+  .sp-track, .sp-album {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     font-family: 'Share Tech Mono', monospace;
   }
-  .np-track {
+  .sp-track {
     color: var(--cyan);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.5px;
     text-shadow: 0 0 6px #00f7ff55;
   }
-  .np-album {
+  .sp-album {
     color: #00f7ff88;
     font-size: 9px;
     letter-spacing: 0.5px;
-    margin-top: 1px;
+    margin-top: 2px;
   }
-  .np-viz {
+  .sp-progress {
+    height: 3px;
+    background: #00f7ff22;
+    border-radius: 2px;
+    margin-top: 5px;
+    overflow: hidden;
+  }
+  .sp-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--cyan);
+    box-shadow: 0 0 6px #00f7ff88;
+    transition: width 0.3s linear;
+  }
+  .sp-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .sp-btn {
+    background: rgba(0, 247, 255, 0.08);
+    border: 1px solid var(--border2);
+    color: var(--cyan);
+    width: 30px;
+    height: 30px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    line-height: 1;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .sp-btn:hover  { background: rgba(0, 247, 255, 0.2); }
+  .sp-btn:active { transform: scale(0.92); }
+  .sp-btn.active { color: var(--green); border-color: #00ff8888; }
+  .sp-viz {
     display: block;
-    margin-top: 4px;
-    width: 100%;
-    height: 24px;
+    flex: 1;
+    min-width: 80px;
+    height: 40px;
+  }
+  .sp-status {
+    color: #00f7ff66;
+    font-size: 9px;
+    letter-spacing: 1px;
+    margin-top: 2px;
   }
 
   /* BODY: 2 columns (ring | chat) */
@@ -1521,14 +1566,22 @@
     </span>
   </div>
 
-  <!-- SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) -- see spotify_hud.py for
-       the backend poll/broadcast side. -->
-  <div class="now-playing" id="now-playing">
-    <img class="np-art" id="np-art" src="" alt="" onerror="this.style.visibility='hidden'">
-    <div class="np-info">
-      <div class="np-track" id="np-track">—</div>
-      <div class="np-album" id="np-album">—</div>
-      <canvas class="np-viz" id="np-viz" width="200" height="24"></canvas>
+  <!-- SPOTIFY PLAYER BAR (Ed, 2026-09-06) -- see spotify_hud.py for the
+       backend poll/broadcast side, and handle_spotify_control in jarvis.py
+       for what the transport buttons actually do. -->
+  <div class="spotify-player" id="spotify-player">
+    <img class="sp-art" id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
+    <div class="sp-info">
+      <div class="sp-track" id="sp-track">Not connected</div>
+      <div class="sp-album" id="sp-album">Spotify</div>
+      <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
+    </div>
+    <canvas class="sp-viz" id="sp-viz" width="300" height="40"></canvas>
+    <div class="sp-controls">
+      <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">⏮</button>
+      <button class="sp-btn" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">⏯</button>
+      <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">⏭</button>
+      <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">🔀</button>
     </div>
   </div>
 
@@ -2386,6 +2439,8 @@
       onSpotifyNowPlaying(data);
     } else if (data.type === 'spotify_visualizer') {
       onSpotifyVisualizer(data);
+    } else if (data.type === 'spotify_control_result') {
+      onSpotifyControlResult(data);
     } else if (data.type === 'jobs_state_update') {
       onJobsState(data);
     } else if (data.type === 'jobs_run_result') {
@@ -3217,14 +3272,19 @@
   // NOT Spotify-API-derived — see that module's docstring) only while
   // something's actually playing.
   // ──────────────────────────────────────────────────────────────────────────
+  let _spProgressTimer = null;
   function onSpotifyNowPlaying(data) {
-    const widget = document.getElementById('now-playing');
-    const art = document.getElementById('np-art');
-    const track = document.getElementById('np-track');
-    const album = document.getElementById('np-album');
-    if (!widget) return;
+    const track = document.getElementById('sp-track');
+    const album = document.getElementById('sp-album');
+    const art = document.getElementById('sp-art');
+    const fill = document.getElementById('sp-progress-fill');
+    if (!track) return;
+    if (_spProgressTimer) { clearInterval(_spProgressTimer); _spProgressTimer = null; }
     if (!data.playing) {
-      widget.classList.remove('show');
+      track.textContent = 'Nothing playing';
+      album.textContent = 'Spotify';
+      art.style.visibility = 'hidden';
+      fill.style.width = '0%';
       return;
     }
     track.textContent = data.track || '—';
@@ -3236,11 +3296,30 @@
     } else {
       art.style.visibility = 'hidden';
     }
-    widget.classList.add('show');
+    // Smooth-fill the progress bar client-side between the (infrequent,
+    // ~3s) backend polls rather than only jumping on each poll tick --
+    // spotify_hud.py sends progress_ms/duration_ms as of the LAST poll,
+    // so this is an estimate that re-syncs on every new broadcast, same
+    // idea as any media player's client-side progress interpolation.
+    if (data.duration_ms > 0) {
+      let elapsed = data.progress_ms || 0;
+      const total = data.duration_ms;
+      const update = () => {
+        fill.style.width = Math.min(100, (elapsed / total) * 100) + '%';
+      };
+      update();
+      if (data.is_playing) {
+        _spProgressTimer = setInterval(() => {
+          elapsed += 1000;
+          if (elapsed > total) { clearInterval(_spProgressTimer); return; }
+          update();
+        }, 1000);
+      }
+    }
   }
 
   function onSpotifyVisualizer(data) {
-    const canvas = document.getElementById('np-viz');
+    const canvas = document.getElementById('sp-viz');
     if (!canvas || !Array.isArray(data.bins)) return;
     const ctx = canvas.getContext('2d');
     const w = canvas.width, h = canvas.height;
@@ -3255,6 +3334,32 @@
       grad.addColorStop(1, '#00ff8877');
       ctx.fillStyle = grad;
       ctx.fillRect(i * barW + 1, h - barH, Math.max(1, barW - 2), barH);
+    }
+  }
+
+  // Transport buttons -- direct WS control, bypasses voice/chat entirely
+  // (same "PWA/HUD call the backend directly" shape as the wallet/lights
+  // buttons elsewhere in this file). handle_spotify_control in jarvis.py
+  // dispatches to spotify_player.py's OS-level media-key/URI/shuffle
+  // functions -- see that module's docstring for why free-tier Spotify
+  // needs OS-level control instead of the Web API's player endpoints.
+  function spotifyControl(action) {
+    if (action === 'shuffle') {
+      document.getElementById('sp-shuffle').classList.toggle('active');
+    }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'spotify_control', action: action }));
+    }
+  }
+  function onSpotifyControlResult(data) {
+    if (!data.ok) {
+      console.warn('[spotify] control action failed:', data.action, data.error);
+      // Shuffle's active-state toggle above is optimistic (no reliable
+      // way to read Spotify's real shuffle state back) -- revert it on a
+      // reported failure so the button doesn't lie about what happened.
+      if (data.action === 'shuffle') {
+        document.getElementById('sp-shuffle').classList.toggle('active');
+      }
     }
   }
 
