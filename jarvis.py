@@ -2030,9 +2030,26 @@ _EXTRA_TOOL_KEYWORDS = (
 # _has_unresolved_deictic to recognize Chloe's own prior reply (not the
 # user's new text) as email-related, regardless of how the follow-up
 # itself is phrased.
+# BUG FIXED 2026-09-06m (confirmed live): Chloe asked "Do you want to
+# send it?" (after an email_delete synth-round hallucination -- see the
+# 2026-09-06 session notes -- but the keyword gap applies regardless of
+# how that question got asked); Ed replied "Send it." -- a 2-word
+# deictic ("it") that should have forced tools per the mechanism this
+# list feeds. It didn't: "sent it" (past tense) was in this list, but
+# "do you want to send it?" contains "send it" (present tense), not
+# "sent it" -- a literal substring miss. Route fell through to the
+# ordinary (non-tools-forced) chat path, which has no
+# _grounding_violation backstop, and the model freely hallucinated
+# "The reply has been sent, and the email has been deleted from your
+# inbox" -- neither of which happened (email_client's own confirm-
+# phrase gate had already logged "ignoring (not sending)" for the same
+# turn, entirely independent of this routing bug). Adding "send it"
+# closes this specific miss and re-engages tools-forced routing (and
+# therefore the grounding check) for this whole class of follow-up.
 _EMAIL_REPLY_KEYWORDS = (
     "email", "emails", "e-mail", "e-mails", "inbox", "gmail",
     "subject", "unread", "draft", "moved to trash", "sent it",
+    "send it",
 )
 
 
