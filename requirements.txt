@@ -59,6 +59,16 @@ playwright==1.62.0                # persistent browser-controlled player (run
 google-auth-oauthlib==1.4.1      # OAuth for "add to playlist" (real YouTube Data API)
 google-api-python-client==2.200.0
 
+# ─── Spotify voice/desktop-app control (spotify_api.py / spotify_player.py /
+#     spotify_commands.py / spotify_hud.py) ─────────────────────────────────
+# No new packages -- requests (Web API + OAuth), pywin32 (Spotify desktop
+# window focus + global media-key/shuffle control), sounddevice+numpy
+# (WASAPI loopback capture + FFT for the HUD visualizer) are already listed
+# above. Ed's Spotify account is free-tier: playback CONTROL goes through
+# spotify_player.py's OS-level mechanisms, not the Web API's player
+# endpoints (403 Premium-required on those for a free account) -- see that
+# module's docstring.
+
 # ─── Misc ────────────────────────────────────────────────────────────────────
 python-dotenv==1.2.2
 

@@ -49,6 +49,8 @@ import lights as _lights
 from lights import try_handle_lights_command
 import youtube_playlists as _youtube_playlists
 from youtube_playlists import try_handle_youtube_command
+from spotify_commands import try_handle_spotify_command
+import spotify_hud
 from local_media import try_handle_local_media_command
 from email_client import try_handle_email_confirm_command
 from search import try_handle_search_command, web_search, format_for_context
@@ -2786,6 +2788,27 @@ async def _handle_chat_inner(data, websocket):
                     hud_server.broadcast_sync("idle")
             return
 
+        # Spotify: "play <song/playlist> on spotify" / pause / skip / shuffle /
+        # create-or-delete playlist. Checked BEFORE youtube -- see
+        # spotify_commands.py's module docstring for why (youtube's own
+        # "play <anything>" fallback would otherwise swallow "on spotify"
+        # phrasing as a literal YouTube search query).
+        spotify_reply = await asyncio.to_thread(try_handle_spotify_command, _last_user_l)
+        if spotify_reply is not None:
+            _push_history("user", _last_user_l, modality="chat")
+            _push_history("assistant", spotify_reply, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            await _ws_send(websocket, {"type": "delta", "text": spotify_reply})
+            await _ws_send(websocket, {"type": "done"})
+            if not data.get("no_tts"):
+                try:
+                    await _reply_audio_or_speak(spotify_reply, data, label="chat-spotify")
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on spotify reply: {e}")
+                finally:
+                    hud_server.broadcast_sync("idle")
+            return
+
         # YouTube: "play <playlist>" / "play my <playlist> playlist"
         youtube_reply = await asyncio.to_thread(try_handle_youtube_command, _last_user_l)
         if youtube_reply is not None:
@@ -5437,6 +5460,17 @@ def _ptt_record_phase(sd, device):
         print("[voice] PTT email-confirm-ack complete", flush=True)
         return
 
+    # Spotify: checked BEFORE youtube -- see spotify_commands.py's docstring.
+    spotify_reply = try_handle_spotify_command(transcript)
+    if spotify_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", spotify_reply, modality="voice")
+        _broadcast_exchange(transcript, spotify_reply)
+        _speak(spotify_reply)
+        hud_server.broadcast_sync("idle")
+        print("[voice] PTT spotify-ack complete", flush=True)
+        return
+
     # YouTube: "play <playlist>" / "put on my <playlist> playlist"
     youtube_reply = try_handle_youtube_command(transcript)
     if youtube_reply is not None:
@@ -5945,6 +5979,16 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
         _push_history("assistant", email_confirm_reply, modality="voice")
         _broadcast_exchange(transcript, email_confirm_reply)
         _speak(email_confirm_reply)
+        hud_server.broadcast_sync("idle")
+        return True
+
+    # Spotify: checked BEFORE youtube -- see spotify_commands.py's docstring.
+    spotify_reply = try_handle_spotify_command(transcript)
+    if spotify_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", spotify_reply, modality="voice")
+        _broadcast_exchange(transcript, spotify_reply)
+        _speak(spotify_reply)
         hud_server.broadcast_sync("idle")
         return True
 
@@ -10568,6 +10612,15 @@ threading.Thread(target=_warm_wallet, daemon=True,
 # ~1-3s cold load on top of LLM latency. Polish 2026-05-17 evening.
 threading.Thread(target=_warm_kokoro_model, daemon=True,
                  name="kokoro-warm").start()
+
+# Spotify now-playing/visualizer HUD feed (Ed, 2026-09-06) -- lazy-started
+# background poll loop, see spotify_hud.py's own docstring. Never blocks
+# startup and never raises: every failure mode inside it (not connected,
+# no WASAPI device, sounddevice missing) is caught and logged there.
+try:
+    spotify_hud.start()
+except Exception as e:
+    print(f"[chloe] spotify_hud failed to start: {e}", flush=True)
 
 # /summarize_old auto-cadence (pillar 4 follow-up). Opt-in via
 # CHLOE_SUMMARIZE_AUTO=1. No-op when disabled — keeps the manual slash

@@ -196,6 +196,61 @@
   .balance-pill .lbl { opacity: 0.65; margin-right: 6px; }
   .balance-pill.error { color: #ff3355; border-color: #ff335555; }
 
+  /* SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) -- fixed-position card,
+     deliberately NOT part of the .body 2-column grid so it can't disturb
+     the existing ring/chat layout. Hidden (display:none) until the first
+     spotify_now_playing broadcast arrives with playing:true. */
+  .now-playing {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 40;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 8px 12px;
+    max-width: 260px;
+    box-shadow: 0 0 18px #00f7ff22;
+  }
+  .now-playing.show { display: flex; }
+  .np-art {
+    width: 40px;
+    height: 40px;
+    border-radius: 3px;
+    object-fit: cover;
+    border: 1px solid var(--border2);
+    flex-shrink: 0;
+    background: #001018;
+  }
+  .np-info { min-width: 0; flex: 1; }
+  .np-track, .np-album {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .np-track {
+    color: var(--cyan);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    text-shadow: 0 0 6px #00f7ff55;
+  }
+  .np-album {
+    color: #00f7ff88;
+    font-size: 9px;
+    letter-spacing: 0.5px;
+    margin-top: 1px;
+  }
+  .np-viz {
+    display: block;
+    margin-top: 4px;
+    width: 100%;
+    height: 24px;
+  }
+
   /* BODY: 2 columns (ring | chat) */
   .body {
     flex: 1;
@@ -1466,6 +1521,17 @@
     </span>
   </div>
 
+  <!-- SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) -- see spotify_hud.py for
+       the backend poll/broadcast side. -->
+  <div class="now-playing" id="now-playing">
+    <img class="np-art" id="np-art" src="" alt="" onerror="this.style.visibility='hidden'">
+    <div class="np-info">
+      <div class="np-track" id="np-track">—</div>
+      <div class="np-album" id="np-album">—</div>
+      <canvas class="np-viz" id="np-viz" width="200" height="24"></canvas>
+    </div>
+  </div>
+
   <div class="body">
     <!-- LEFT: HUD RING + 3D ORB -->
     <div class="left">
@@ -2316,6 +2382,10 @@
       setState('idle');
     } else if (data.type === 'wallet_balance_result') {
       onWalletBalanceResult(data);
+    } else if (data.type === 'spotify_now_playing') {
+      onSpotifyNowPlaying(data);
+    } else if (data.type === 'spotify_visualizer') {
+      onSpotifyVisualizer(data);
     } else if (data.type === 'jobs_state_update') {
       onJobsState(data);
     } else if (data.type === 'jobs_run_result') {
@@ -3138,6 +3208,55 @@
     const pill = document.getElementById('balance-pill');
     if (pill) pill.addEventListener('click', () => requestWalletBalance(true));
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) — fully backend-pushed, no
+  // polling from this side: spotify_hud.py's poll loop broadcasts
+  // spotify_now_playing whenever the track/is_playing state actually
+  // changes, and spotify_visualizer frames (real WASAPI-loopback FFT bins,
+  // NOT Spotify-API-derived — see that module's docstring) only while
+  // something's actually playing.
+  // ──────────────────────────────────────────────────────────────────────────
+  function onSpotifyNowPlaying(data) {
+    const widget = document.getElementById('now-playing');
+    const art = document.getElementById('np-art');
+    const track = document.getElementById('np-track');
+    const album = document.getElementById('np-album');
+    if (!widget) return;
+    if (!data.playing) {
+      widget.classList.remove('show');
+      return;
+    }
+    track.textContent = data.track || '—';
+    album.textContent = (data.artists || []).join(', ') +
+      (data.album ? ' · ' + data.album : '');
+    if (data.album_art_url) {
+      art.src = data.album_art_url;
+      art.style.visibility = 'visible';
+    } else {
+      art.style.visibility = 'hidden';
+    }
+    widget.classList.add('show');
+  }
+
+  function onSpotifyVisualizer(data) {
+    const canvas = document.getElementById('np-viz');
+    if (!canvas || !Array.isArray(data.bins)) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    const bins = data.bins;
+    const barW = w / bins.length;
+    for (let i = 0; i < bins.length; i++) {
+      const mag = Math.max(0, Math.min(1, bins[i] || 0));
+      const barH = mag * h;
+      const grad = ctx.createLinearGradient(0, h - barH, 0, h);
+      grad.addColorStop(0, '#00f7ff');
+      grad.addColorStop(1, '#00ff8877');
+      ctx.fillStyle = grad;
+      ctx.fillRect(i * barW + 1, h - barH, Math.max(1, barW - 2), barH);
+    }
+  }
 
 
   // ──────────────────────────────────────────────────────────────────────────
