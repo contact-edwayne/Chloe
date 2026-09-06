@@ -2190,10 +2190,28 @@ def _pick_route(user_text: str) -> str:
     # priority as the phrase-based extra-tool check above (it's the same
     # class of routing decision, just keyed off the PRIOR turn instead of
     # curated phrases in this one).
+    #
+    # BUG FIXED 2026-09-06h: the first cut of this checked
+    # `_voice_history[-1]`, assuming it was always the prior assistant
+    # reply. Confirmed live: _ask_groq (the voice path) pushes the
+    # CURRENT user text to _voice_history at the top of the function,
+    # well before _pick_route ever runs -- so `_voice_history[-1]` was
+    # always this turn's own question, never the assistant's prior
+    # reply, and the branch below could never fire. "Do any of them
+    # mention anything about training?" reproduced the exact original
+    # bug (misrouted to Brave) in the very next live test after this was
+    # shipped. Fixed by scanning backward for the most recent
+    # assistant-role entry instead of assuming a fixed index -- correct
+    # regardless of whether the current turn's own text has already been
+    # pushed ahead of it or not.
+    _prior_assistant_reply = ""
+    for _h in reversed(_voice_history):
+        if _h.get("role") == "assistant":
+            _prior_assistant_reply = _h.get("content") or ""
+            break
     if (_has_unresolved_deictic(user_text, user_text.split())
-            and _voice_history
-            and _voice_history[-1].get("role") == "assistant"
-            and any(kw in (_voice_history[-1].get("content") or "").lower()
+            and _prior_assistant_reply
+            and any(kw in _prior_assistant_reply.lower()
                     for kw in _EMAIL_REPLY_KEYWORDS)):
         return 'ollama_tools' if _ollama_available() else 'local_chat'
     # Self-knowledge questions ("what have you learned about trading")
