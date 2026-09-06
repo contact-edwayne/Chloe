@@ -232,11 +232,21 @@ def _extract_place(text: str):
 
 
 def maybe_weather_reply(user_text: str):
-    """Return a weather reply if `user_text` is a weather question, else None."""
+    """Return a weather reply if `user_text` is a weather question, else None.
+
+    BUG FIXED 2026-09-06: plain substring matching against _WX_TRIGGERS
+    let "raining" match inside any unrelated word that happens to
+    contain it -- confirmed live: "...full training?" (an email-reading
+    request, nothing to do with weather) matched "raining" inside
+    "training" and got answered with the local forecast instead of
+    routing to the actual question. Trigger phrases are now matched on
+    word boundaries via regex so a trigger only fires as a whole word/
+    phrase, never as merely a contiguous substring of a longer,
+    unrelated word."""
     if not user_text:
         return None
     low = user_text.lower()
-    if not any(k in low for k in _WX_TRIGGERS):
+    if not any(re.search(r'\b' + re.escape(k) + r'\b', low) for k in _WX_TRIGGERS):
         return None
     return weather_reply(_extract_place(user_text))
 

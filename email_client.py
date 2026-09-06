@@ -116,6 +116,7 @@ from __future__ import annotations
 
 import email as _email
 import email.encoders
+import email.header as _email_header
 import email.mime.application
 import email.mime.base
 import email.mime.image
@@ -352,6 +353,31 @@ def resolve_folder(spoken):
 # Reading (IMAP)                                                              #
 # --------------------------------------------------------------------------- #
 
+def _decode_subject(raw) -> str:
+    """Decode an RFC 2047 encoded-word Subject header (e.g.
+    '=?utf-8?B?...?=') into plain text. msg.get('Subject') on its own
+    returns the raw encoded form verbatim for any subject containing
+    non-ASCII characters -- confirmed live 2026-09-06: Chloe read a
+    base64-MIME-encoded subject aloud to Ed word for word ("Indeed
+    Application: Remote Life Insuran...") instead of the actual decoded
+    text. Falls back to the raw string on any decode failure rather than
+    raising, since a garbled subject is still better than a crashed
+    tool call."""
+    if not raw:
+        return "(no subject)"
+    try:
+        parts = _email_header.decode_header(str(raw))
+        out = []
+        for text, enc in parts:
+            if isinstance(text, bytes):
+                out.append(text.decode(enc or "utf-8", errors="replace"))
+            else:
+                out.append(text)
+        return "".join(out) or "(no subject)"
+    except Exception:
+        return str(raw)
+
+
 def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") -> list[dict]:
     """Most-recent-first list of {uid, from, subject, date, unread}. Raises
     on any IMAP failure -- email_check_tool is the caller that turns that
@@ -401,7 +427,7 @@ def list_recent(n: int = 5, unread_only: bool = False, folder: str = "INBOX") ->
             out.append({
                 "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
                 "from": msg.get("From", "(unknown)"),
-                "subject": msg.get("Subject", "(no subject)"),
+                "subject": _decode_subject(msg.get("Subject")),
                 "date": msg.get("Date", ""),
                 "unread": "\\Seen" not in flags_blob,
             })
@@ -530,7 +556,7 @@ def read_email_body(uid, folder: str = "INBOX") -> dict:
             body = body[:_BODY_MAX_CHARS]
         return {
             "from": msg.get("From", "(unknown)"),
-            "subject": msg.get("Subject", "(no subject)"),
+            "subject": _decode_subject(msg.get("Subject")),
             "date": msg.get("Date", ""),
             "message_id": msg.get("Message-ID", ""),
             "references": msg.get("References", ""),
@@ -619,7 +645,16 @@ def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25) -> li
     with imaplib.IMAP4_SSL(_imap_host()) as imap:
         imap.login(_address(), _app_password())
         imap.select(folder or "INBOX", readonly=True)
-        status, data = imap.uid("search", None, "X-GM-RAW", _gm_raw_arg(query))
+        # Scope to category:primary for plain INBOX, same as list_recent
+        # -- confirmed live 2026-09-06: without this, a sender/subject
+        # delete search ran against the WHOLE Inbox (every Gmail tab)
+        # while email_check only ever showed Ed the Primary-tab view, so
+        # a duplicate-subject message living in Updates/Promotions could
+        # get matched and trashed instead of the Primary-tab one Ed was
+        # actually talking about -- the two searches were silently
+        # scoped differently even though both addressed "the inbox."
+        _q = f"category:primary {query}" if (folder or "INBOX") == "INBOX" else query
+        status, data = imap.uid("search", None, "X-GM-RAW", _gm_raw_arg(_q))
         if status != "OK":
             raise RuntimeError(f"IMAP search failed: {status}")
         uids = data[0].split()
@@ -636,7 +671,7 @@ def find_uids_by_query(query: str, folder: str = "INBOX", limit: int = 25) -> li
             out.append({
                 "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
                 "from": msg.get("From", "(unknown)"),
-                "subject": msg.get("Subject", "(no subject)"),
+                "subject": _decode_subject(msg.get("Subject")),
                 "date": msg.get("Date", ""),
                 "unread": "\\Seen" not in flags_blob,
             })

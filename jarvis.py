@@ -6477,16 +6477,26 @@ EMAIL_DELETE_SCHEMA = {
         "name": "email_delete",
         "description": (
             "Move one or more emails to Trash (recoverable there for "
-            "about 30 days, same as Gmail's own Trash). Two ways to say "
+            "about 30 days, same as Gmail's own Trash -- NEVER describe "
+            "this as 'permanently deleted', it isn't). Two ways to say "
             "which ones: (a) `indices` -- one or more numbers from the "
             "last email_check listing, e.g. 'delete the first one' or "
-            "'delete numbers 1 and 3'; or (b) `sender` and/or `subject` "
-            "-- a fresh search, e.g. 'delete all the emails from Indeed "
-            "Apply'. Give ONLY indices, or ONLY sender/subject, never a "
-            "mix. Refuses (rather than guessing) if Ed didn't say which "
-            "emails, and refuses a filter that matches too many at once "
-            "-- read the tool result back to Ed either way, it tells you "
-            "exactly what happened."
+            "'delete numbers 1 and 3'; PREFER this whenever the target "
+            "email was just listed or read earlier in this conversation "
+            "-- a fresh sender/subject search runs independently and can "
+            "match a different message when duplicate-subject emails "
+            "exist (confirmed live 2026-09-06: a repeat notification "
+            "with an identical subject line got trashed while the one "
+            "Ed had actually just been discussing was left untouched); "
+            "or (b) `sender` and/or `subject` -- a fresh search, e.g. "
+            "'delete all the emails from Indeed Apply', for when Ed "
+            "names a sender/topic rather than referring to something "
+            "already listed. Give ONLY indices, or ONLY sender/subject, "
+            "never a mix. Refuses (rather than guessing) if Ed didn't "
+            "say which emails, and refuses a filter that matches too "
+            "many at once -- read the tool result back to Ed using its "
+            "own wording ('moved to Trash'), it tells you exactly what "
+            "happened."
         ),
         "parameters": {
             "type": "object",
@@ -7600,7 +7610,7 @@ async def _ollama_chat_stream_to_ws(websocket, messages: list, max_tokens: int =
     return full_reply
 
 
-def _ollama_loaded_models(timeout: float = 1.5) -> set:
+def _ollama_loaded_models(timeout: float = 1.5):
     """Currently Ollama-resident model names (GET /api/ps). Used to decide
     whether swapping to TOOL_SYNTH_MODEL for the reword round is free
     (already resident, or nothing useful is resident anyway) or would
@@ -7618,13 +7628,20 @@ def _ollama_loaded_models(timeout: float = 1.5) -> set:
     sets OLLAMA_MAX_LOADED_MODELS>=2 so both fit in VRAM at once), but we
     stop paying an avoidable reload when they don't.
 
-    Empty set (including on any request failure) is the safe default --
-    callers that can't confirm residency skip the swap rather than risk
-    an unnecessary reload."""
+    Returns None (not an empty set) on any request failure/timeout/bad
+    response -- residency is genuinely UNKNOWN then, not confirmed-empty.
+    BUG FIXED 2026-09-06b: the first cut of this function returned an
+    empty set on failure too, indistinguishable from "confirmed nothing
+    loaded" -- the call site's `_model not in _loaded` then read True on
+    every failure, forcing exactly the reload this function exists to
+    avoid. Confirmed live: Ed's 2026-09-06 evening log showed the reword
+    round swapping to llama3.2:3b and taking 25-193s on every single
+    turn, never skipping. Callers must treat None as "assume the
+    caller's model is still warm," not as grounds to swap."""
     try:
         r = _req_get_cached_import().get(f"{OLLAMA_URL}/api/ps", timeout=timeout)
         if r.status_code != 200:
-            return set()
+            return None
         data = r.json() or {}
         out = set()
         for m in (data.get("models") or []):
@@ -7633,7 +7650,7 @@ def _ollama_loaded_models(timeout: float = 1.5) -> set:
                 out.add(name)
         return out
     except Exception:
-        return set()
+        return None
 
 
 def _req_get_cached_import():
@@ -7751,9 +7768,18 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                               "\n\nA tool call above already returned the "
                               "data you need (see the 'tool' message). "
                               "Answer Ed's question now in one or two "
-                              "natural, spoken sentences using that data. "
-                              "Do not output JSON for this reply and do "
-                              "not call another tool.")
+                              "natural, spoken sentences using ONLY that "
+                              "data. Do not output JSON for this reply "
+                              "and do not call another tool. Do not "
+                              "apologize, say 'let me check again', or "
+                              "claim Ed corrected you -- nothing above "
+                              "asked you to recheck anything, even if "
+                              "an earlier turn in this conversation did; "
+                              "that framing is never warranted here. "
+                              "State facts no more strongly than the "
+                              "tool result does -- e.g. Trash is "
+                              "recoverable, so never call a delete "
+                              "'permanent'.")
                 break
         return out
 
@@ -7768,7 +7794,20 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             # the synth model isn't, swapping would evict it and force a
             # full reload -- measured live as the dominant cost, worse
             # than just finishing the reword on the already-warm model.
-            _use_synth_model = (TOOL_SYNTH_MODEL in _loaded) or (_model not in _loaded)
+            #
+            # BUG FIXED 2026-09-06b: `_loaded` used to come back as an
+            # empty set on ANY /api/ps failure, which made `_model not
+            # in _loaded` true and forced exactly the swap this whole
+            # mechanism exists to avoid -- see _ollama_loaded_models's
+            # docstring. `_loaded` is now None on failure (distinct from
+            # a confirmed-empty residency list) so an unconfirmed check
+            # can no longer be mistaken for "nothing is loaded."
+            if _loaded is None:
+                _use_synth_model = False
+            else:
+                _use_synth_model = (TOOL_SYNTH_MODEL in _loaded) or (_model not in _loaded)
+            print(f"[chloe] synth-round residency check: loaded={_loaded!r} "
+                  f"use_synth={_use_synth_model}", flush=True)
         _request_model = TOOL_SYNTH_MODEL if _use_synth_model else _model
         try:
             _payload = {
