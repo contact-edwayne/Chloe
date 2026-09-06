@@ -7717,6 +7717,46 @@ def _req_get_cached_import():
     return requests
 
 
+def _ollama_vram_diagnostic(timeout: float = 1.5) -> str:
+    """One-line, best-effort summary of each Ollama-resident model's
+    memory footprint (size vs. size_vram from /api/ps) -- diagnostic
+    only, added 2026-09-06i to settle an open question: the 20-75s+
+    synth-round latency is UNCHANGED by both the residency fix
+    (2026-09-06b) and the context-trimming fix (2026-09-06c) -- neither
+    moved the number at all, which itself is evidence neither was the
+    real bottleneck. Leading hypothesis: OLLAMA_KEEP_ALIVE is forced to
+    24h (see .env), so nomic-embed-text + llama3.2:3b + qwen2.5:14b all
+    stay resident simultaneously (confirmed live: the residency-check
+    print already shows all three loaded at once) -- if that exceeds
+    available VRAM, Ollama can report a model as "resident" via
+    /api/ps while actually running part of it on CPU, which the
+    existing residency check (name-only) can't see and prompt-trimming
+    can't fix. size_vram < size for a resident model proves that.
+    Never raises; returns "" on any failure -- safe to call
+    unconditionally, adds one lightweight GET (~ms) next to a 20-75s
+    call it's trying to explain."""
+    try:
+        r = _req_get_cached_import().get(f"{OLLAMA_URL}/api/ps", timeout=timeout)
+        if r.status_code != 200:
+            return ""
+        data = r.json() or {}
+        parts = []
+        for m in (data.get("models") or []):
+            name = m.get("name") or m.get("model") or "?"
+            size = m.get("size")
+            size_vram = m.get("size_vram")
+            if isinstance(size, int) and isinstance(size_vram, int) and size > 0:
+                pct = 100.0 * size_vram / size
+                flag = "" if pct >= 99.5 else " <-- PARTIAL CPU OFFLOAD"
+                parts.append(f"{name}={size_vram/1e9:.2f}/{size/1e9:.2f}GB "
+                             f"({pct:.0f}% VRAM){flag}")
+            else:
+                parts.append(f"{name}=?")
+        return "; ".join(parts)
+    except Exception:
+        return ""
+
+
 # F-01 structural fix (audit Part 10/11, 2026-09-06e): a "grounded
 # reply" check. All 4 hallucination incidents observed this session
 # (deleting emails via a tool that doesn't exist, "permanently deleted"
@@ -7756,18 +7796,48 @@ _ACTION_CLAIM_PATTERNS: tuple = (
 )
 
 
-def _grounding_violation(reply_text: str, tools_called) -> str | None:
+# 2026-09-06i: a second, unrelated derailment class caught live in the
+# same session as the action-claim check above -- TWICE, an email_delete
+# turn's synth-round reply came back as a BARE date/time stamp
+# ("Sunday, September 6, 2026 at 1:16 PM CDT") instead of the actual
+# delete confirmation. Format matches _now_block()'s `stamp` exactly --
+# that block is injected into every system prompt with an explicit
+# "state it confidently, never guess" instruction, and on a small/weak
+# synth model (llama3.2:3b) under strain that instruction apparently
+# wins out over the actual task on rare occasions. Both live instances
+# happened to be the two slowest synth-round calls that session (75s+),
+# which is a real clue worth chasing separately (see
+# _ollama_vram_diagnostic), but this check doesn't need to know WHY --
+# it only needs to recognize the shape of the wrong output and stop it
+# from reaching Ed as if it were a real answer.
+_BARE_TIMESTAMP_RE = _re.compile(
+    r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+"
+    r"\w+\s+\d{1,2},\s+\d{4}\s+at\s+\d{1,2}:\d{2}\s*(AM|PM)\s+\w+\.?\s*$",
+    _re.IGNORECASE,
+)
+_TIME_QUESTION_RE = _re.compile(
+    r"\b(what time|what'?s the time|what day|what'?s the date|what date|"
+    r"current time|current date|today'?s date)\b", _re.IGNORECASE)
+
+
+def _grounding_violation(reply_text: str, tools_called, user_text: str = "") -> str | None:
     """Return a short description of the first unbacked completion claim
-    in `reply_text`, or None if every claim it makes is backed by a tool
-    that actually ran this turn (or it makes no claim this table covers).
+    OR recognizable derailment in `reply_text`, or None if the reply is
+    clean. Covers two independent classes: (1) a completion claim not
+    backed by a tool that ran this turn (_ACTION_CLAIM_PATTERNS), (2) a
+    bare date/time stamp standing in for an unrelated answer
+    (_BARE_TIMESTAMP_RE) -- unless the user's own question was actually
+    about the time/date, in which case that reply is correct and must
+    not be flagged.
 
     `tools_called` is the set of tool NAMES dispatched this turn -- may
     be empty, which means NO claim in _ACTION_CLAIM_PATTERNS can be
     backed (a turn with zero tool calls can't have actually deleted,
-    drafted, replied to, or sent anything). Never raises -- any internal
-    failure is treated as "no violation found" so this check can only
-    ever catch a real mismatch, never break a reply that would
-    otherwise have gone out fine."""
+    drafted, replied to, or sent anything). `user_text` is this turn's
+    own question, used only for the timestamp-derailment check above.
+    Never raises -- any internal failure is treated as "no violation
+    found" so this check can only ever catch a real mismatch, never
+    break a reply that would otherwise have gone out fine."""
     try:
         if not reply_text:
             return None
@@ -7777,6 +7847,11 @@ def _grounding_violation(reply_text: str, tools_called) -> str | None:
                 return (f"reply matched {pattern.pattern!r} but none of "
                         f"{required_tools} ran this turn "
                         f"(ran: {sorted(tools_called)})")
+        if (_BARE_TIMESTAMP_RE.match(reply_text.strip())
+                and not _TIME_QUESTION_RE.search(user_text or "")):
+            return (f"reply is a bare date/time stamp ({reply_text!r}) but "
+                    f"the user's question ({user_text!r}) wasn't about "
+                    f"the time/date -- looks like a synth-round derailment")
         return None
     except Exception:
         return None
@@ -7956,6 +8031,9 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 _use_synth_model = (TOOL_SYNTH_MODEL in _loaded) or (_model not in _loaded)
             print(f"[chloe] synth-round residency check: loaded={_loaded!r} "
                   f"use_synth={_use_synth_model}", flush=True)
+            _vram_diag = _ollama_vram_diagnostic()
+            if _vram_diag:
+                print(f"[chloe] synth-round VRAM: {_vram_diag}", flush=True)
         _request_model = TOOL_SYNTH_MODEL if _use_synth_model else _model
         try:
             _payload = {
@@ -8190,7 +8268,7 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
             print(f"[chloe] Ollama emitted an empty object after {dt:.2f}s "
                   f"on a tools-forced turn; using canned fallback", flush=True)
             reply = "Sorry, I got stuck on that one — can you ask again?"
-    _violation = _grounding_violation(reply, _tools_called_this_turn)
+    _violation = _grounding_violation(reply, _tools_called_this_turn, _current_user_text)
     if _violation:
         print(f"[chloe] UNGROUNDED CLAIM blocked: {_violation}", flush=True)
         reply = ("I want to double-check that before I tell you it's "
