@@ -733,7 +733,27 @@ def _gm_raw_arg(query: str) -> str:
     """Quote+escape `query` as a single IMAP string argument for Gmail's
     X-GM-RAW search extension. Needed here (unlike the plain category:
     filter in list_recent) because sender/subject come from free text and
-    may themselves contain a double quote or backslash."""
+    may themselves contain a double quote or backslash.
+
+    BUG FIXED 2026-09-06p (confirmed live): Python's stdlib imaplib
+    encodes the whole IMAP command line as ASCII before sending
+    (imaplib.IMAP4._command), so any non-ASCII character anywhere in a
+    sender/subject delete search -- even a common typographic en-dash
+    from an HTML-sourced subject line (confirmed live: "Remote Life
+    Insurance Advisor \u2013 Full Training") -- raised UnicodeEncodeError.
+    email_delete_tool catches it, so this degrades to "couldn't search"
+    rather than crashing Chloe, but the email was then unfindable by
+    sender/subject at all. Normalize the common typographic
+    substitutions HTML email actually uses (en/em dash, smart quotes,
+    ellipsis) to plain ASCII first, then strip anything still left over
+    as a last resort so the command can always be sent instead of
+    raising -- a best-effort match beats a guaranteed failure."""
+    query = (query
+             .replace("\u2013", "-").replace("\u2014", "-")   # en/em dash
+             .replace("\u2018", "'").replace("\u2019", "'")  # smart single quotes
+             .replace("\u201c", '"').replace("\u201d", '"')  # smart double quotes
+             .replace("\u2026", "..."))                        # ellipsis
+    query = query.encode("ascii", errors="ignore").decode("ascii")
     escaped = query.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
