@@ -196,39 +196,52 @@
   .balance-pill .lbl { opacity: 0.65; margin-right: 6px; }
   .balance-pill.error { color: #ff3355; border-color: #ff335555; }
 
-  /* SPOTIFY PLAYER BAR (Ed, 2026-09-06; redesigned as a dedicated docked
-     bar per follow-up request -- "a separate area that is just for the
-     music"). Fixed full-width strip along the bottom, deliberately NOT
-     part of the .body 2-column grid so it can't disturb the existing
-     ring/chat layout. ALWAYS visible (an idle placeholder state when
-     nothing's playing / not connected yet), not hidden-until-first-
-     broadcast like the original corner-card version -- Ed asked for a
-     player area, and a player area that only appears once music is
-     already playing isn't really "there" as a player. */
-  .spotify-player {
+  /* MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; converted from an
+     always-visible docked bottom bar into a toggleable overlay/section,
+     per Ed's follow-up request: "the music bar should be in its own
+     section like Brain or chess or arcade". Matches the BRAIN/CHESS/
+     ARCADE overlay pattern (position: fixed; inset: 0; hidden until
+     .on) but centers a content panel instead of hosting an iframe --
+     see spotify_hud.py for the backend poll/broadcast side, and
+     handle_spotify_control in jarvis.py for what the transport buttons
+     do. */
+  #music-overlay {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 40;
+    inset: 0;
+    z-index: 60;
+    background: rgba(6,7,11,0.92);
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #music-overlay.on { display: flex; }
+  #music-close {
+    position: absolute; top: 14px; right: 18px; z-index: 61;
+    background: transparent; border: 1px solid var(--border2); color: var(--cyan);
+    font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer;
+  }
+  #music-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
+  .spotify-player {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 20px;
     background: var(--panel);
-    border-top: 1px solid var(--border2);
-    padding: 8px 16px;
-    box-shadow: 0 -2px 18px #00f7ff1a;
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 28px 36px;
+    box-shadow: 0 0 40px #00f7ff1a;
+    width: min(680px, 90vw);
   }
   .sp-art {
-    width: 44px;
-    height: 44px;
-    border-radius: 3px;
+    width: 84px;
+    height: 84px;
+    border-radius: 4px;
     object-fit: cover;
     border: 1px solid var(--border2);
     flex-shrink: 0;
     background: #001018;
   }
-  .sp-info { min-width: 0; width: 220px; flex-shrink: 0; }
+  .sp-info { min-width: 0; width: 260px; flex-shrink: 0; }
   .sp-track, .sp-album {
     white-space: nowrap;
     overflow: hidden;
@@ -237,21 +250,21 @@
   }
   .sp-track {
     color: var(--cyan);
-    font-size: 12px;
+    font-size: 16px;
     letter-spacing: 0.5px;
     text-shadow: 0 0 6px #00f7ff55;
   }
   .sp-album {
     color: #00f7ff88;
-    font-size: 9px;
+    font-size: 11px;
     letter-spacing: 0.5px;
-    margin-top: 2px;
+    margin-top: 4px;
   }
   .sp-progress {
-    height: 3px;
+    height: 4px;
     background: #00f7ff22;
     border-radius: 2px;
-    margin-top: 5px;
+    margin-top: 10px;
     overflow: hidden;
   }
   .sp-progress-fill {
@@ -264,19 +277,19 @@
   .sp-controls {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
   }
   .sp-btn {
     background: rgba(0, 247, 255, 0.08);
     border: 1px solid var(--border2);
     color: var(--cyan);
-    width: 30px;
-    height: 30px;
+    width: 38px;
+    height: 38px;
     border-radius: 4px;
     cursor: pointer;
     font-family: 'Share Tech Mono', monospace;
-    font-size: 13px;
+    font-size: 16px;
     line-height: 1;
     transition: background 0.15s, transform 0.1s;
   }
@@ -286,8 +299,8 @@
   .sp-viz {
     display: block;
     flex: 1;
-    min-width: 80px;
-    height: 40px;
+    min-width: 120px;
+    height: 60px;
   }
   .sp-status {
     color: #00f7ff66;
@@ -1558,6 +1571,7 @@
       <button class="brain-btn" id="brain-btn" onclick="toggleBrainGraph()" title="Open brain graph view">BRAIN</button>
       <button class="brain-btn" id="chess-btn" onclick="toggleChess()" title="Play chess against Chloe">CHESS</button>
       <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Pokémon (gen1recomp)">ARCADE</button>
+      <button class="brain-btn" id="music-btn" onclick="toggleMusic()" title="Spotify player">MUSIC</button>
       <span class="sys-tag">ONLINE</span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
         <span class="lbl">₿</span><span id="balance-value">—</span> sat
@@ -1566,22 +1580,27 @@
     </span>
   </div>
 
-  <!-- SPOTIFY PLAYER BAR (Ed, 2026-09-06) -- see spotify_hud.py for the
-       backend poll/broadcast side, and handle_spotify_control in jarvis.py
-       for what the transport buttons actually do. -->
-  <div class="spotify-player" id="spotify-player">
-    <img class="sp-art" id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
-    <div class="sp-info">
-      <div class="sp-track" id="sp-track">Not connected</div>
-      <div class="sp-album" id="sp-album">Spotify</div>
-      <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
-    </div>
-    <canvas class="sp-viz" id="sp-viz" width="300" height="40"></canvas>
-    <div class="sp-controls">
-      <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">⏮</button>
-      <button class="sp-btn" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">⏯</button>
-      <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">⏭</button>
-      <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">🔀</button>
+  <!-- MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; converted to a
+       toggleable overlay matching BRAIN/CHESS/ARCADE). See
+       spotify_hud.py for the backend poll/broadcast side, and
+       handle_spotify_control in jarvis.py for what the transport
+       buttons actually do. -->
+  <div id="music-overlay">
+    <button id="music-close" onclick="toggleMusic(false)">CLOSE [Esc]</button>
+    <div class="spotify-player" id="spotify-player">
+      <img class="sp-art" id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
+      <div class="sp-info">
+        <div class="sp-track" id="sp-track">Not connected</div>
+        <div class="sp-album" id="sp-album">Spotify</div>
+        <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
+      </div>
+      <canvas class="sp-viz" id="sp-viz" width="300" height="60"></canvas>
+      <div class="sp-controls">
+        <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">⏮</button>
+        <button class="sp-btn" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">⏯</button>
+        <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">⏭</button>
+        <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">🔀</button>
+      </div>
     </div>
   </div>
 
@@ -4717,6 +4736,31 @@ window.setState('idle');
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && document.getElementById('chess-overlay').classList.contains('on')) {
         toggleChess(false);
+      }
+    });
+  </script>
+
+  <!-- Music (Spotify player) overlay toggle -- mirrors toggleChess/
+       toggleEmulator exactly, minus the iframe src-swap since there's no
+       separate page to load; the panel's content is inline HTML fed by
+       spotify_hud.py's broadcasts (onSpotifyNowPlaying/onSpotifyVisualizer),
+       unaffected by opening/closing this overlay. -->
+  <script>
+    function toggleMusic(force) {
+      const ov = document.getElementById('music-overlay');
+      const btn = document.getElementById('music-btn');
+      const willOpen = (force === undefined) ? !ov.classList.contains('on') : !!force;
+      if (willOpen) {
+        ov.classList.add('on');
+        if (btn) btn.classList.add('on');
+      } else {
+        ov.classList.remove('on');
+        if (btn) btn.classList.remove('on');
+      }
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('music-overlay').classList.contains('on')) {
+        toggleMusic(false);
       }
     });
   </script>
