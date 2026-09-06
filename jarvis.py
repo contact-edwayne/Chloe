@@ -8321,7 +8321,21 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 result = _extra_tool_dispatch(
                     name, args, source_text=_current_user_text,
                     my_turn_gen=_my_turn_gen_snapshot)
-                if name == "email_draft":
+                # BUG FIXED 2026-09-06q (confirmed live): email_reply
+                # ALSO creates a pending confirmable draft (see
+                # email_reply_tool -> draft_reply -> _save_pending,
+                # announced=False, same TTL/confirm-gate as email_draft)
+                # but this flag only ever covered "email_draft", so
+                # mark_draft_announced() below never ran for a reply
+                # draft -- "announced" stayed False forever (until the
+                # draft's own TTL expired), permanently blocking a
+                # legitimate later "send it"/"cancel" and spamming
+                # "confirm phrase seen but draft ... was never
+                # announced" on every single subsequent turn. Confirmed
+                # live: draft 22a9ef from an email_reply call never got
+                # announced and that log line fired on 6+ unrelated
+                # turns afterward in the same session.
+                if name in ("email_draft", "email_reply"):
                     _email_draft_used = True
                 print(f"[chloe]   ollama-tool {name}({args}) → {len(result)} chars", flush=True)
             else:
