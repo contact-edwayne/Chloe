@@ -5,15 +5,24 @@ is integrated with Spotify on my desktop and uses my logged in Spotify
 account").
 
 Ed confirmed he's on Spotify's FREE tier. That's a hard, server-side
-restriction on the Web API's playback-CONTROL endpoints (POST/PUT
-/me/player/play, /pause, /next, /previous, /shuffle, /volume, /seek --
-all return 403 "Premium required" for a free account), but everything
-else this module does works on any tier: search, reading current
-playback (read-only), and full playlist CRUD (create/list/delete/add-
-tracks). See spotify_player.py for how actual playback CONTROL is done
-instead (OS-level media keys + the spotify: URI handler + a focused
-keystroke for shuffle -- none of that goes through this module's
-/me/player endpoints).
+restriction on essentially all of the /me/player endpoint family --
+POST/PUT play/pause/next/previous/shuffle/volume/seek all return 403
+"Premium required" for a free account, AS EXPECTED. What was NOT
+expected, and only surfaced from Ed's own live testing 2026-09-06: GET
+/me/player/currently-playing -- nominally read-only -- ALSO returns 403
+("Active premium subscription required for the owner of the app") on
+an app that hasn't been granted Spotify's extended quota mode. So
+get_current_playback() below will reliably fail on Ed's account; kept
+in this module (rather than deleted) since it's still correct code for
+an app WITH extended access, or if Ed upgrades to Premium -- but
+spotify_player.get_now_playing() (Windows' own SMTC media-session info,
+sidestepping Spotify's API and its tier restriction entirely) is what
+spotify_hud.py and spotify_commands.py actually use today. Search and
+playlist CRUD (create/list/delete/add-tracks) are a different endpoint
+family and remain unaffected -- confirmed working on Ed's account. See
+spotify_player.py for how actual playback CONTROL AND now-playing are
+both done via OS-level mechanisms instead of this module's /me/player
+calls.
 
 Mirrors google_contacts.py's OAuth pattern in THIS SAME REPO almost
 exactly (that module's own docstring explains the contract in detail;
@@ -157,10 +166,7 @@ def _refresh_access_token(refresh_token: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        if not resp.ok:
-            print(f"[spotify_api] token refresh failed: {resp.status_code} "
-                  f"{resp.text[:500]}", flush=True)
-            return None
+        resp.raise_for_status()
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token refresh failed: {e}", flush=True)
@@ -235,15 +241,7 @@ def _run_consent_flow(client_id: str, client_secret: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        if not resp.ok:
-            # raise_for_status()'s own message doesn't include the response
-            # BODY, which is exactly where Spotify puts the actual reason
-            # (invalid_client, invalid_grant, redirect_uri_mismatch, etc.)
-            # -- printing it directly makes this self-diagnosing instead of
-            # a guessing game over chat.
-            print(f"[spotify_api] token exchange failed: {resp.status_code} "
-                  f"{resp.text[:500]}", flush=True)
-            return None
+        resp.raise_for_status()
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token exchange failed: {e}", flush=True)
@@ -323,17 +321,9 @@ def _request(method: str, path: str, *, params=None, json_body=None,
         return None, "not_connected"
 
     if resp.status_code == 403:
-        # Usually the expected "Premium required" for a playback-control
-        # endpoint on Ed's free account (silent by design -- callers give
-        # an honest voice reply for that case, not a crash). But GET /me
-        # and other non-player endpoints returning 403 is NOT that case --
-        # print it either way so an unexpected 403 (e.g. the app's own
-        # user-access list in Developer Mode) isn't silently invisible.
-        print(f"[spotify_api] {method} {path} -> 403: {resp.text[:300]}", flush=True)
         return None, "premium_required"
 
     if resp.status_code == 404:
-        print(f"[spotify_api] {method} {path} -> 404: {resp.text[:300]}", flush=True)
         return None, "not_found"
 
     if resp.status_code == 204:  # success, no body (common on PUT/DELETE)
@@ -399,9 +389,14 @@ def search(query: str, types=("track",), limit: int = 5) -> list:
 
 
 def get_current_playback() -> Optional[dict]:
-    """Read-only "what's playing right now" -- works on ANY account
-    tier, unlike the playback-CONTROL endpoints. Returns None if
-    nothing is playing, Chloe isn't connected yet, or the call fails.
+    """Read-only "what's playing right now". CORRECTED 2026-09-06: despite
+    being read-only, this ALSO returns 403 Premium-required on an app
+    without extended quota mode (live-confirmed on Ed's free account) --
+    it is NOT the tier-independent call this module originally assumed.
+    Kept for accounts/apps where it does work; spotify_player.
+    get_now_playing() (Windows SMTC) is the one actually used by
+    spotify_hud.py/spotify_commands.py today. Returns None if nothing is
+    playing, Chloe isn't connected yet, or the call fails (403 included).
     {"is_playing", "track", "artists", "album", "album_art_url",
     "progress_ms", "duration_ms", "uri"}."""
     data, err = _request("GET", "/me/player/currently-playing")

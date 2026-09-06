@@ -69,6 +69,17 @@ def test_is_spotify_running_is_false_off_windows():
           spotify_player.is_spotify_running() is False)
 
 
+def test_get_now_playing_is_none_off_windows():
+    # get_now_playing() (SMTC-based) is this session's replacement for
+    # spotify_api.get_current_playback() -- Ed's live testing found the
+    # Web API's read-only currently-playing endpoint ALSO requires
+    # Premium on his account. Off Windows (this container), it must
+    # return None cleanly rather than raise -- same contract as every
+    # other function in this module.
+    check("get_now_playing() returns None (not an exception) off Windows",
+          spotify_player.get_now_playing() is None)
+
+
 def test_play_uri_rejects_non_spotify_uri_before_touching_the_os():
     result = spotify_player.play_uri("https://open.spotify.com/track/abc")
     check("play_uri() rejects a bare https:// link (not a spotify: URI) "

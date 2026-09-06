@@ -61,13 +61,18 @@ google-api-python-client==2.200.0
 
 # ─── Spotify voice/desktop-app control (spotify_api.py / spotify_player.py /
 #     spotify_commands.py / spotify_hud.py) ─────────────────────────────────
-# No new packages -- requests (Web API + OAuth), pywin32 (Spotify desktop
-# window focus + global media-key/shuffle control), sounddevice+numpy
-# (WASAPI loopback capture + FFT for the HUD visualizer) are already listed
-# above. Ed's Spotify account is free-tier: playback CONTROL goes through
-# spotify_player.py's OS-level mechanisms, not the Web API's player
-# endpoints (403 Premium-required on those for a free account) -- see that
-# module's docstring.
+# requests (Web API + OAuth), pywin32 (Spotify desktop window focus +
+# global media-key/shuffle control), sounddevice+numpy (WASAPI loopback
+# capture + FFT for the HUD visualizer) were already listed above -- no
+# new packages needed for those. Ed's Spotify account is free-tier:
+# playback CONTROL goes through spotify_player.py's OS-level mechanisms,
+# not the Web API's player endpoints (403 Premium-required on those for a
+# free account) -- see that module's docstring. CORRECTION 2026-09-06,
+# live-confirmed: the Web API's read-only now-playing endpoint ALSO
+# returns 403 on Ed's account, so now-playing ALSO goes through an
+# OS-level mechanism -- Windows' System Media Transport Controls (SMTC),
+# read via the new dependency below.
+winsdk>=1.0.0b10; sys_platform == "win32"   # SMTC now-playing (spotify_player.get_now_playing)
 
 # ─── Misc ────────────────────────────────────────────────────────────────────
 python-dotenv==1.2.2

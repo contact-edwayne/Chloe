@@ -55,7 +55,11 @@ def _restore_all():
 
 
 def _set_now_playing(is_playing, running=True):
-    _stub(spotify_api, "get_current_playback",
+    # now-playing state comes from spotify_player.get_now_playing() (SMTC),
+    # NOT spotify_api.get_current_playback() (the Web API) -- see both
+    # modules' docstrings for why: that endpoint also returns 403
+    # Premium-required on Ed's free account, live-confirmed 2026-09-06.
+    _stub(spotify_player, "get_now_playing",
           lambda: {"is_playing": is_playing, "track": "T", "artists": ["A"],
                     "album": "AL"} if is_playing is not None else None)
     _stub(spotify_player, "is_spotify_running", lambda: running)
@@ -203,7 +207,7 @@ def test_bare_play_without_spotify_mention_is_unclaimed():
 
 
 def test_now_playing_query():
-    _stub(spotify_api, "get_current_playback", lambda: {
+    _stub(spotify_player, "get_now_playing", lambda: {
         "is_playing": True, "track": "Song", "artists": ["Artist"], "album": "Album"})
     reply = spotify_commands.try_handle_spotify_command("what song is this")
     check("'what song is this' reports the real current track",
@@ -212,7 +216,7 @@ def test_now_playing_query():
 
 
 def test_now_playing_query_when_nothing_playing():
-    _stub(spotify_api, "get_current_playback", lambda: None)
+    _stub(spotify_player, "get_now_playing", lambda: None)
     reply = spotify_commands.try_handle_spotify_command("what's playing")
     check("now-playing query when nothing's playing is honest, not a "
           "hallucinated track name",

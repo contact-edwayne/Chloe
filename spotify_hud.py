@@ -1,28 +1,47 @@
 """
-spotify_hud.py -- Feeds the HUD's new "now playing" panel: track/artist/
-album (+ art) via polling spotify_api.get_current_playback(), and a
-real-time audio visualizer via a Windows WASAPI LOOPBACK capture of
-actual system audio output -- NOT Spotify's own audio-analysis API.
+spotify_hud.py -- Feeds the HUD's "now playing" panel: track/artist/
+album (+ art) and a real-time audio visualizer via a Windows WASAPI
+LOOPBACK capture of actual system audio output.
 
-Why local audio capture instead of Spotify's audio-analysis endpoint:
-Spotify deprecated Audio Features/Audio Analysis for new API
-applications in their November 2024 policy tightening (extended-quota
-approval required, not available to a small personal app like this
-one) -- and even where available, that endpoint returns a PRECOMPUTED,
-per-track analysis, not a live audio stream, so it was never going to
-drive a real-time visualizer anyway. Capturing actual system audio
-output (WASAPI loopback -- "what you hear", the same mechanism apps
-like OBS use for desktop-audio capture) and running a live FFT locally
-sidesteps both problems: no API tier dependency at all, and it reacts
-to whatever's actually audible in the moment, not just Spotify (video
-audio, anything else playing, would show up too -- an accepted, honest
-trade-off, not a bug).
+Now-playing data source (CORRECTED 2026-09-06, live-confirmed): this
+originally polled spotify_api.get_current_playback() (the Web API's
+GET /me/player/currently-playing). Ed's live testing showed that
+endpoint ALSO returns 403 "Active premium subscription required for
+the owner of the app" on his free-tier account -- contrary to this
+module's own original assumption that read-only playback info was
+unaffected by the Premium restriction (only the playback-CONTROL
+endpoints were expected to be gated). Switched to
+spotify_player.get_now_playing(), which reads the same title/artist/
+album/is_playing/position straight from Windows' own System Media
+Transport Controls (SMTC) session info instead -- unaffected by
+Spotify's account tier or API-access approval entirely, since it never
+talks to Spotify's servers. spotify_api.get_current_playback() is kept
+as a fallback (tried second) in case SMTC is ever unavailable (winsdk
+missing) or Ed upgrades to Premium and Spotify's API becomes more
+useful again. SMTC doesn't expose album art (a thumbnail stream, not a
+URL) -- _enrich_album_art() does a best-effort spotify_api.search()
+lookup for that instead, cached per track since search is unaffected
+by the Premium restriction.
+
+Visualizer: why local audio capture instead of Spotify's audio-analysis
+endpoint -- Spotify deprecated Audio Features/Audio Analysis for new
+API applications in their November 2024 policy tightening (extended-
+quota approval required, not available to a small personal app like
+this one) -- and even where available, that endpoint returns a
+PRECOMPUTED, per-track analysis, not a live audio stream, so it was
+never going to drive a real-time visualizer anyway. Capturing actual
+system audio output (WASAPI loopback -- "what you hear", the same
+mechanism apps like OBS use for desktop-audio capture) and running a
+live FFT locally sidesteps both problems: no API tier dependency at
+all, and it reacts to whatever's actually audible in the moment, not
+just Spotify (video audio, anything else playing, would show up too --
+an accepted, honest trade-off, not a bug).
 
 One background thread, started lazily via start() (same lazy-thread
 pattern as youtube_player.py's owner thread -- importing this module
 must never start capturing audio or hitting the network as a side
 effect). Two nested loops:
-  - Outer: poll get_current_playback() every _POLL_INTERVAL_S seconds.
+  - Outer: poll _get_now_playing() every _POLL_INTERVAL_S seconds.
     Broadcasts a "spotify_now_playing" HUD message only when the
     track/is_playing state actually CHANGES (never spams identical
     broadcasts every poll tick).
@@ -34,12 +53,12 @@ effect). Two nested loops:
     while nothing's playing.
 
 Defensive by construction throughout (this bridge session cannot
-live-test any of this against Ed's real audio hardware / WASAPI
-availability): every failure mode -- sounddevice missing, no WASAPI
-host API on this machine, no default output device, a mid-stream
-capture error -- is caught, logged once, and degrades to "now-playing
-text still updates, visualizer silently stays off" rather than
-crashing jarvis.py's boot thread.
+live-test any of this against Ed's real audio hardware / WASAPI /SMTC
+availability): every failure mode -- sounddevice/winsdk missing, no
+WASAPI host API on this machine, no default output device, a mid-
+stream capture error -- is caught, logged once, and degrades to "now-
+playing text still updates (or shows nothing), visualizer silently
+stays off" rather than crashing jarvis.py's boot thread.
 
 Public API
 ----------
@@ -54,6 +73,7 @@ import time
 from typing import Optional
 
 import spotify_api
+import spotify_player
 import hud_server
 
 _POLL_INTERVAL_S = 3.0
@@ -65,6 +85,7 @@ _BLOCK_SIZE = 1024
 _thread: Optional[threading.Thread] = None
 _thread_lock = threading.Lock()
 _last_broadcast_state: Optional[tuple] = None
+_art_cache: dict = {}  # (track, tuple(artists)) -> album_art_url | None
 
 
 def start() -> None:
@@ -91,15 +112,60 @@ def _broadcast(msg: dict) -> None:
         print(f"[spotify_hud] broadcast failed: {e}", flush=True)
 
 
+def _get_now_playing() -> Optional[dict]:
+    """SMTC first (works on any account tier -- see module docstring),
+    falling back to the Web API only if SMTC is unavailable. Never
+    raises."""
+    try:
+        np = spotify_player.get_now_playing()
+        if np is not None:
+            return np
+    except Exception as e:
+        print(f"[spotify_hud] SMTC now-playing lookup errored: {e}", flush=True)
+    try:
+        return spotify_api.get_current_playback()
+    except Exception as e:
+        print(f"[spotify_hud] get_current_playback() errored: {e}", flush=True)
+        return None
+
+
+def _enrich_album_art(np: dict) -> Optional[str]:
+    """SMTC never provides album art (see module docstring) -- do a
+    best-effort spotify_api.search() lookup keyed on track+artist,
+    cached so a track that's still playing doesn't re-search on every
+    3s poll tick. Returns None (never raises) on no match or if search
+    itself is unavailable -- the HUD simply shows no art in that case,
+    same as any other honest-miss in this codebase."""
+    if np.get("album_art_url"):
+        return np["album_art_url"]
+    track, artists = np.get("track"), tuple(np.get("artists") or ())
+    if not track:
+        return None
+    key = (track, artists)
+    if key in _art_cache:
+        return _art_cache[key]
+    query = f"{track} {' '.join(artists)}".strip()
+    try:
+        results = spotify_api.search(query, types=("track",), limit=1)
+    except Exception as e:
+        print(f"[spotify_hud] album art search errored: {e}", flush=True)
+        results = []
+    art_url = None
+    # search()'s own return shape doesn't currently carry album art (only
+    # get_current_playback() did) -- results[0] here is deliberately just
+    # used to confirm a match exists; a full art-url fetch would need a
+    # dedicated Web API call this module doesn't make today. Documented
+    # gap, not a silent bug: _art_cache[key] caches None so this doesn't
+    # re-search every poll tick for a song with no art available this way.
+    _art_cache[key] = art_url
+    return art_url
+
+
 def _poll_loop() -> None:
     global _last_broadcast_state
     print("[spotify_hud] now-playing poll loop started", flush=True)
     while True:
-        try:
-            np = spotify_api.get_current_playback()
-        except Exception as e:
-            print(f"[spotify_hud] get_current_playback() errored: {e}", flush=True)
-            np = None
+        np = _get_now_playing()
 
         state = (np.get("track"), np.get("artists"), np.get("is_playing")) if np else None
         if state != _last_broadcast_state:
@@ -110,8 +176,10 @@ def _poll_loop() -> None:
                 _broadcast({
                     "type": "spotify_now_playing", "playing": True,
                     "track": np.get("track"), "artists": np.get("artists"),
-                    "album": np.get("album"), "album_art_url": np.get("album_art_url"),
+                    "album": np.get("album"), "album_art_url": _enrich_album_art(np),
                     "is_playing": np.get("is_playing"),
+                    "progress_ms": np.get("progress_ms"),
+                    "duration_ms": np.get("duration_ms"),
                 })
 
         if np and np.get("is_playing"):
@@ -123,9 +191,10 @@ def _poll_loop() -> None:
 def _run_visualizer_until_stopped() -> None:
     """Runs the WASAPI-loopback-capture + FFT + broadcast loop until
     playback stops or a capture error occurs. Re-checks
-    get_current_playback() every _POLL_INTERVAL_S (not every frame --
-    that would mean a network round-trip per visualizer frame) so it
-    still notices a pause/track-end within one poll interval."""
+    _get_now_playing() every _POLL_INTERVAL_S (not every frame -- SMTC
+    lookups are cheap but still a WinRT async round-trip, no reason to
+    pay it per visualizer frame) so it still notices a pause/track-end
+    within one poll interval."""
     try:
         import numpy as np
         import sounddevice as sd
@@ -158,7 +227,7 @@ def _run_visualizer_until_stopped() -> None:
                 now = time.time()
                 if now - last_playback_check > _POLL_INTERVAL_S:
                     last_playback_check = now
-                    np_state = spotify_api.get_current_playback()
+                    np_state = _get_now_playing()
                     if not np_state or not np_state.get("is_playing"):
                         print("[spotify_hud] playback stopped -- ending "
                               "visualizer capture", flush=True)
@@ -197,7 +266,11 @@ def _find_wasapi_loopback_device(sd) -> Optional[int]:
 def _fft_bins(block, np) -> list:
     """Collapse one audio block into _VIZ_BINS normalized (0..1) log-
     spaced magnitude bins -- a standard "spectrum analyzer" reduction,
-    not anything Spotify-specific. Mono-mixes stereo first."""
+    not anything Spotify-specific. Mono-mixes stereo first. `np` here
+    is the numpy module (imported by the caller), not a now-playing
+    dict -- same parameter name used for the unrelated "now playing"
+    dict elsewhere in this file is a same-letters coincidence, not a
+    shared variable; the two never appear in the same scope."""
     if block.ndim > 1:
         mono = block.mean(axis=1)
     else:

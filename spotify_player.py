@@ -1,11 +1,13 @@
 """
-spotify_player.py -- OS-level playback CONTROL for Ed's Spotify DESKTOP
-app (not the Web API's /me/player endpoints -- those return 403
-"Premium required" on Ed's free-tier account for every actual control
-action: play, pause, next, previous, shuffle, volume, seek. Search,
-read-only now-playing, and playlist CRUD all still go through
-spotify_api.py, which IS on the Web API since those aren't playback-
-control endpoints).
+spotify_player.py -- OS-level playback CONTROL, and now-playing status,
+for Ed's Spotify DESKTOP app (not the Web API's /me/player endpoints --
+those return 403 "Premium required" on Ed's free-tier account for
+EVERY /me/player call, control actions included AND, live-confirmed
+2026-09-06, the supposedly read-only GET /me/player/currently-playing
+too: "Active premium subscription required for the owner of the app."
+Correction to this module's own earlier assumption -- see item 4 below.
+Search and playlist CRUD are unaffected (different endpoint family) and
+still go through spotify_api.py's Web API wrapper).
 
 Three separate OS-level mechanisms, each picked because it works
 regardless of Premium status:
@@ -45,13 +47,32 @@ regardless of Premium status:
    "shuffle" voice command doesn't visibly toggle the shuffle icon and
    can report it -- this is flagged as unverified until he does.
 
-Windows-only end to end (ctypes.windll, pywin32) -- pywin32 is already
-a requirement.txt dependency (used elsewhere for foreground-window
-detection). Every public function degrades to a logged, non-raising
-{"ok": False, "error": ...} on a non-Windows host or if pywin32/ctypes
-access fails, rather than crashing whatever voice/chat thread called
-it -- this bridge session cannot live-test any of this on Ed's actual
-machine, so defensive-by-construction matters more than usual here.
+4. get_now_playing() -- title/artist/album/is_playing/position, read
+   straight from Windows' own System Media Transport Controls (SMTC)
+   session info via the `winsdk` package, instead of Spotify's Web API.
+   This is the SAME OS-level session that already makes the global
+   media keys above work (Spotify registers one automatically the
+   moment it's playing anything), so reading its metadata is no new
+   trust boundary -- and critically, it isn't gated by Spotify's own
+   account tier or API-access approval AT ALL, since it never talks to
+   Spotify's servers. Filters GlobalSystemMediaTransportControlsSession
+   Manager's sessions down to the one whose source_app_user_model_id
+   names Spotify (a machine can have several media sessions open at
+   once -- a browser tab, this same YouTube player, etc.). Does NOT
+   provide album art (SMTC exposes a thumbnail as an in-memory stream,
+   not a URL) -- spotify_hud.py does a best-effort spotify_api.search()
+   lookup for that instead, since search is unaffected by the Premium
+   restriction above.
+
+Windows-only end to end (ctypes.windll, pywin32, winsdk) -- pywin32 is
+already a requirements.txt dependency (used elsewhere for foreground-
+window detection); winsdk is new, added for this module's SMTC access
+alone. Every public function degrades to a logged, non-raising
+{"ok": False, "error": ...} (or None, for get_now_playing) on a
+non-Windows host or if pywin32/winsdk/ctypes access fails, rather than
+crashing whatever voice/chat thread called it -- this bridge session
+cannot live-test any of this on Ed's actual machine, so defensive-by-
+construction matters more than usual here.
 
 Public API
 ----------
@@ -61,6 +82,7 @@ previous_track() -> dict
 play_uri(uri: str) -> dict
 toggle_shuffle() -> dict
 is_spotify_running() -> bool
+get_now_playing() -> dict | None
 """
 
 from __future__ import annotations
@@ -261,3 +283,60 @@ def play_uri(uri: str) -> dict:
         else:
             raise OSError("play_uri needs Windows' os.startfile")
     return _safe("play_uri", _do)
+
+
+# SMTC PlaybackStatus enum values (Windows.Media.Control namespace) --
+# hardcoded here rather than imported from winsdk's enum (keeps this
+# readable without requiring winsdk to be installed just to read this
+# source file / run this module's tests off Windows).
+_SMTC_PLAYING = 4
+
+
+def get_now_playing() -> Optional[dict]:
+    """title/artist/album/is_playing/progress_ms/duration_ms for
+    whatever Spotify's desktop app currently has loaded, read from
+    Windows' own SMTC session info -- NOT Spotify's Web API (see
+    module docstring, item 4, for why: that read-only endpoint also
+    turned out to require Premium on Ed's account). Returns None off
+    Windows, if the `winsdk` package isn't installed, if no SMTC
+    session belongs to Spotify right now (app closed or nothing ever
+    loaded), or on any lookup failure -- honest miss, never guesses.
+    `album_art_url` is always None here (SMTC exposes a thumbnail as an
+    in-memory stream, not a fetchable URL) -- spotify_hud.py fills that
+    in separately via a search() lookup."""
+    if not _IS_WINDOWS:
+        return None
+    try:
+        import asyncio
+        from winsdk.windows.media.control import (
+            GlobalSystemMediaTransportControlsSessionManager as _MediaManager)
+    except ImportError as e:
+        print(f"[spotify_player] winsdk not installed -- now-playing via "
+              f"SMTC disabled (`pip install winsdk`): {e}", flush=True)
+        return None
+
+    async def _fetch():
+        mgr = await _MediaManager.request_async()
+        for session in mgr.get_sessions():
+            app_id = (session.source_app_user_model_id or "").lower()
+            if "spotify" not in app_id:
+                continue
+            info = await session.try_get_media_properties_async()
+            playback = session.get_playback_info()
+            timeline = session.get_timeline_properties()
+            return {
+                "is_playing": int(playback.playback_status) == _SMTC_PLAYING,
+                "track": info.title or None,
+                "artists": [info.artist] if info.artist else [],
+                "album": info.album_title or None,
+                "album_art_url": None,
+                "progress_ms": int(timeline.position.total_seconds() * 1000),
+                "duration_ms": int(timeline.end_time.total_seconds() * 1000),
+            }
+        return None
+
+    try:
+        return asyncio.run(_fetch())
+    except Exception as e:
+        print(f"[spotify_player] SMTC now-playing lookup failed: {e}", flush=True)
+        return None

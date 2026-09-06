@@ -9,13 +9,19 @@ same as lights/local_media/email-confirm/youtube).
 
 Playback actually happens two different ways depending on the intent
 (see spotify_api.py and spotify_player.py's own docstrings for the full
-free-tier-vs-Premium reasoning):
+free-tier-vs-Premium reasoning, CORRECTED 2026-09-06 after live
+testing):
   - play/pause/skip/previous/shuffle -- OS-level control
     (spotify_player.py): global media keys, the spotify: URI handler,
     and a focused Ctrl+S for shuffle. Works on Ed's free account.
-  - search, now-playing, playlist create/delete -- the real Web API
-    (spotify_api.py). Also works on free tier (none of these are
-    playback-control endpoints).
+  - search, playlist create/delete -- the real Web API (spotify_api.py).
+    Works on free tier (not playback-control endpoints).
+  - now-playing -- ALSO spotify_player.py (SMTC, Windows' own media-
+    session info), NOT the Web API. Ed's live testing found GET
+    /me/player/currently-playing returns 403 Premium-required too, so
+    this module reads title/artist/album/is_playing the same OS-level
+    way play_pause() etc. already work, rather than a Web API call
+    that would just fail on his account.
 
 Ordering in jarvis.py's dispatch chain (all three call sites): checked
 BEFORE youtube, same reasoning as local_media -- youtube's own "play
@@ -76,7 +82,7 @@ def _spotify_is_active(raw: str) -> bool:
     before this module existed."""
     if _SPOTIFY_WORD_RE.search(raw):
         return True
-    np = spotify_api.get_current_playback()
+    np = spotify_player.get_now_playing()
     if np is not None and np.get("is_playing"):
         return True
     return spotify_player.is_spotify_running()
@@ -235,7 +241,7 @@ def _handle_play(name: str, shuffle: bool) -> str:
         # media key, but check current state first so the reply is
         # honest rather than guessing "Resumed" when it was already
         # playing (mirrors youtube_player's is-playing-aware pause()).
-        np = spotify_api.get_current_playback()
+        np = spotify_player.get_now_playing()
         if np and np.get("is_playing"):
             return "Spotify's already playing."
         result = spotify_player.play_pause()
@@ -272,7 +278,7 @@ def _handle_play(name: str, shuffle: bool) -> str:
 
 
 def _handle_now_playing() -> str:
-    np = spotify_api.get_current_playback()
+    np = spotify_player.get_now_playing()
     if np is None:
         return "Nothing's playing on Spotify right now."
     artists = ", ".join(np["artists"])
