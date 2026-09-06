@@ -2238,10 +2238,29 @@ def _pick_route(user_text: str) -> str:
         if _h.get("role") == "assistant":
             _prior_assistant_reply = _h.get("content") or ""
             break
+    # BUG FIXED 2026-09-06o (confirmed live): "Delete it." following
+    # Chloe's OWN grounding-violation hedge ("I want to double-check
+    # that before I tell you it's done -- can you ask me again in a
+    # moment?") fell through to the ordinary (non-tools-forced) path --
+    # same failure mode as the "send it" miss above, but unfixable by
+    # adding more keywords: that hedge is deliberately domain-neutral
+    # (shared by every _ACTION_CLAIM_PATTERNS class -- email delete/
+    # draft/reply AND wallet_send), so it will never contain "email"/
+    # "trash"/"sent it"/etc. for _EMAIL_REPLY_KEYWORDS to match. Confirmed
+    # live: the model then freely claimed "The second email has been
+    # deleted from your inbox" with zero tool calls that turn -- no
+    # grounding backstop, since that only runs on the tools-forced path.
+    # Recognizing the hedge itself by its own fixed wording, instead of
+    # any topic keyword, closes this structurally: a short deictic right
+    # after Chloe says "I'm not sure, ask again" is almost always the
+    # user re-confirming that exact pending action, whatever domain it's
+    # in -- forcing tools is the safe default either way, since that's
+    # what re-engages _grounding_violation as a backstop.
+    _prior_was_hedge = "double-check that before I tell you it's" in _prior_assistant_reply
     if (_has_unresolved_deictic(user_text, user_text.split())
             and _prior_assistant_reply
-            and any(kw in _prior_assistant_reply.lower()
-                    for kw in _EMAIL_REPLY_KEYWORDS)):
+            and (_prior_was_hedge or any(kw in _prior_assistant_reply.lower()
+                    for kw in _EMAIL_REPLY_KEYWORDS))):
         return 'ollama_tools' if _ollama_available() else 'local_chat'
     # Self-knowledge questions ("what have you learned about trading")
     # never go to web search, even when they contain a real-time-looking
