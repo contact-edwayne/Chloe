@@ -157,7 +157,10 @@ def _refresh_access_token(refresh_token: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            print(f"[spotify_api] token refresh failed: {resp.status_code} "
+                  f"{resp.text[:500]}", flush=True)
+            return None
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token refresh failed: {e}", flush=True)
@@ -232,7 +235,15 @@ def _run_consent_flow(client_id: str, client_secret: str) -> Optional[dict]:
             auth=(client_id, client_secret),
             timeout=10,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # raise_for_status()'s own message doesn't include the response
+            # BODY, which is exactly where Spotify puts the actual reason
+            # (invalid_client, invalid_grant, redirect_uri_mismatch, etc.)
+            # -- printing it directly makes this self-diagnosing instead of
+            # a guessing game over chat.
+            print(f"[spotify_api] token exchange failed: {resp.status_code} "
+                  f"{resp.text[:500]}", flush=True)
+            return None
         data = resp.json()
     except Exception as e:
         print(f"[spotify_api] token exchange failed: {e}", flush=True)
