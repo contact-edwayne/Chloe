@@ -323,9 +323,17 @@ def _request(method: str, path: str, *, params=None, json_body=None,
         return None, "not_connected"
 
     if resp.status_code == 403:
+        # Usually the expected "Premium required" for a playback-control
+        # endpoint on Ed's free account (silent by design -- callers give
+        # an honest voice reply for that case, not a crash). But GET /me
+        # and other non-player endpoints returning 403 is NOT that case --
+        # print it either way so an unexpected 403 (e.g. the app's own
+        # user-access list in Developer Mode) isn't silently invisible.
+        print(f"[spotify_api] {method} {path} -> 403: {resp.text[:300]}", flush=True)
         return None, "premium_required"
 
     if resp.status_code == 404:
+        print(f"[spotify_api] {method} {path} -> 404: {resp.text[:300]}", flush=True)
         return None, "not_found"
 
     if resp.status_code == 204:  # success, no body (common on PUT/DELETE)
