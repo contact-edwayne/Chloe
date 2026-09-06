@@ -8081,7 +8081,14 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                               "State facts no more strongly than the "
                               "tool result does -- e.g. Trash is "
                               "recoverable, so never call a delete "
-                              "'permanent'.")
+                              "'permanent'. If the tool result asks Ed "
+                              "to say something specific to confirm or "
+                              "cancel (e.g. 'say send it to send, or "
+                              "cancel to drop it'), you MUST keep both "
+                              "of those instructions in your reply, in "
+                              "your own words or verbatim -- brevity "
+                              "never justifies dropping the confirm or "
+                              "cancel phrasing Ed needs to act on this.")
                 break
         return out
 

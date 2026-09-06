@@ -38,6 +38,8 @@ import time
 
 import requests
 
+from ollama_keepalive import get_keep_alive as _get_ollama_keep_alive
+
 try:
     from chloe_lock import locked
 except Exception:  # pragma: no cover - lock is best-effort
@@ -392,7 +394,8 @@ def _synthesize(facts_body: str = "", recent: str = "") -> dict:
         r = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json={"model": MODEL, "prompt": prompt, "stream": False,
-                  "format": "json", "options": {"num_predict": 400, "temperature": 0.3}},
+                  "format": "json", "options": {"num_predict": 400, "temperature": 0.3},
+                  "keep_alive": _get_ollama_keep_alive()},
             timeout=TIMEOUT,
         )
         r.raise_for_status()

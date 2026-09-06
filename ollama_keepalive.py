@@ -20,10 +20,24 @@ unrelated call site happened to log its own response body.
 This module is now the ONE place OLLAMA_KEEP_ALIVE is read and validated.
 Every Ollama call site across the app (jarvis.py, brain_http.py,
 brain_wiring.py, screen_vision.py, chloe_embed.py via chloe_memory.py /
-wiki_embedding.py) should call get_keep_alive() once at import time and
-reuse the result, rather than independently re-reading+re-trusting the
-raw env var -- that duplication is exactly why one bad value took down
-every call site simultaneously instead of just one.
+wiki_embedding.py, chloe_ed_profile.py) should call get_keep_alive() once
+at import time and reuse the result, rather than independently
+re-reading+re-trusting the raw env var -- that duplication is exactly why
+one bad value took down every call site simultaneously instead of just
+one.
+
+2026-09-06: chloe_ed_profile.py's /api/generate call (qwen2.5:14b, fired
+by the daily-reflect job) was missing from this list and sent no
+keep_alive at all. Omitting keep_alive doesn't mean "leave the existing
+TTL alone" -- Ollama resets that model's expiry to ITS OWN server-side
+default (30m here, from the OS-level OLLAMA_KEEP_ALIVE user env var,
+independent of whatever this Python process's .env override says) on
+every such call. Confirmed live: two round-1 tool-selection calls (60s,
+71s vs. the normal 12-18s) both showed qwen2.5:14b missing from /api/ps
+in the residency-check log immediately beforehand -- daily-reflect fires
+on an arbitrary catch-up/boot schedule unrelated to conversation activity,
+so any 30+ minute gap after it runs (with no other qwen call in between)
+silently evicted the model before Chloe's next turn needed it.
 """
 
 import os
