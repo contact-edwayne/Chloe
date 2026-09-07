@@ -313,7 +313,7 @@ def try_handle_spotify_command(text: str) -> Optional[str]:
     if deleted is not None:
         return _handle_delete_playlist(deleted)
 
-    if _NOW_PLAYING_RE.search(raw):
+    if _NOW_PLAYING_RE.search(raw) and _spotify_is_active(raw):
         return _handle_now_playing()
 
     # Explicit "play X on spotify" / "spotify play X" -- checked before
