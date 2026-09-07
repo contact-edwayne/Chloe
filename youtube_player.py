@@ -675,7 +675,13 @@ def _launch_page(pw):
                  # -- this blink feature is what makes Chromium mark
                  # itself as automation-controlled to page JS in the
                  # first place.
-                 "--disable-blink-features=AutomationControlled"],
+                 "--disable-blink-features=AutomationControlled",
+                 # Starts the window already minimized instead of us
+                 # minimizing it a beat after it first paints -- kills
+                 # the brief visible flash at launch that
+                 # _hide_browser_window's post-hoc ShowWindow call
+                 # can't fully avoid (2026-09-07 round 12).
+                 "--start-minimized"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
