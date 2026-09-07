@@ -279,9 +279,18 @@ def parse_intent(text: str) -> Optional[tuple[str, bool]]:
 _MUSIC_WORD_RE = re.compile(r"\b(?:song|track|music|playback)\b")
 
 
+# "Can/could/would you (please) ..." -- common leading politeness that
+# isn't part of the wake word and isn't stripped anywhere else. Shared
+# by every command check via _clean_for_dispatch below.
+_LEADING_POLITENESS_RE = re.compile(
+    r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?|^please\s+"
+)
+
+
 def _clean_for_dispatch(text: str) -> str:
     raw = (text or "").strip().lower()
     raw = _WAKE_PREFIX_RE.sub("", raw)
+    raw = _LEADING_POLITENESS_RE.sub("", raw)
     raw = raw.rstrip(" .!?")
     return raw
 
@@ -437,36 +446,41 @@ def _format_stop_result(result: dict) -> str:
 # shape as _is_skip_command/_is_pause_command above -- no loose substring
 # matching that could misfire on unrelated chat.
 
+# Leading-anchor only (no trailing $) -- these match on a recognized
+# prefix and ignore anything after it, so trailing STT noise (a second
+# voice picked up in the same recording window, a run-on continuation)
+# doesn't block an otherwise-clean match. See _clean_for_dispatch's
+# comment above for the other half of this fix.
 _SONG_ID_PATTERNS = [
-    re.compile(r"^what(?:'s|s| is) (?:this|the) song(?: called)?$"),
-    re.compile(r"^what(?:'s|s| is) (?:this|the) track(?: called)?$"),
-    re.compile(r"^what(?:'s|s| is) (?:currently )?playing$"),
-    re.compile(r"^who(?:'s|s| is) (?:this|it) by$"),
-    re.compile(r"^who sings this(?: song)?$"),
-    re.compile(r"^name (?:this|that) song$"),
-    re.compile(r"^name (?:this|that) track$"),
-    re.compile(r"^what song is (?:this|playing)$"),
-    re.compile(r"^what track is this$"),
+    re.compile(r"^what(?:'s|s| is) (?:this|the) song(?: called)?\b"),
+    re.compile(r"^what(?:'s|s| is) (?:this|the) track(?: called)?\b"),
+    re.compile(r"^what(?:'s|s| is) (?:currently )?playing\b"),
+    re.compile(r"^who(?:'s|s| is) (?:this|it) by\b"),
+    re.compile(r"^who sings this(?: song)?\b"),
+    re.compile(r"^name (?:this|that) song\b"),
+    re.compile(r"^name (?:this|that) track\b"),
+    re.compile(r"^what song is (?:this|playing)\b"),
+    re.compile(r"^what track is this\b"),
 ]
 
 _SONG_INFO_PATTERNS = [
-    re.compile(r"^tell me (?:more )?about (?:this|the) song$"),
-    re.compile(r"^more about (?:this|the) song$"),
-    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) song$"),
-    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) song$"),
-    re.compile(r"^song info(?:rmation)?$"),
-    re.compile(r"^what album is this(?: song)? from$"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) song\b"),
+    re.compile(r"^more about (?:this|the) song\b"),
+    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) song\b"),
+    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) song\b"),
+    re.compile(r"^song info(?:rmation)?\b"),
+    re.compile(r"^what album is this(?: song)? from\b"),
 ]
 
 _ARTIST_INFO_PATTERNS = [
-    re.compile(r"^tell me (?:more )?about (?:this|the) artist$"),
-    re.compile(r"^tell me (?:more )?about (?:this|the) singer$"),
-    re.compile(r"^more about (?:this|the) artist$"),
-    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) artist$"),
-    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) artist$"),
-    re.compile(r"^who(?:'s|s| is) (?:this|the) artist$"),
-    re.compile(r"^artist info(?:rmation)?$"),
-    re.compile(r"^artist bio$"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) artist\b"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) singer\b"),
+    re.compile(r"^more about (?:this|the) artist\b"),
+    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) artist\b"),
+    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) artist\b"),
+    re.compile(r"^who(?:'s|s| is) (?:this|the) artist\b"),
+    re.compile(r"^artist info(?:rmation)?\b"),
+    re.compile(r"^artist bio\b"),
 ]
 
 
