@@ -192,10 +192,7 @@ def _poll_loop() -> None:
         else:
             _broadcast(_build_playing_broadcast(np))
 
-        if np and np.get("is_playing"):
-            _run_visualizer_until_stopped()
-        else:
-            time.sleep(_POLL_INTERVAL_S)
+        time.sleep(_POLL_INTERVAL_S)
 
 
 def _run_visualizer_until_stopped() -> None:
