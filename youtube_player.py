@@ -901,6 +901,20 @@ def _seek_to(page, seconds: float) -> bool:
         return False
 
 
+def _get_volume_pct(page) -> Optional[float]:
+    """Read the player's current volume (0-100) via #movie_player's own
+    getVolume() method. Returns None on any failure -- never raises."""
+    try:
+        result = page.evaluate(
+            "() => { const p = document.getElementById('movie_player'); "
+            "if (p && typeof p.getVolume === 'function') { "
+            "return p.getVolume(); } return null; }")
+        return float(result) if result is not None else None
+    except Exception as e:
+        print(f"[youtube_player] getVolume() call failed: {e}", flush=True)
+        return None
+
+
 def _set_volume_pct(page, pct: float) -> bool:
     """Set player volume (0-100) via #movie_player's own setVolume(pct)
     method -- same direct-DOM-method approach as _player_api_call/
@@ -1039,6 +1053,11 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         return {"ok": ok, "volume": pct if ok else None,
                 "error": None if ok else "setVolume call failed"}
 
+    if name == "get_volume":
+        pct = _get_volume_pct(page)
+        return {"ok": pct is not None, "volume": pct,
+                "error": None if pct is not None else "getVolume call failed"}
+
     if name == "get_now_playing":
         try:
             info = page.evaluate(
@@ -1151,8 +1170,16 @@ def get_current_video_id() -> Optional[str]:
 
 def set_volume(pct: float) -> dict:
     """Set player volume, 0-100. Used by the HUD's click-to-set volume
-    bar."""
+    bar, and by jarvis.py's mic-listening audio ducking."""
     return _enqueue("set_volume", (pct,))
+
+
+def get_volume() -> dict:
+    """Read the player's current volume, 0-100. {"ok": False} (never
+    raises) if nothing's loaded or the read fails. Used by jarvis.py's
+    audio ducking to remember the pre-duck level so it can restore the
+    exact value afterward instead of guessing a default."""
+    return _enqueue("get_volume", ())
 
 
 def seek(seconds: float) -> dict:

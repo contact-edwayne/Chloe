@@ -26,6 +26,7 @@ so the HUD ring animates correctly during the voice path too.
 
 import asyncio
 import base64
+import contextlib
 import io
 import json
 import os
@@ -5770,6 +5771,38 @@ def _ptt_record_phase(sd, device):
             return
 
 
+_DUCK_VOLUME_PCT = 15.0  # how low to duck YouTube while actively recording
+
+
+@contextlib.contextmanager
+def _duck_music_while_listening():
+    previous = None
+    try:
+        np = youtube_player.get_now_playing()
+        if np and np.get("playing") and np.get("is_playing"):
+            vol_result = youtube_player.get_volume()
+            current = vol_result.get("volume") if vol_result.get("ok") else None
+            if current is None:
+                current = 100.0  # unknown -- assume full so restoring still helps
+            if current > _DUCK_VOLUME_PCT:
+                youtube_player.set_volume(_DUCK_VOLUME_PCT)
+                previous = current
+                print(f"[voice] ducked YouTube {current:.0f}% -> "
+                      f"{_DUCK_VOLUME_PCT:.0f}% for listening", flush=True)
+    except Exception as e:
+        print(f"[voice] music duck failed (non-fatal): {e}", flush=True)
+    try:
+        yield
+    finally:
+        if previous is not None:
+            try:
+                youtube_player.set_volume(previous)
+                print(f"[voice] restored YouTube volume to {previous:.0f}%",
+                      flush=True)
+            except Exception as e:
+                print(f"[voice] music volume restore failed: {e}", flush=True)
+
+
 def _record_until_signal(sd, device, stop_event, max_seconds=300):
     """Open a fresh InputStream and record until `stop_event` fires (or the
     safety cap kicks in). Used for push-to-talk: no silence detection, the
@@ -5781,7 +5814,7 @@ def _record_until_signal(sd, device, stop_event, max_seconds=300):
     needs_resample = (native_rate != SAMPLE_RATE)
     src_block = stream.blocksize or CHUNK_SAMPLES
 
-    with stream:
+    with stream, _duck_music_while_listening():
         for i in range(max_chunks):
             if stop_event.is_set():
                 break
@@ -6369,7 +6402,7 @@ def _record_utterance(sd, device, no_voice_timeout_s: float | None = None):
     needs_resample = (native_rate != SAMPLE_RATE)
     src_block = stream.blocksize or CHUNK_SAMPLES
 
-    with stream:
+    with stream, _duck_music_while_listening():
         for i in range(max_chunks):
             try:
                 audio_data, _overflow = stream.read(src_block)
