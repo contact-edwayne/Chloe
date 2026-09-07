@@ -3833,8 +3833,18 @@
     }
   }
   function onYoutubeControlResult(data) {
+    const status = document.getElementById('mp-status');
     if (!data.ok) {
       console.warn('[youtube] control action failed:', data.action, data.error);
+      if (status && (data.action === 'play_playlist' || data.action === 'search_and_play')) {
+        status.textContent = 'ERROR: ' + (data.error || 'failed');
+      }
+      return;
+    }
+    if (data.action === 'play_playlist' && data.shuffle && data.shuffle_note && status) {
+      // Honest fallback: shuffle was requested but couldn't be fully
+      // honored (see youtube_playlists.play_playlist's shuffle_note).
+      status.textContent = 'SHUFFLE: ' + data.shuffle_note;
     }
   }
 

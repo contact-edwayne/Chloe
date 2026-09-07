@@ -4224,7 +4224,9 @@ async def handle_youtube_control(data, websocket):
         result = await asyncio.to_thread(_youtube_playlists.play_playlist, name, shuffle)
         await _ws_send(websocket, {"type": "youtube_control_result",
                                     "ok": result.get("ok", False), "action": action,
-                                    "error": result.get("error"), "name": result.get("name")})
+                                    "error": result.get("error"), "name": result.get("name"),
+                                    "shuffle": result.get("shuffle"),
+                                    "shuffle_note": result.get("shuffle_note")})
         return
 
     if action == "search_and_play":
