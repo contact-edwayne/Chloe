@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chloe Arcade</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&family=Cormorant+Garamond:ital,wght@1,400;1,500&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; height: 100%; background: #04050a; color: #d8e6ef; font-family: 'Inter', sans-serif; overflow: hidden; }
+  * { box-sizing: border-box; }
+  button { font: inherit; }
+  @keyframes mountIn { from { opacity: 0; transform: translateY(10px) scale(.995); } to { opacity: 1; transform: none; } }
+  @keyframes sheetIn { from { transform: translateY(100%); } to { transform: none; } }
+  @keyframes drift { from { background-position: 0 0, 0 0; } to { background-position: 0 -64px, -64px 0; } }
+  @keyframes sheen { 0% { transform: translateX(-140%) skewX(-18deg); opacity: 0; } 12% { opacity: .5; } 60% { opacity: .5; } 100% { transform: translateX(240%) skewX(-18deg); opacity: 0; } }
+  @keyframes bounceA { 0%, 100% { transform: scaleY(.32); } 50% { transform: scaleY(.92); } }
+  @keyframes bounceB { 0%, 100% { transform: scaleY(.66); } 42% { transform: scaleY(.24); } 72% { transform: scaleY(1); } }
+  @keyframes bounceC { 0%, 100% { transform: scaleY(.5); } 30% { transform: scaleY(1); } 65% { transform: scaleY(.38); } }
+  @keyframes spin { to { transform: rotate(405deg); } }
+  @keyframes spinRev { to { transform: rotate(-315deg); } }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @keyframes haze { 0%, 100% { opacity: .35; transform: scale(1); } 50% { opacity: .8; transform: scale(1.09); } }
+  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+
+  #hub {
+    --acc: #00e5ff; --acc2: #b06cff; --ink: #ff6ec7; --line: #00e5ff33; --glow: #00e5ff44; --play: running;
+    position: fixed; inset: 0; background: #06070b; display: flex; flex-direction: column; overflow: hidden;
+  }
+  #hub-backdrop {
+    position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(#00e5ff08 1px, transparent 1px) 0 0/64px 64px,
+                linear-gradient(90deg, #00e5ff08 1px, transparent 1px) 0 0/64px 64px;
+    animation: drift 9s linear infinite; animation-play-state: var(--play);
+  }
+  #hub-crt { position: absolute; inset: 0; pointer-events: none; z-index: 6;
+    background: repeating-linear-gradient(180deg, #ffffff0a 0 1px, transparent 1px 3px); }
+
+  /* header */
+  #hub-header { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 22px 30px; flex: none; }
+  #hub-header-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  #crumb-back { flex: none; width: 36px; height: 36px; display: grid; place-items: center; background: #0d0f16; border: 1px solid var(--acc); color: var(--acc); cursor: pointer; font-size: 13px; box-shadow: 0 0 18px var(--glow); }
+  #crumb-back:hover { background: #12161f; }
+  #crumb-kicker { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .34em; color: var(--acc); }
+  #crumb-title { font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; letter-spacing: .16em; color: #eafcff; margin-top: 5px; text-shadow: 0 0 18px var(--glow); }
+  #btn-customize { flex: none; display: flex; align-items: center; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; background: #0d0f16; border: 1px solid var(--line); color: var(--acc); padding: 11px 15px; cursor: pointer; }
+  #btn-customize:hover { border-color: var(--acc); box-shadow: 0 0 18px var(--glow); }
+
+  /* views share this footprint */
+  .view { position: relative; flex: 1; min-height: 0; animation: mountIn .3s ease; }
+  .view[hidden] { display: none; }
+
+  /* home */
+  #view-home { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+  #home-grid { display: grid; grid-template-columns: minmax(0,1.55fr) minmax(0,1fr); gap: 18px; padding: 8px 30px 22px; min-height: 0; }
+  .tile { position: relative; background: linear-gradient(160deg,#0d0f16,#06070b); border: 1px solid var(--line); cursor: pointer; overflow: hidden; }
+  .tile:hover { border-color: var(--acc); box-shadow: 0 0 44px var(--glow); }
+  #tile-retro { display: flex; flex-direction: column; justify-content: space-between; padding: 34px; }
+  .tile-border-light { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .tile-border-light > .square { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); }
+  .tile-border-light .arc { position: absolute; inset: 0; background: conic-gradient(from 0deg, transparent 0 58%, var(--acc) 76%, #ffffff 80%, var(--acc) 84%, transparent 97%); animation: orbit 5s linear infinite; animation-play-state: var(--play); }
+  .tile-border-light .cover { position: absolute; inset: 2px; background: linear-gradient(160deg,#0d0f16,#06070b); }
+  #retro-haze { position: absolute; right: -60px; top: -40px; width: 340px; height: 340px; border-radius: 50%; background: radial-gradient(circle, var(--glow), transparent 62%); animation: haze 7s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
+  #retro-sheen { position: absolute; left: -40%; top: 0; bottom: 0; width: 26%; background: linear-gradient(90deg, transparent, #ffffff14, transparent); animation: sheen 6.5s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
+  #retro-eq { position: absolute; left: 34px; bottom: 124px; display: flex; gap: 11px; align-items: flex-end; height: 140px; pointer-events: none; }
+  #retro-eq > div { width: 30px; transform-origin: bottom; animation-play-state: var(--play); }
+  #retro-top-row { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+  #retro-top-row .featured { letter-spacing: .3em; color: var(--acc); }
+  #retro-rom-count { letter-spacing: .2em; color: var(--ink); }
+  #retro-title-block { position: relative; display: flex; flex-direction: column; gap: 14px; }
+  #retro-title { font-family: 'JetBrains Mono', monospace; font-size: 46px; font-weight: 700; letter-spacing: .06em; color: #eafcff; text-shadow: 0 0 26px var(--glow); line-height: 1; }
+  #retro-systems { display: flex; flex-wrap: wrap; gap: 8px; }
+  #retro-systems span { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .18em; color: #a4bccb; border: 1px solid var(--line); padding: 6px 11px; }
+
+  #home-right { display: grid; grid-template-rows: 1fr 1fr; gap: 18px; min-height: 0; }
+  .tile-small { padding: 28px; display: flex; flex-direction: column; justify-content: flex-end; }
+  .tile-small .kicker { position: relative; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .3em; color: var(--acc); }
+  .tile-small .name { position: relative; font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 700; letter-spacing: .1em; color: #eafcff; margin-top: 8px; }
+  #tile-chess .ring { position: absolute; right: 24px; top: 50%; margin-top: -52px; width: 104px; height: 104px; border: 1px solid var(--acc); box-shadow: 0 0 34px var(--glow); animation: spin 14s linear infinite; animation-play-state: var(--play); pointer-events: none; }
+  #tile-chess .ring2 { position: absolute; right: 48px; top: 50%; margin-top: -28px; width: 56px; height: 56px; border: 1px solid var(--acc2); animation: spinRev 9s linear infinite; animation-play-state: var(--play); pointer-events: none; }
+  #tile-chess .dot { position: absolute; right: 69px; top: 50%; margin-top: -7px; width: 14px; height: 14px; background: var(--acc); box-shadow: 0 0 18px var(--acc); animation: haze 3.4s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
+  #tile-poke .ring { position: absolute; right: 30px; top: 50%; margin-top: -52px; width: 104px; height: 104px; border-radius: 50%; border: 1px solid var(--acc); box-shadow: 0 0 34px var(--glow); pointer-events: none; }
+  #tile-poke .bar { position: absolute; right: 30px; top: 50%; width: 104px; height: 1px; background: var(--acc); opacity: .55; pointer-events: none; }
+  #tile-poke .orbit-wrap { position: absolute; right: 12px; top: 50%; margin-top: -70px; width: 140px; height: 140px; animation: orbit 11s linear infinite; animation-play-state: var(--play); pointer-events: none; }
+  #tile-poke .orbit-wrap span { position: absolute; left: 50%; top: -6px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--ink); box-shadow: 0 0 18px var(--ink); }
+  #tile-poke .haze2 { position: absolute; right: 65px; top: 50%; margin-top: -17px; width: 34px; height: 34px; border-radius: 50%; background: radial-gradient(circle, var(--acc2), transparent 68%); animation: haze 4.2s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
+  #poke-status-pill { position: absolute; left: 28px; top: 28px; display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
+  #poke-status-dot { width: 6px; height: 6px; border-radius: 50%; background: #6d8492; box-shadow: 0 0 10px currentColor; animation: blink 1.6s ease-in-out infinite; animation-play-state: paused; }
+
+  #hub-telemetry { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 18px 30px; border-top: 1px solid var(--line); background: #0a0b10; flex: none; }
+  #chloe-line { font-family: 'Cormorant Garamond', serif; font-style: italic; font-size: 19px; color: var(--ink); }
+  #telemetry-right { display: flex; gap: 26px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
+  #telemetry-right b { font-weight: inherit; color: var(--acc); }
+
+  /* library (emulator) view */
+  #view-emulator { display: flex; flex-direction: column; padding: 8px 30px 26px; gap: 18px; min-height: 0; }
+  #lib-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex: none; }
+  #lib-filters { display: flex; flex-wrap: wrap; gap: 7px; }
+  #lib-filters button { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .18em; padding: 8px 13px; cursor: pointer; border: 1px solid var(--line); background: transparent; color: #a4bccb; }
+  #lib-filters button.on { background: var(--acc); color: #04050a; border-color: var(--acc); }
+  #lib-toolbar-right { display: flex; align-items: center; gap: 14px; }
+  #upload-progress { display: none; flex-direction: column; gap: 6px; width: 210px; }
+  #upload-progress.on { display: flex; }
+  #upload-progress-row { display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .14em; color: var(--acc); }
+  #upload-track { height: 3px; background: #151822; }
+  #upload-bar { height: 3px; width: 0%; background: var(--acc); box-shadow: 0 0 12px var(--acc); }
+  #btn-add-rom { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .22em; padding: 11px 18px; cursor: pointer; color: #04050a; background: var(--acc); border: none; box-shadow: 0 0 20px var(--glow); }
+  #rom-grid { flex: 1; overflow: auto; min-height: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(232px,1fr)); gap: 14px; align-content: start; padding-bottom: 6px; }
+  #rom-grid.dragover { outline: 1px dashed var(--acc); outline-offset: -6px; }
+  .rom-card { position: relative; background: #0a0b10; border: 1px solid var(--line); padding: 18px; cursor: pointer; display: flex; flex-direction: column; gap: 16px; min-height: 132px; overflow: hidden; }
+  .rom-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
+  .rom-card.loaded { border-color: var(--acc); }
+  .rom-card-top { display: flex; align-items: center; justify-content: space-between; }
+  .rom-tag { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .2em; color: #04050a; background: var(--acc); padding: 4px 8px; }
+  .rom-size { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6d8492; }
+  .rom-name { flex: 1; font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.4; color: #eafcff; }
+  .rom-action { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .24em; color: var(--acc); }
+  #lib-empty { display: none; align-items: center; justify-content: center; height: 100%; font-family: 'Inter', sans-serif; font-size: 13px; color: #6d8492; text-align: center; padding: 30px; }
+  #lib-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; border-top: 1px solid var(--line); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; flex: none; }
+  #lib-footer-chloe { font-family: 'Cormorant Garamond', serif; font-style: italic; font-size: 17px; letter-spacing: 0; color: var(--ink); }
+
+  /* playing (retro emulator) view */
+  #view-playing { display: flex; flex-direction: column; padding: 8px 30px 26px; gap: 14px; min-height: 0; }
+  #playing-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex: none; }
+  #playing-tagline { display: flex; align-items: center; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
+  #playing-tag { color: #04050a; background: var(--acc); padding: 4px 8px; }
+  #playing-name { font-family: 'Inter', sans-serif; font-size: 13px; letter-spacing: 0; color: #eafcff; }
+  #btn-to-library { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; background: transparent; border: 1px solid var(--line); color: var(--acc); padding: 9px 14px; cursor: pointer; }
+  #btn-to-library:hover { border-color: var(--acc); box-shadow: 0 0 18px var(--glow); }
+  #playing-viewport { position: relative; flex: 1; border: 1px solid var(--line); background: #04050a; min-height: 0; overflow: hidden; }
+  #playing-viewport iframe, #chess-viewport iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #04050a; }
+  .reticle-tl { position: absolute; left: 12px; top: 12px; width: 20px; height: 20px; border-left: 1px solid var(--acc); border-top: 1px solid var(--acc); pointer-events: none; }
+  .reticle-br { position: absolute; right: 12px; bottom: 12px; width: 20px; height: 20px; border-right: 1px solid var(--acc); border-bottom: 1px solid var(--acc); pointer-events: none; }
+
+  /* chess view */
+  #view-chess { display: flex; flex-direction: column; padding: 8px 30px 26px; min-height: 0; }
+  #chess-viewport { position: relative; flex: 1; border: 1px solid var(--line); background: #04050a; min-height: 0; overflow: hidden; }
+
+  /* pokemon view */
+  #view-pokemon { display: grid; place-items: center; padding: 40px; }
+  #poke-box { display: flex; flex-direction: column; align-items: center; gap: 20px; text-align: center; max-width: 520px; }
+  #poke-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .3em; color: var(--acc); }
+  #poke-file { font-family: 'JetBrains Mono', monospace; font-size: 26px; color: #eafcff; text-shadow: 0 0 20px var(--glow); }
+  #poke-note { font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6; color: #8fa6b4; }
+  #poke-buttons { display: flex; gap: 12px; margin-top: 6px; }
+  #btn-poke-launch { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .2em; padding: 13px 26px; cursor: pointer; color: #04050a; background: var(--acc); border: none; box-shadow: 0 0 22px var(--glow); }
+  #btn-poke-stop { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .2em; padding: 13px 26px; cursor: pointer; color: var(--ink); background: transparent; border: 1px solid var(--line); }
+  #btn-poke-launch:disabled, #btn-poke-stop:disabled { opacity: .4; cursor: default; }
+
+  /* customize drawer */
+  #drawer { position: absolute; left: 0; right: 0; bottom: 0; background: #0a0b10; border-top: 1px solid var(--acc); box-shadow: 0 -30px 60px #000000cc; animation: sheetIn .26s cubic-bezier(.2,.8,.2,1); padding: 26px 30px 30px; z-index: 5; display: flex; flex-direction: column; gap: 22px; }
+  #drawer[hidden] { display: none; }
+  #drawer-head { display: flex; align-items: center; justify-content: space-between; }
+  #drawer-title { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .3em; color: #eafcff; }
+  #drawer-close { background: none; border: none; color: var(--acc); cursor: pointer; font-size: 16px; }
+  #drawer-cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 34px; }
+  .drawer-col-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .28em; color: var(--acc); margin-bottom: 12px; }
+  #scheme-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; }
+  .scheme-swatch { display: flex; flex-direction: column; gap: 12px; padding: 15px; cursor: pointer; background: #0d0f16; border: 1px solid var(--line); text-align: left; }
+  .scheme-swatch.on { background: #12161f; }
+  .scheme-chips { display: flex; gap: 5px; }
+  .scheme-chips span { width: 16px; height: 16px; display: block; }
+  .scheme-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .2em; color: #a4bccb; }
+  .scheme-swatch.on .scheme-label { color: #eafcff; }
+  #toggle-list { display: flex; flex-direction: column; gap: 9px; }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; cursor: pointer; background: #0d0f16; border: 1px solid var(--line); text-align: left; }
+  .toggle-row.on { border-color: var(--acc); }
+  .toggle-row .label { font-family: 'Inter', sans-serif; font-size: 12px; color: #d8e6ef; }
+  .toggle-row .state { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .16em; color: #6d8492; }
+  .toggle-row.on .state { color: var(--acc); }
+</style>
+</head>
+<body>
+<div id="hub">
+  <div id="hub-backdrop"></div>
+
+  <div id="hub-header">
+    <div id="hub-header-left">
+      <button id="crumb-back" hidden title="Back to arcade">◂</button>
+      <div style="min-width:0">
+        <div id="crumb-kicker">CHLOE · ARCADE</div>
+        <div id="crumb-title">ARCADE</div>
+      </div>
+    </div>
+    <button id="btn-customize">✧ CUSTOMIZE</button>
+  </div>
+
+  <!-- HOME -->
+  <div id="view-home" class="view">
+    <div id="home-grid">
+      <div id="tile-retro" class="tile">
+        <div class="tile-border-light">
+          <div class="square" style="width:170%;height:0;padding-bottom:170%">
+            <div class="arc"></div>
+          </div>
+          <div class="cover"></div>
+        </div>
+        <div id="retro-haze"></div>
+        <div id="retro-sheen"></div>
+        <div id="retro-eq">
+          <div style="height:96px;border:1px solid var(--acc);box-shadow:0 0 20px var(--glow);animation:bounceA 1.9s ease-in-out infinite"></div>
+          <div style="height:140px;border:1px solid var(--acc2);animation:bounceB 2.6s ease-in-out infinite"></div>
+          <div style="height:140px;border:1px solid var(--acc);box-shadow:0 0 20px var(--glow);animation:bounceC 2.2s ease-in-out infinite"></div>
+          <div style="height:110px;border:1px solid var(--acc);animation:bounceB 3.1s ease-in-out infinite"></div>
+          <div style="height:78px;border:1px solid var(--acc2);animation:bounceA 2.4s ease-in-out .4s infinite"></div>
+        </div>
+        <div id="retro-top-row">
+          <div class="featured">FEATURED · 5 SYSTEMS</div>
+          <div id="retro-rom-count">0 ROMS</div>
+        </div>
+        <div id="retro-title-block">
+          <div id="retro-title">RETRO<br>EMULATOR</div>
+          <div id="retro-systems">
+            <span>NES</span><span>GB / GBC</span><span>GBA</span><span>SNES</span><span>MEGA DRIVE</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="home-right">
+        <div id="tile-chess" class="tile tile-small">
+          <div class="tile-border-light">
+            <div class="square" style="width:200%;height:0;padding-bottom:200%">
+              <div class="arc" style="animation-duration:6.5s"></div>
+            </div>
+            <div class="cover"></div>
+          </div>
+          <div class="ring"></div><div class="ring2"></div><div class="dot"></div>
+          <div class="kicker">STRATEGY</div>
+          <div class="name">CHESS</div>
+        </div>
+
+        <div id="tile-poke" class="tile tile-small">
+          <div class="tile-border-light">
+            <div class="square" style="width:200%;height:0;padding-bottom:200%">
+              <div class="arc" style="animation-duration:8s;animation-direction:reverse"></div>
+            </div>
+            <div class="cover"></div>
+          </div>
+          <div class="ring"></div><div class="bar"></div>
+          <div class="orbit-wrap"><span></span></div>
+          <div class="haze2"></div>
+          <div id="poke-status-pill"><span id="poke-status-dot"></span><span id="poke-status-text">STOPPED</span></div>
+          <div class="kicker">NATIVE WINDOW</div>
+          <div class="name">POKÉMON</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="hub-telemetry">
+      <div id="chloe-line">Three machines are warm. Which one, dear?</div>
+      <div id="telemetry-right">
+        <span>GAMEPAD 1 <b>READY</b></span>
+        <span>LIBRARY <b id="telemetry-lib-count">0</b></span>
+        <span>THEME <b id="telemetry-scheme">SPECTRE</b></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROM LIBRARY -->
+  <div id="view-emulator" class="view" hidden>
+    <div id="lib-toolbar">
+      <div id="lib-filters"></div>
+      <div id="lib-toolbar-right">
+        <div id="upload-progress">
+          <div id="upload-progress-row"><span id="upload-name"></span><span id="upload-pct">0%</span></div>
+          <div id="upload-track"><div id="upload-bar"></div></div>
+        </div>
+        <button id="btn-add-rom">+ ADD ROM</button>
+        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin" style="display:none">
+      </div>
+    </div>
+    <div id="rom-grid"></div>
+    <div id="lib-empty">No ROMs yet — drop files here or use ADD ROM.</div>
+    <div id="lib-footer">
+      <div id="lib-footer-chloe">Pick a cartridge and I will spin it up.</div>
+      <div id="library-hint">SELECTING AN ENTRY MOUNTS emulator_lite.html</div>
+    </div>
+  </div>
+
+  <!-- PLAYING -->
+  <div id="view-playing" class="view" hidden>
+    <div id="playing-header">
+      <div id="playing-tagline"><span id="playing-tag" class="rom-tag" style="padding:4px 8px"></span><span id="playing-name"></span></div>
+      <button id="btn-to-library">◂ LIBRARY</button>
+    </div>
+    <div id="playing-viewport">
+      <div class="reticle-tl"></div><div class="reticle-br"></div>
+    </div>
+  </div>
+
+  <!-- CHESS -->
+  <div id="view-chess" class="view" hidden>
+    <div id="chess-viewport">
+      <div class="reticle-tl"></div><div class="reticle-br"></div>
+    </div>
+  </div>
+
+  <!-- POKEMON -->
+  <div id="view-pokemon" class="view" hidden>
+    <div id="poke-box">
+      <div id="poke-label">NATIVE PROCESS · GEN1RECOMP</div>
+      <div id="poke-file">gen1recomp · stopped</div>
+      <div id="poke-note">The game renders in its own OS window. This surface polls api/gen1recomp/status and posts launch or stop.</div>
+      <div id="poke-buttons">
+        <button id="btn-poke-launch">LAUNCH</button>
+        <button id="btn-poke-stop">STOP</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CUSTOMIZE DRAWER -->
+  <div id="drawer" hidden>
+    <div id="drawer-head">
+      <div id="drawer-title">CUSTOMIZE</div>
+      <button id="drawer-close">✕</button>
+    </div>
+    <div id="drawer-cols">
+      <div>
+        <div class="drawer-col-label">ACCENT SCHEME</div>
+        <div id="scheme-grid"></div>
+      </div>
+      <div>
+        <div class="drawer-col-label">SURFACE</div>
+        <div id="toggle-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="hub-crt"></div>
+</div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ---- constants -----------------------------------------------------
+  var SYSTEMS = ['NES','GB / GBC','GBA','SNES','MEGA DRIVE'];
+  var FILTERS = [
+    { label: 'ALL', key: 'ALL' }, { label: 'NES', key: 'nes' }, { label: 'GB/GBC', key: 'gb' },
+    { label: 'GBA', key: 'gba' }, { label: 'SNES', key: 'snes' }, { label: 'MEGA DRIVE', key: 'segaMD' }
+  ];
+  var TAGS = { nes: 'NES', gb: 'GB', gba: 'GBA', snes: 'SNES', segaMD: 'MD' };
+  var SCHEMES = [
+    { key: 'SPECTRE', label: 'SPECTRE', acc: '#00e5ff', acc2: '#b06cff', ink: '#ff6ec7', line: '#00e5ff33', glow: '#00e5ff44' },
+    { key: 'EMBER',   label: 'EMBER',   acc: '#ffab2e', acc2: '#ff5a3c', ink: '#ffd479', line: '#ffab2e33', glow: '#ffab2e44' },
+    { key: 'VERDANT', label: 'VERDANT', acc: '#5cf08a', acc2: '#c2ff3d', ink: '#a8ffcf', line: '#5cf08a33', glow: '#5cf08a44' }
+  ];
+  var UP_ACCEPT_RE = /\.(nes|fds|gb|gbc|sgb|gba|sfc|smc|md|gen|smd|bin)$/i;
+  var LS_PREFIX = 'chloe_arcade_';
+
+  function rel(path) { return new URL(path, document.baseURI).href; }
+  function fmtSize(n) {
+    if (typeof n !== 'number') return n || '';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+  }
+
+  // ---- state -----------------------------------------------------------
+  var state = {
+    view: 'home',
+    filter: 'ALL',
+    roms: [],
+    loaded: null,
+    poke: { running: false, pid: null, game: '' },
+    scheme: localStorage.getItem(LS_PREFIX + 'scheme') || 'SPECTRE',
+    crt: localStorage.getItem(LS_PREFIX + 'crt') !== '0',
+    motion: localStorage.getItem(LS_PREFIX + 'motion') !== '0',
+    uploading: null
+  };
+
+  var $ = function(id) { return document.getElementById(id); };
+  var root = $('hub');
+
+  // ---- theme / customize -------------------------------------------------
+  function paint() {
+    var s = SCHEMES.filter(function(x){ return x.key === state.scheme; })[0] || SCHEMES[0];
+    root.style.setProperty('--acc', s.acc);
+    root.style.setProperty('--acc2', s.acc2);
+    root.style.setProperty('--ink', s.ink);
+    root.style.setProperty('--line', s.line);
+    root.style.setProperty('--glow', s.glow);
+    root.style.setProperty('--play', state.motion ? 'running' : 'paused');
+    $('hub-crt').style.display = state.crt ? 'block' : 'none';
+    $('telemetry-scheme').textContent = state.scheme;
+    $('poke-status-dot').style.animationPlayState = (state.poke.running && state.motion) ? 'running' : 'paused';
+  }
+  function saveTheme() {
+    localStorage.setItem(LS_PREFIX + 'scheme', state.scheme);
+    localStorage.setItem(LS_PREFIX + 'crt', state.crt ? '1' : '0');
+    localStorage.setItem(LS_PREFIX + 'motion', state.motion ? '1' : '0');
+  }
+  function renderDrawer() {
+    var sg = $('scheme-grid'); sg.innerHTML = '';
+    SCHEMES.forEach(function(sc) {
+      var on = state.scheme === sc.key;
+      var b = document.createElement('button');
+      b.className = 'scheme-swatch' + (on ? ' on' : '');
+      b.innerHTML = '<span class="scheme-chips">' +
+        '<span style="background:' + sc.acc + ';box-shadow:0 0 10px ' + sc.acc + '"></span>' +
+        '<span style="background:' + sc.acc2 + '"></span>' +
+        '<span style="background:' + sc.ink + '"></span></span>' +
+        '<span class="scheme-label">' + sc.label + '</span>';
+      b.onclick = function() { state.scheme = sc.key; paint(); saveTheme(); renderDrawer(); };
+      sg.appendChild(b);
+    });
+    var tl = $('toggle-list'); tl.innerHTML = '';
+    [
+      { label: 'Scanline / CRT overlay', on: state.crt, flip: function(){ state.crt = !state.crt; } },
+      { label: 'Animated tile art & backdrop', on: state.motion, flip: function(){ state.motion = !state.motion; } }
+    ].forEach(function(t) {
+      var b = document.createElement('button');
+      b.className = 'toggle-row' + (t.on ? ' on' : '');
+      b.innerHTML = '<span class="label">' + t.label + '</span><span class="state">' + (t.on ? 'ON' : 'OFF') + '</span>';
+      b.onclick = function() { t.flip(); paint(); saveTheme(); renderDrawer(); };
+      tl.appendChild(b);
+    });
+  }
+  $('btn-customize').onclick = function() { $('drawer').hidden = !$('drawer').hidden; };
+  $('drawer-close').onclick = function() { $('drawer').hidden = true; };
+
+  // ---- rom library -------------------------------------------------------
+  function refreshRoms() {
+    return fetch(rel('api/roms'), { cache: 'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ state.roms = (j && j.roms) || []; })
+      .catch(function(){ /* keep whatever we had */ })
+      .then(function(){ renderHomeCounts(); renderLibrary(); });
+  }
+
+  function renderHomeCounts() {
+    $('retro-rom-count').textContent = state.roms.length + ' ROMS';
+    $('telemetry-lib-count').textContent = state.roms.length;
+  }
+
+  function renderLibraryToolbar() {
+    var wrap = $('lib-filters'); wrap.innerHTML = '';
+    FILTERS.forEach(function(f) {
+      var b = document.createElement('button');
+      b.textContent = f.label;
+      if (state.filter === f.key) b.classList.add('on');
+      b.onclick = function() { state.filter = f.key; renderLibrary(); };
+      wrap.appendChild(b);
+    });
+  }
+
+  function renderLibrary() {
+    renderLibraryToolbar();
+    var list = state.filter === 'ALL' ? state.roms : state.roms.filter(function(r){ return r.system === state.filter; });
+    var grid = $('rom-grid'); grid.innerHTML = '';
+    $('lib-empty').style.display = list.length ? 'none' : 'flex';
+    list.forEach(function(r) {
+      var isLoaded = state.loaded && state.loaded.file === r.file;
+      var card = document.createElement('div');
+      card.className = 'rom-card' + (isLoaded ? ' loaded' : '');
+      card.innerHTML =
+        '<div class="rom-card-top"><span class="rom-tag">' + (TAGS[r.system] || r.system || '?') + '</span>' +
+        '<span class="rom-size">' + (typeof r.size === 'number' ? fmtSize(r.size) : (r.size || '')) + '</span></div>' +
+        '<div class="rom-name"></div>' +
+        '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>';
+      card.querySelector('.rom-name').textContent = r.name || r.file;
+      card.onclick = function() { state.loaded = r; setView('playing'); };
+      grid.appendChild(card);
+    });
+  }
+
+  function uploadRom(file) {
+    if (state.uploading || !file) return;
+    if (!UP_ACCEPT_RE.test(file.name)) {
+      alert('Unsupported ROM type: ' + file.name);
+      return;
+    }
+    state.uploading = { name: file.name };
+    $('upload-progress').classList.add('on');
+    $('upload-name').textContent = file.name;
+    $('upload-pct').textContent = '0%';
+    $('upload-bar').style.width = '0%';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', rel('api/roms/upload'));
+    xhr.setRequestHeader('X-Rom-Filename', encodeURIComponent(file.name));
+    xhr.upload.onprogress = function(e) {
+      if (!e.lengthComputable) return;
+      var pct = Math.round(e.loaded / e.total * 100);
+      $('upload-pct').textContent = pct + '%';
+      $('upload-bar').style.width = pct + '%';
+    };
+    xhr.onloadend = function() {
+      state.uploading = null;
+      $('upload-progress').classList.remove('on');
+      if (xhr.status >= 200 && xhr.status < 300) {
+        var newSystem = null;
+        try { newSystem = (JSON.parse(xhr.responseText) || {}).system || null; } catch (e) {}
+        refreshRoms().then(function() {
+          if (newSystem && state.filter !== 'ALL' && state.filter !== newSystem) state.filter = 'ALL';
+          renderLibrary();
+        });
+      } else {
+        alert('ROM upload failed (' + xhr.status + '): ' + (xhr.responseText || 'unknown error'));
+      }
+    };
+    xhr.onerror = function() {
+      state.uploading = null;
+      $('upload-progress').classList.remove('on');
+      alert('ROM upload failed: network error');
+    };
+    xhr.send(file);
+  }
+
+  $('btn-add-rom').onclick = function() { $('rom-file-input').click(); };
+  $('rom-file-input').onchange = function(e) {
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f) uploadRom(f);
+  };
+  var romGrid = $('rom-grid');
+  romGrid.addEventListener('dragover', function(e) { e.preventDefault(); romGrid.classList.add('dragover'); });
+  romGrid.addEventListener('dragleave', function() { romGrid.classList.remove('dragover'); });
+  romGrid.addEventListener('drop', function(e) {
+    e.preventDefault();
+    romGrid.classList.remove('dragover');
+    var f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) uploadRom(f);
+  });
+
+  // ---- playing (retro emulator) ------------------------------------------
+  function mountPlaying() {
+    var r = state.loaded;
+    if (!r) { setView('emulator'); return; }
+    $('playing-tag').textContent = TAGS[r.system] || r.system || '?';
+    $('playing-name').textContent = r.name || r.file;
+    var url = rel('emulator.html') + '?g=' + encodeURIComponent(r.file) +
+      '&sys=' + encodeURIComponent(r.system) + '&name=' + encodeURIComponent((r.name || r.file));
+    var vp = $('playing-viewport');
+    var f = vp.querySelector('iframe');
+    if (f) f.remove();
+    f = document.createElement('iframe');
+    f.title = 'Chloe Retro Emulator';
+    f.setAttribute('allow', 'autoplay; gamepad; fullscreen');
+    f.src = url;
+    vp.appendChild(f);
+  }
+  function unmountPlaying() {
+    var vp = $('playing-viewport');
+    var f = vp.querySelector('iframe');
+    if (f) f.remove();
+  }
+  $('btn-to-library').onclick = function() { setView('emulator'); };
+
+  // ---- chess ---------------------------------------------------------
+  function mountChess() {
+    var vp = $('chess-viewport');
+    var f = vp.querySelector('iframe');
+    if (f) return; // already mounted -- keep the running game session alive
+    f = document.createElement('iframe');
+    f.title = 'Chloe Chess';
+    f.src = rel('chess.html') + '?t=' + Date.now();
+    vp.appendChild(f);
+  }
+  function unmountChess() {
+    var vp = $('chess-viewport');
+    var f = vp.querySelector('iframe');
+    if (f) f.remove();
+  }
+
+  // ---- pokemon ---------------------------------------------------------
+  var pokePollTimer = null;
+  function renderPoke() {
+    var running = state.poke.running;
+    $('poke-status-text').textContent = running ? 'RUNNING' : 'STOPPED';
+    var pill = $('poke-status-pill'), dot = $('poke-status-dot');
+    var color = running ? '#5cf08a' : '#6d8492';
+    pill.style.color = color;
+    dot.style.background = color;
+    dot.style.animationPlayState = (running && state.motion) ? 'running' : 'paused';
+    $('tile-poke').querySelector('.orbit-wrap').style.animationDuration = running ? '3.4s' : '11s';
+    $('poke-file').textContent = running ? ('gen1recomp · running' + (state.poke.game ? ' (' + state.poke.game + ')' : '')) : 'gen1recomp · stopped';
+    $('btn-poke-launch').disabled = running;
+    $('btn-poke-stop').disabled = !running;
+  }
+  function pollPoke() {
+    fetch(rel('api/gen1recomp/status'), { cache: 'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ state.poke = { running: !!(j && j.running), pid: j && j.pid, game: (j && j.game) || '' }; renderPoke(); })
+      .catch(function(){});
+  }
+  function startPokePoll() { if (pokePollTimer) return; pollPoke(); pokePollTimer = setInterval(pollPoke, 4000); }
+  $('btn-poke-launch').onclick = function() {
+    $('btn-poke-launch').disabled = true;
+    fetch(rel('api/gen1recomp/launch'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ game: 'red' })
+    }).then(function(r){ return r.json(); }).then(function(j) {
+      if (!j || !j.ok) alert('Launch failed: ' + ((j && j.error) || 'unknown error'));
+      pollPoke();
+    }).catch(function(e){ alert('Launch failed: ' + e); pollPoke(); });
+  };
+  $('btn-poke-stop').onclick = function() {
+    fetch(rel('api/gen1recomp/stop'), { method: 'POST' })
+      .then(function(){ pollPoke(); }).catch(function(){ pollPoke(); });
+  };
+  // Poll in the background so the home-screen tile's RUNNING/STOPPED pill
+  // stays accurate even when you're not inside the Pokemon view itself.
+  startPokePoll();
+
+  // ---- view switching -------------------------------------------------
+  var VIEWS = ['home', 'emulator', 'playing', 'chess', 'pokemon'];
+  var TITLES = { home: 'ARCADE', chess: 'CHESS', pokemon: 'POKÉMON', emulator: 'RETRO EMULATOR', playing: 'RETRO EMULATOR' };
+
+  function setView(v) {
+    var leaving = state.view;
+    if (leaving === 'chess' && v !== 'chess') unmountChess();
+    if (leaving === 'playing' && v !== 'playing') unmountPlaying();
+    state.view = v;
+    VIEWS.forEach(function(k) { $('view-' + k).hidden = (k !== v); });
+    $('crumb-back').hidden = (v === 'home');
+    $('crumb-title').textContent = TITLES[v] || 'ARCADE';
+    if (v === 'emulator') refreshRoms();
+    if (v === 'playing') mountPlaying();
+    if (v === 'chess') mountChess();
+  }
+
+  $('crumb-back').onclick = function() { setView('home'); };
+  $('tile-retro').onclick = function() { setView('emulator'); };
+  $('tile-chess').onclick = function() { setView('chess'); };
+  $('tile-poke').onclick = function() { setView('pokemon'); };
+
+  // ---- init -------------------------------------------------------------
+  paint();
+  renderDrawer();
+  refreshRoms();
+  renderPoke();
+  setView('home');
+})();
+</script>
+</body>
+</html>

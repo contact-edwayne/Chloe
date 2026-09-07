@@ -610,6 +610,17 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._file(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/arcade.html":
+            # Arcade hub launcher shell -- tile picker for chess / Pokemon /
+            # retro emulator, ROM library + upload, theme drawer. Mounts the
+            # other panels as iframes; doesn't replace their own routes.
+            page = HERE / "arcade.html"
+            if not page.exists():
+                self._text(404, "arcade.html not found next to brain_http.py")
+                return
+            self._file(200, page, "text/html; charset=utf-8")
+            return
+
         if path == "/gen1recomp.html":
             # Native Pokemon Gen-1 recompilation launcher panel — replaces the
             # browser ROM emulator on desktop (see hud.html's ARCADE button).
@@ -820,6 +831,47 @@ class _GraphHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)})
 
+    def _post_roms_upload(self):
+        """Save an uploaded ROM into CHLOE_ROMS_DIR. Body is the raw file
+        bytes; filename comes from the X-Rom-Filename header (percent-
+        encoded by the panel, since header values must stay ASCII)."""
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length <= 0:
+                self._json(400, {"error": "empty upload"})
+                return
+            raw_name = self.headers.get("X-Rom-Filename", "")
+            try:
+                name = unquote(raw_name)
+            except Exception:
+                name = raw_name
+            name = os.path.basename((name or "").strip().replace("\\", "/"))
+            if not name:
+                self._json(400, {"error": "missing X-Rom-Filename header"})
+                return
+            ext = Path(name).suffix.lower()
+            system = _ROM_SYSTEMS.get(ext)
+            if not system:
+                self._json(400, {"error": f"unsupported ROM extension: {ext or '(none)'}"})
+                return
+            d = _roms_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            dest = d / name
+            if dest.exists():
+                stem, suf = dest.stem, dest.suffix
+                n = 2
+                while dest.exists():
+                    dest = d / f"{stem} ({n}){suf}"
+                    n += 1
+            data = self.rfile.read(length)
+            dest.write_bytes(data)
+            print(f"[roms] uploaded {dest.name} ({len(data)} bytes, system={system})",
+                  flush=True)
+            self._json(200, {"ok": True, "name": dest.name, "file": dest.name,
+                              "system": system, "size": len(data)})
+        except Exception as e:
+            self._json(500, {"error": f"{type(e).__name__}: {e}"})
+
     def _post_tmprom(self):
         """Persist file-picker ROM bytes so a reload-per-game can fetch them."""
         try:
@@ -858,6 +910,9 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/tmprom":
             self._post_tmprom()
+            return
+        if path == "/api/roms/upload":
+            self._post_roms_upload()
             return
         if path == "/api/arcade_frame":
             self._post_arcade_frame()

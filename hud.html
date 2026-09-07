@@ -1891,8 +1891,7 @@
     <span class="center">HOME // PRIMARY NODE</span>
     <span style="display:flex;gap:14px;align-items:center">
       <button class="brain-btn" id="brain-btn" onclick="toggleBrainGraph()" title="Open brain graph view">BRAIN</button>
-      <button class="brain-btn" id="chess-btn" onclick="toggleChess()" title="Play chess against Chloe">CHESS</button>
-      <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Pokémon (gen1recomp)">ARCADE</button>
+      <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Arcade -- chess, Pokemon, retro emulator">ARCADE</button>
       <button class="brain-btn" id="music-btn" onclick="toggleMusic()" title="YouTube player">MUSIC</button>
       <span class="sys-tag">ONLINE</span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
@@ -5642,49 +5641,6 @@ window.setState('idle');
     <iframe id="brain-graph-iframe" title="Chloe Brain Graph"></iframe>
   </div>
 
-  <!-- Chess panel overlay — mirrors brain-graph; chess.html is served by brain_http on :6790,
-       and the panel inside opens its own ws://host:6789 to the live backend. -->
-  <style>
-    #chess-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.92); display: none; }
-    #chess-overlay.on { display: block; }
-    #chess-overlay iframe { width: 100%; height: 100%; border: 0; background: transparent; }
-    #chess-close {
-      position: absolute; top: 14px; right: 18px; z-index: 61;
-      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
-      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer;
-    }
-    #chess-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
-  </style>
-  <div id="chess-overlay">
-    <button id="chess-close" onclick="toggleChess(false)">CLOSE [Esc]</button>
-    <iframe id="chess-iframe" title="Chloe Chess"></iframe>
-  </div>
-  <script>
-    function toggleChess(force) {
-      const ov = document.getElementById('chess-overlay');
-      const btn = document.getElementById('chess-btn');
-      const f = document.getElementById('chess-iframe');
-      const willOpen = (force === undefined) ? !ov.classList.contains('on') : !!force;
-      if (willOpen) {
-        const host = (window.location.hostname && window.location.hostname !== '')
-          ? window.location.hostname : 'localhost';
-        const src = `http://${host}:6790/chess.html?t=${Date.now()}`;
-        setTimeout(() => { f.src = src; }, 30);
-        ov.classList.add('on');
-        if (btn) btn.classList.add('on');
-      } else {
-        ov.classList.remove('on');
-        if (btn) btn.classList.remove('on');
-        f.src = 'about:blank';
-      }
-    }
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && document.getElementById('chess-overlay').classList.contains('on')) {
-        toggleChess(false);
-      }
-    });
-  </script>
-
   <!-- YouTube IFrame Player API -- backs the embedded video in the
        MUSIC overlay's VIDEO panel (see onYouTubeIframeAPIReady above). -->
   <script src="https://www.youtube.com/iframe_api"></script>
@@ -5814,23 +5770,22 @@ window.setState('idle');
     });
   </script>
 
-  <!-- Arcade (emulator) overlay — emulator.html served by brain_http on :6790 -->
+  <!-- Arcade overlay — arcade.html (the hub: chess/Pokemon/retro emulator
+       launcher) served by brain_http on :6790. -->
   <style>
     #emu-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.94); display: none; }
     #emu-overlay.on { display: block; }
-    #emu-overlay iframe { width: 100%; height: 100%; border: 0; background: transparent; }
-    #emu-close { position: absolute; top: 14px; right: 18px; z-index: 61;
+    #emu-topbar { position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 61;
+      display: flex; align-items: center; justify-content: flex-end; padding: 0 8px;
+      background: #000; border-bottom: 1px solid var(--border); }
+    #emu-close { position: static;
       background: transparent; border: 1px solid var(--border2); color: var(--cyan);
-      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer; }
+      font: inherit; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; cursor: pointer; }
     #emu-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
-    #emu-watch { position: absolute; top: 14px; left: 18px; z-index: 61;
-      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
-      font: inherit; letter-spacing: 1px; padding: 6px 12px; cursor: pointer; }
-    #emu-watch:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
-    #emu-watch.on { background: rgba(168,85,247,0.18); border-color: #a855f7; color: #d8b4ff; }
+    #emu-overlay iframe { position: absolute; left: 0; right: 0; bottom: 0; top: 26px; width: auto; height: auto; border: 0; background: transparent; }
   </style>
   <div id="emu-overlay">
-    <button id="emu-close" onclick="toggleEmulator(false)">CLOSE [Esc]</button>
+    <div id="emu-topbar"><button id="emu-close" onclick="toggleEmulator(false)">CLOSE [Esc]</button></div>
     <iframe id="emu-iframe" title="Chloe Arcade" allow="autoplay; gamepad; fullscreen; screen-wake-lock"></iframe>
   </div>
   <script>
@@ -5853,7 +5808,7 @@ window.setState('idle');
       if (willOpen) {
         const host = (window.location.hostname && window.location.hostname !== '')
           ? window.location.hostname : 'localhost';
-        const src = `http://${host}:6790/gen1recomp.html?t=${Date.now()}`;
+        const src = `http://${host}:6790/arcade.html?t=${Date.now()}`;
         try { window.__hudOrbPause && window.__hudOrbPause(); } catch (e) {}  // free orb WebGL while playing
         setTimeout(() => { f.src = src; }, 30);
         ov.classList.add('on');
