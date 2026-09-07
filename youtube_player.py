@@ -173,18 +173,20 @@ _BRAVE_CANDIDATE_PATHS = [
 
 
 def _find_brave_executable() -> Optional[str]:
-    # Brave has an open, unfixed bug (brave-browser#55195) where its
-    # audio manager silently falls back to a FAKE/null-sink output
-    # stream after focus/foreground changes -- playback state keeps
-    # reporting normally while real audio goes silent. Confirmed NOT
-    # reproducible in plain Chromium on the same system. Default to
-    # Playwright's bundled Chromium instead; set CHLOE_YOUTUBE_USE_BRAVE=1
-    # to opt back into Brave (e.g. once/if that bug is fixed upstream).
-    # This gate applies FIRST and unconditionally -- previously
-    # CHLOE_BRAVE_PATH was checked before it, so a Brave path set as a
-    # permanent Windows environment variable (not tracked in .env or
-    # chloe_env_registry) silently bypassed the switch to Chromium.
-    if os.environ.get("CHLOE_YOUTUBE_USE_BRAVE", "").strip() != "1":
+    # Was gated behind CHLOE_YOUTUBE_USE_BRAVE=1 (opt-in) for a while
+    # tonight on suspicion of a Brave-specific audio bug (brave-
+    # browser#55195 -- audio manager falls back to a FAKE/null-sink
+    # stream after focus changes). That turned out to be a red herring:
+    # the real cause of the ~60s death was YouTube/Google detecting
+    # Playwright's automation fingerprints (navigator.webdriver, the
+    # --enable-automation flag) and killing/resetting playback for
+    # detected bots -- browser-agnostic, fixed at the launch-arg level
+    # (fix round 2026-09-07 #10). Confirmed live on Brave with that fix
+    # in place: plays past a minute fine. Ed wants Brave as the standing
+    # default again (its built-in ad blocking). Set
+    # CHLOE_YOUTUBE_USE_CHROMIUM=1 to opt back OUT to Playwright's
+    # bundled Chromium instead, e.g. if Brave ever regresses again.
+    if os.environ.get("CHLOE_YOUTUBE_USE_CHROMIUM", "").strip() == "1":
         return None
     override = os.environ.get("CHLOE_BRAVE_PATH", "").strip()
     if override:
