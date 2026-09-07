@@ -402,6 +402,19 @@ def _launch_page(pw):
                 pass
     else:
         page = context.new_page()
+
+    def _close_unexpected_popup(new_page):
+        if new_page is page:
+            return
+        try:
+            new_page.close()
+            print("[youtube_player] closed an unexpected popup/new tab "
+                  "(ad, sign-in prompt, target=_blank link, etc.)",
+                  flush=True)
+        except Exception:
+            pass
+
+    context.on("page", _close_unexpected_popup)
     return page
 
 
@@ -603,9 +616,21 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         return {"ok": True}
 
     if name == "get_current_video_id":
-        url = page.url
-        m = _VIDEO_ID_RE.search(url)
-        return {"ok": True, "video_id": m.group(1) if m else None, "url": url}
+        try:
+            video_id = page.evaluate(
+                "() => { const p = document.getElementById('movie_player'); "
+                "if (p && typeof p.getVideoData === 'function') { "
+                "const vd = p.getVideoData(); "
+                "return (vd && vd.video_id) ? vd.video_id : null; } "
+                "return null; }")
+        except Exception:
+            video_id = None
+        if not video_id:
+            # Fallback -- see get_now_playing's comment for why this
+            # alone isn't reliable for a shuffled queue past track one.
+            m = _VIDEO_ID_RE.search(page.url)
+            video_id = m.group(1) if m else None
+        return {"ok": True, "video_id": video_id, "url": page.url}
 
     if name == "toggle_play_pause":
         # Atomic on the owner thread: read real .paused state and act on
@@ -641,14 +666,10 @@ def _dispatch(page, name: str, args: tuple) -> dict:
                 "error": None if ok else "setVolume call failed"}
 
     if name == "get_now_playing":
-        url = page.url
-        m = _VIDEO_ID_RE.search(url)
-        video_id = m.group(1) if m else None
-        if video_id is None:
-            return {"ok": True, "playing": False}
         try:
             info = page.evaluate(
                 "() => {"
+                "  const p = document.getElementById('movie_player');"
                 "  const v = document.querySelector('.html5-main-video') "
                 "|| document.querySelector('video');"
                 "  const chEl = document.querySelector("
@@ -657,12 +678,20 @@ def _dispatch(page, name: str, args: tuple) -> dict:
                 "  let title = document.title || '';"
                 "  if (title.endsWith(' - YouTube')) "
                 "title = title.slice(0, -10);"
+                "  let videoId = null;"
+                "  try {"
+                "    if (p && typeof p.getVideoData === 'function') {"
+                "      const vd = p.getVideoData();"
+                "      videoId = (vd && vd.video_id) ? vd.video_id : null;"
+                "    }"
+                "  } catch (e) {}"
                 "  return {"
                 "    title: title,"
                 "    channel: chEl ? chEl.textContent.trim() : null,"
                 "    paused: v ? v.paused : null,"
                 "    current_time: v ? v.currentTime : null,"
-                "    duration: v ? v.duration : null"
+                "    duration: v ? v.duration : null,"
+                "    video_id: videoId"
                 "  };"
                 "}"
             )
@@ -670,9 +699,18 @@ def _dispatch(page, name: str, args: tuple) -> dict:
             print(f"[youtube_player] get_now_playing DOM read failed: {e}",
                   flush=True)
             info = {}
+        video_id = info.get("video_id")
+        if not video_id:
+            # Fallback for the rare case getVideoData() isn't ready yet
+            # (page still mounting) -- not reliable for a shuffled
+            # queue past the first track, see comment above.
+            m = _VIDEO_ID_RE.search(page.url)
+            video_id = m.group(1) if m else None
+        if video_id is None:
+            return {"ok": True, "playing": False}
         paused = info.get("paused")
         return {
-            "ok": True, "playing": True, "video_id": video_id, "url": url,
+            "ok": True, "playing": True, "video_id": video_id, "url": page.url,
             "title": info.get("title") or None,
             "channel": info.get("channel"),
             "is_playing": (paused is False) if paused is not None else None,
