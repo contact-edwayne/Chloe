@@ -282,6 +282,73 @@ def _player_loop() -> None:
 _DEBUG_NO_HIDE = os.environ.get("CHLOE_YOUTUBE_DEBUG_NO_HIDE", "").strip() == "1"
 
 
+_DEBUG_FORCE_FOREGROUND = os.environ.get(
+    "CHLOE_YOUTUBE_DEBUG_FORCE_FOREGROUND", "").strip() == "1"
+
+
+def _force_foreground_once() -> None:
+    """Debug-only (CHLOE_YOUTUBE_DEBUG_FORCE_FOREGROUND=1): find the
+    automation window (same pid-matching as _hide_browser_window) and
+    force real OS foreground focus onto it once, via a synthetic Alt
+    keypress immediately before SetForegroundWindow -- the standard
+    workaround for Windows' foreground-lock timeout, which otherwise
+    silently ignores a plain SetForegroundWindow call from a background
+    process. Tests whether genuine OS focus (not just visibility) is
+    what the ~60s audio death actually depends on. Never raises."""
+    try:
+        import psutil
+        import win32api
+        import win32con
+        import win32gui
+        import win32process
+    except ImportError:
+        return
+
+    profile_marker = str(_BRAVE_PROFILE_DIR)
+    pids: set = set()
+    deadline = time.time() + 4.0
+    while time.time() < deadline and not pids:
+        for proc in psutil.process_iter(("pid", "name", "cmdline")):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if "brave" not in name and "chrome" not in name:
+                    continue
+                cmdline = proc.info.get("cmdline") or []
+                if any(profile_marker in arg for arg in cmdline):
+                    pids.add(proc.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not pids:
+            time.sleep(0.2)
+    if not pids:
+        return
+
+    def _foreground_if_ours(hwnd, _):
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            return True
+        if pid in pids:
+            try:
+                win32api.keybd_event(0x12, 0, 0, 0)  # Alt down
+                win32gui.SetForegroundWindow(hwnd)
+                win32api.keybd_event(0x12, 0, 0x0002, 0)  # Alt up (KEYEVENTF_KEYUP)
+                print("[youtube_player] CHLOE_YOUTUBE_DEBUG_FORCE_FOREGROUND=1 "
+                      "-- forced real OS focus onto the automation window "
+                      "(debug test for the ~60s playback death)", flush=True)
+            except Exception as e:
+                print(f"[youtube_player] force-foreground failed: {e}",
+                      flush=True)
+        return True
+
+    try:
+        win32gui.EnumWindows(_foreground_if_ours, None)
+    except Exception:
+        pass
+
+
 def _hide_browser_window() -> None:
     """Best-effort, never raises: find the automation browser's actual
     OS window and minimize it via the real Win32 API. This exact
@@ -566,6 +633,8 @@ def _launch_page(pw):
     # every future launch instead of starting from blank each time.
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(_BRAVE_PROFILE_DIR), **launch_kwargs)
+    if _DEBUG_FORCE_FOREGROUND:
+        _force_foreground_once()
     _hide_browser_window()
     _disable_power_throttling()
     # A window closed by hand looks like an unclean shutdown to
