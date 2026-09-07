@@ -3835,15 +3835,48 @@
   let _mpVizEnergy = 0;
   let _mpVizT = 0;
   let _mpVizLast = null;
+  // Real WASAPI-loopback FFT bins from youtube_hud.py's "youtube_visualizer"
+  // broadcast (see onYoutubeVisualizer) -- 24 log-spaced 0..1 magnitude
+  // bins, bass first. _mpVizBinsAt tracks freshness so a stale reading
+  // (playback paused, capture never started) falls back cleanly.
+  let _mpVizBins = null;
+  let _mpVizBinsAt = 0;
+  const _MP_VIZ_BINS_MAX_AGE_S = 1.0;
 
   // Tunables, taken from the artboard's own default props.
   const _MP_VIZ_PERSISTENCE = 0.28;   // phosphor trail half-life, seconds
-  const _MP_VIZ_BPM = 118;            // fake synth beat
+  const _MP_VIZ_BPM = 118;            // fake synth beat -- fallback only
   const _MP_VIZ_GLOW = 1;
   const _MP_VIZ_HOT = '#ff3ec8';      // secondary (magenta) trace color
 
   function _mpUpdateVisualizerState(data) {
     _mpVizPlaying = !!(data && data.playing && data.is_playing);
+  }
+
+  function _mpVizHaveRealBins() {
+    return !!(_mpVizBins && _mpVizBins.length &&
+              (performance.now() - _mpVizBinsAt) / 1000 < _MP_VIZ_BINS_MAX_AGE_S);
+  }
+
+  // Real bass energy (avg of the first 3 -- lowest-frequency -- bins),
+  // used as a drop-in replacement for the fake beat pulse below.
+  function _mpVizRealBass() {
+    const n = Math.min(3, _mpVizBins.length);
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += _mpVizBins[i] || 0;
+    return n ? sum / n : 0;
+  }
+
+  // Real per-position spectral envelope: interpolates across the 24
+  // bins by x-position (u=0 -> bin 0/bass, u=1 -> last bin/treble),
+  // same shape contract as the fake sin(u*PI) dome it replaces.
+  function _mpVizRealEnv(u) {
+    const n = _mpVizBins.length;
+    const pos = Math.max(0, Math.min(1, u)) * (n - 1);
+    const i0 = Math.floor(pos), i1 = Math.min(n - 1, i0 + 1);
+    const frac = pos - i0;
+    const v = (_mpVizBins[i0] || 0) * (1 - frac) + (_mpVizBins[i1] || 0) * frac;
+    return 0.15 + 0.85 * Math.max(0, Math.min(1, v));
   }
 
   function _mpVizBeat(t) {
@@ -3880,7 +3913,8 @@
     const target = _mpVizPlaying ? 1 : 0;
     _mpVizEnergy += (target - _mpVizEnergy) * (1 - Math.exp(-dt / (target > _mpVizEnergy ? 0.3 : 0.85)));
     const e = _mpVizEnergy, t = _mpVizT, g = _MP_VIZ_GLOW, hot = _MP_VIZ_HOT;
-    const b = _mpVizBeat(t);
+    const haveRealBins = _mpVizHaveRealBins();
+    const b = haveRealBins ? _mpVizRealBass() : _mpVizBeat(t);
 
     const tau = Math.max(0.05, _MP_VIZ_PERSISTENCE);
     const fade = Math.min(0.6, 1 - Math.exp(-dt / tau));
@@ -3895,7 +3929,8 @@
     const blipX = (t * 0.2) % 1.35;
     for (let x = 0; x <= w + step; x += step) {
       const u = Math.min(1, x / w);
-      const env = 0.38 + 0.62 * Math.sin(Math.max(0, Math.min(1, u)) * Math.PI);
+      const env = haveRealBins ? _mpVizRealEnv(u)
+        : 0.38 + 0.62 * Math.sin(Math.max(0, Math.min(1, u)) * Math.PI);
       const blip = Math.exp(-Math.pow((u - blipX) * 30, 2)) * (1 - e) * h * 0.075;
       const wave = Math.sin(u * 3.1 - t * 0.9) * 0.42
         + Math.sin(u * 9.2 + t * 2.05) * 0.5
@@ -4215,6 +4250,10 @@
   }
 
   function onYoutubeVisualizer(data) {
+    if (Array.isArray(data.bins)) {
+      _mpVizBins = data.bins;
+      _mpVizBinsAt = performance.now();
+    }
     const canvas = document.getElementById('sp-viz');
     if (!canvas || !Array.isArray(data.bins)) return;
     const ctx = canvas.getContext('2d');
