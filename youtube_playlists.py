@@ -450,16 +450,20 @@ _SONG_ID_PATTERNS = [
 ]
 
 _SONG_INFO_PATTERNS = [
-    re.compile(r"^tell me about (?:this|the) song$"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) song$"),
     re.compile(r"^more about (?:this|the) song$"),
+    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) song$"),
+    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) song$"),
     re.compile(r"^song info(?:rmation)?$"),
     re.compile(r"^what album is this(?: song)? from$"),
 ]
 
 _ARTIST_INFO_PATTERNS = [
-    re.compile(r"^tell me about (?:this|the) artist$"),
-    re.compile(r"^tell me about (?:this|the) singer$"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) artist$"),
+    re.compile(r"^tell me (?:more )?about (?:this|the) singer$"),
     re.compile(r"^more about (?:this|the) artist$"),
+    re.compile(r"^(?:more|some) (?:info|information) (?:on|about) (?:this|the) artist$"),
+    re.compile(r"^(?:give|get) me (?:more |some )?(?:info|information) (?:on|about) (?:this|the) artist$"),
     re.compile(r"^who(?:'s|s| is) (?:this|the) artist$"),
     re.compile(r"^artist info(?:rmation)?$"),
     re.compile(r"^artist bio$"),
