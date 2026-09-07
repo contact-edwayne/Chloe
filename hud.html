@@ -255,6 +255,24 @@
     min-height: 440px;
     box-sizing: border-box;
   }
+  /* SPECTRUM + OUTPUT stacked in the third column (see the "SPECTRUM +
+     OUTPUT" markup comment) -- fills the column's stretched height with
+     real content (a working volume control) instead of stretching
+     SPECTRUM alone. */
+  .mp-col-stack { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .mp-col-stack .mp-panel { min-height: 0; }
+  .mp-output { flex: 1; justify-content: center; }
+  .mp-volume-bar {
+    position: relative; height: 8px; background: #03151b;
+    border: 1px solid var(--border2); cursor: pointer;
+  }
+  .mp-volume-fill {
+    height: 100%;
+    background: linear-gradient(90deg, rgba(0,247,255,.4), var(--cyan) 82%, var(--magenta));
+    box-shadow: 0 0 10px rgba(0,247,255,.5);
+  }
+  #mp-volume-label { color: var(--cyan); }
+  .mp-output-note { font-size: 10px; letter-spacing: 0.1em; color: #3f6f79; }
   .mp-panel-head {
     display: flex;
     justify-content: space-between;
@@ -1880,15 +1898,28 @@
           <div id="mp-playlist-list"></div>
         </div>
 
-        <!-- SPECTRUM -->
-        <div class="mp-panel">
-          <div class="mp-sweep" style="animation-duration:9s"></div>
-          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
-          <div class="mp-panel-head"><span>SPECTRUM</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
-          <div class="mp-spectrum-box">
-            <div class="mp-idle-scan" id="mp-idle-scan"></div>
-            <canvas class="sp-viz" id="sp-viz" width="300" height="160"></canvas>
-            <div class="mp-freq-labels"><span>32</span><span>250</span><span>1K</span><span>4K</span><span>16K</span></div>
+        <!-- SPECTRUM + OUTPUT (stacked, matches Ed's design pass' RIGHT
+             column -- fills the column with real content instead of
+             stretching SPECTRUM alone). -->
+        <div class="mp-col-stack">
+          <div class="mp-panel">
+            <div class="mp-sweep" style="animation-duration:9s"></div>
+            <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
+            <div class="mp-panel-head"><span>SPECTRUM</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
+            <div class="mp-spectrum-box">
+              <div class="mp-idle-scan" id="mp-idle-scan"></div>
+              <canvas class="sp-viz" id="sp-viz" width="300" height="160"></canvas>
+              <div class="mp-freq-labels"><span>32</span><span>250</span><span>1K</span><span>4K</span><span>16K</span></div>
+            </div>
+          </div>
+          <div class="mp-panel mp-output">
+            <div class="mp-sweep" style="animation-duration:15s"></div>
+            <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
+            <div class="mp-panel-head"><span>OUTPUT</span><span id="mp-volume-label">100%</span></div>
+            <div class="mp-volume-bar" id="mp-volume-bar">
+              <div class="mp-volume-fill" id="mp-volume-fill" style="width:100%"></div>
+            </div>
+            <div class="mp-output-note">Volume is this player only, not your system volume.</div>
           </div>
         </div>
       </div>
@@ -3862,7 +3893,7 @@
   function onYoutubeControlResult(data) {
     if (!data.ok) {
       console.warn('[youtube] control action failed:', data.action, data.error);
-      if (data.action === 'play_playlist' || data.action === 'search_and_play' || data.action === 'seek') {
+      if (data.action === 'play_playlist' || data.action === 'search_and_play' || data.action === 'seek' || data.action === 'set_volume') {
         _mpSetStatus('ERROR: ' + (data.error || 'failed'), 6000);
       }
       return;
