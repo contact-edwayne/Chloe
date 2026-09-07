@@ -388,6 +388,162 @@
   }
   #mp-status { font-size: 11px; letter-spacing: 0.18em; color: #3f6f79; border-left: 1px solid var(--border2); padding-left: 14px; white-space: nowrap; }
 
+  /* MUSIC overlay -- motion pass (Ed, 2026-09-07): ambient, continuous
+     "Noticeable" motion layered on top of the existing rings/blink/
+     bass-pulse. Ported from a Claude Design mockup Ed generated from a
+     prompt asking for exactly this (a generic local-file-player demo
+     with a QUEUE/DEVICE/EQ we don't have real backends for -- only the
+     mockup's MOTION techniques are used here, re-themed onto this
+     file's own --cyan/--magenta tokens and Orbitron/Share Tech Mono
+     fonts rather than adopting the mockup's palette/fonts). Deliberately
+     excluded: a chromatic-aberration (RGB-split) flash on transport-
+     button press -- Ed asked for the plain ripple/glow only; the title-
+     glitch effect below is a different, intentionally-kept item that
+     also uses a brief color-split, since a "glitch" needs it to read as
+     one and Ed didn't exclude it. */
+
+  .mp-panel, .mp-transport { position: relative; overflow: hidden; }
+
+  /* 1. Drifting scanline texture -- a faint moving hairline grid on
+     every panel; the baseline "this thing is alive" cue. */
+  .mp-panel::before, .mp-transport::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(0deg, var(--border) 0 1px, transparent 1px 4px);
+    background-size: 100% 36px;
+    animation: mpDrift 7s linear infinite;
+    opacity: 0.6;
+  }
+  @keyframes mpDrift { 0% { background-position: 0 0; } 100% { background-position: 0 36px; } }
+
+  /* 2. A soft horizontal band slowly sweeping down through each panel,
+     desynced per panel (different animation-duration inline) so they
+     don't all pulse in lockstep. */
+  .mp-sweep {
+    position: absolute;
+    left: 0; right: 0;
+    height: 78px;
+    background: linear-gradient(180deg, transparent, var(--border), transparent);
+    animation: mpSweep 11s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes mpSweep {
+    0%   { top: -90px; opacity: 0; }
+    10%  { opacity: 1; }
+    85%  { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+  }
+
+  /* 3. Corner brackets that trace in (and stay, per the "both" fill
+     mode -- a permanent HUD-frame accent, not a one-shot flourish) the
+     first time the panel opens, and re-trace on every track change.
+     Toggled by alternating .flip-a/.flip-b on .mp-wrap (_mpFlipTrace()
+     in the script below) -- two identically-shaped keyframes under
+     different names is how a CSS animation is forced to restart from a
+     class toggle instead of silently no-op-ing on the same class. */
+  .mp-corner { position: absolute; width: 15px; height: 15px; pointer-events: none; opacity: 0; }
+  .mp-corner.tl { top: 5px; left: 5px; border-left: 1px solid var(--cyan); border-top: 1px solid var(--cyan); }
+  .mp-corner.tr { top: 5px; right: 5px; border-right: 1px solid var(--cyan); border-top: 1px solid var(--cyan); --d: .05s; }
+  .mp-corner.bl { bottom: 5px; left: 5px; border-left: 1px solid var(--cyan); border-bottom: 1px solid var(--cyan); --d: .1s; }
+  .mp-corner.br { bottom: 5px; right: 5px; border-right: 1px solid var(--cyan); border-bottom: 1px solid var(--cyan); --d: .15s; }
+  .mp-wrap.flip-a .mp-corner { animation: mpTraceA .8s ease-out var(--d, 0s) both; }
+  .mp-wrap.flip-b .mp-corner { animation: mpTraceB .8s ease-out var(--d, 0s) both; }
+  @keyframes mpTraceA { 0% { transform: scale(0.25); opacity: 0; } 28% { opacity: 1; } 42% { opacity: 0.2; } 58% { opacity: 1; } 100% { transform: scale(1); opacity: 0.9; } }
+  @keyframes mpTraceB { 0% { transform: scale(0.25); opacity: 0; } 28% { opacity: 1; } 42% { opacity: 0.2; } 58% { opacity: 1; } 100% { transform: scale(1); opacity: 0.9; } }
+
+  /* 4. Idle "breathing" on the album frame -- only when NOT actually
+     playing (:not(.mp-playing)); the real bass-reactive pulse (inline
+     transform/box-shadow set per-frame by onYoutubeVisualizer) owns
+     .mp-playing entirely, so the two never fight over the same
+     properties. */
+  .mp-art-frame:not(.mp-playing) { animation: mpBreathe 4.8s ease-in-out infinite; }
+  @keyframes mpBreathe {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 0 1px rgba(0,247,255,.34), 0 0 14px rgba(0,247,255,.10), inset 0 0 26px rgba(0,247,255,.10); }
+    50%      { transform: scale(1.016); box-shadow: 0 0 0 1px rgba(0,247,255,.58), 0 0 28px rgba(0,247,255,.18), inset 0 0 36px rgba(0,247,255,.15); }
+  }
+
+  /* 5. Title glitch on track change (mp-glitch-a/b, same restart-by-
+     rename trick as the corner brackets). Uses a brief text-shadow
+     color split -- kept intentionally, see the section comment above. */
+  .mp-title.mp-glitch-a { animation: mpGlitchA .46s steps(6, end) both; }
+  .mp-title.mp-glitch-b { animation: mpGlitchB .46s steps(6, end) both; }
+  @keyframes mpGlitchA {
+    0%   { opacity: .15; transform: translateX(-4px); text-shadow: 3px 0 var(--magenta), -3px 0 var(--cyan); }
+    18%  { opacity: 1;   transform: translateX(3px); }
+    34%  { opacity: .5;  transform: translateX(-2px); text-shadow: -3px 0 var(--magenta), 3px 0 var(--cyan); }
+    52%  { opacity: 1;   transform: translateX(1px); }
+    72%  { opacity: .8;  transform: none; }
+    100% { opacity: 1;   transform: none; text-shadow: 0 0 20px rgba(0,247,255,.3); }
+  }
+  @keyframes mpGlitchB {
+    0%   { opacity: .15; transform: translateX(4px); text-shadow: -3px 0 var(--magenta), 3px 0 var(--cyan); }
+    18%  { opacity: 1;   transform: translateX(-3px); }
+    34%  { opacity: .5;  transform: translateX(2px); text-shadow: 3px 0 var(--magenta), -3px 0 var(--cyan); }
+    52%  { opacity: 1;   transform: translateX(-1px); }
+    72%  { opacity: .8;  transform: none; }
+    100% { opacity: 1;   transform: none; text-shadow: 0 0 20px rgba(0,247,255,.3); }
+  }
+
+  /* 6. Transport button press: a plain radial ripple + glow flash,
+     deliberately NO chromatic-aberration text-shadow split (Ed
+     excluded that one specifically for the transport buttons). */
+  .sp-btn { position: relative; overflow: hidden; }
+  .mp-ripple {
+    position: absolute;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0,247,255,.6), rgba(0,247,255,0) 70%);
+    transform: scale(0.15);
+    opacity: 0.6;
+    pointer-events: none;
+    animation: mpRipple .45s ease-out forwards;
+  }
+  .mp-ripple.accent { background: radial-gradient(circle, rgba(255,0,170,.65), rgba(255,0,170,0) 70%); }
+  @keyframes mpRipple { to { transform: scale(2.8); opacity: 0; } }
+  .sp-btn.mp-flash-a { animation: mpFlashA .3s ease-out; }
+  .sp-btn.mp-flash-b { animation: mpFlashB .3s ease-out; }
+  @keyframes mpFlashA { 0% { box-shadow: none; } 45% { box-shadow: 0 0 26px rgba(0,247,255,.55); } 100% { box-shadow: none; } }
+  @keyframes mpFlashB { 0% { box-shadow: none; } 45% { box-shadow: 0 0 26px rgba(0,247,255,.55); } 100% { box-shadow: none; } }
+
+  /* 7. Idle spectrum scan line -- visible only while nothing's
+     actually playing (real FFT bars take over once they are), so it
+     never reads as fabricated audio activity. */
+  .mp-spectrum-box { position: relative; }
+  .mp-idle-scan {
+    position: absolute;
+    top: 0; bottom: 1px;
+    left: -3%;
+    width: 1px;
+    background: linear-gradient(180deg, transparent, var(--cyan), transparent);
+    animation: mpScanX 6.5s linear infinite;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+  @keyframes mpScanX { 0% { left: -3%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { left: 101%; opacity: 0; } }
+
+  /* 8. Playlist rows stagger in on populate + on every filter keystroke
+     (renderMusicPlaylists() does a full innerHTML replace either way,
+     so fresh DOM nodes always replay this on their own -- no JS restart
+     trick needed here, unlike the corner brackets/title/flash above). */
+  .mp-pl-row { opacity: 0; animation: mpRowIn .34s ease-out both; }
+  @keyframes mpRowIn { 0% { opacity: 0; transform: translateX(-12px); } 100% { opacity: 1; transform: none; } }
+
+  /* 9. A traveling highlight along the progress fill, running only
+     while something's actually playing. */
+  .sp-progress-fill { position: relative; overflow: hidden; }
+  .sp-progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0; left: 0;
+    width: 26px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+    animation: mpTravel 2.4s linear infinite;
+    animation-play-state: paused;
+  }
+  .sp-progress-fill.mp-playing::after { animation-play-state: running; }
+  @keyframes mpTravel { 0% { transform: translateX(-160%); } 100% { transform: translateX(560%); } }
+
   /* BODY: 2 columns (ring | chat) */
   .body {
     flex: 1;
@@ -1677,6 +1833,8 @@
 
         <!-- NOW PLAYING -->
         <div class="mp-panel">
+          <div class="mp-sweep" style="animation-duration:11s"></div>
+          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
           <div class="mp-panel-head"><span>● NOW PLAYING</span><span id="mp-conn">NOT CONNECTED</span></div>
           <div class="mp-ring-wrap">
             <svg class="mp-ring-a" viewBox="0 0 210 210">
@@ -1705,6 +1863,8 @@
 
         <!-- PLAYLISTS -->
         <div class="mp-panel">
+          <div class="mp-sweep" style="animation-duration:13s"></div>
+          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
           <div class="mp-panel-head"><span id="mp-pl-count">PLAYLISTS // 00</span><span>CLICK TO PLAY</span></div>
           <div class="mp-search">
             <span>⌕</span>
@@ -1715,8 +1875,11 @@
 
         <!-- SPECTRUM -->
         <div class="mp-panel">
+          <div class="mp-sweep" style="animation-duration:9s"></div>
+          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
           <div class="mp-panel-head"><span>SPECTRUM</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
           <div class="mp-spectrum-box">
+            <div class="mp-idle-scan" id="mp-idle-scan"></div>
             <canvas class="sp-viz" id="sp-viz" width="300" height="160"></canvas>
             <div class="mp-freq-labels"><span>32</span><span>250</span><span>1K</span><span>4K</span><span>16K</span></div>
           </div>
@@ -1725,6 +1888,7 @@
 
       <!-- TRANSPORT -->
       <div class="mp-transport">
+        <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
         <div class="sp-controls">
           <button class="sp-btn" id="sp-prev" title="Previous" onclick="youtubeControl('previous')">◄◄</button>
           <button class="sp-btn sp-btn-play" id="sp-playpause" title="Play/Pause" onclick="youtubeControl('toggle_play_pause')">▶</button>
@@ -3437,6 +3601,21 @@
 
   const MP_RING_CIRCUMFERENCE = 502.7;  // 2*pi*80, matches the r=80 progress circle
 
+  // Motion-pass state: which corner-trace/title-glitch keyframe variant
+  // to apply next (alternating A/B forces a CSS restart on class toggle
+  // -- re-applying the SAME animation name is a no-op in every browser).
+  // See the "MUSIC overlay -- motion pass" CSS section for the rest.
+  let _mpFlip = false;
+  let _mpLastTitle = null;
+  function _mpFlipTrace() {
+    const wrap = document.querySelector('.mp-wrap');
+    if (!wrap) return;
+    wrap.classList.remove('flip-a', 'flip-b');
+    void wrap.offsetWidth;  // force reflow so the removal is observed
+    _mpFlip = !_mpFlip;
+    wrap.classList.add(_mpFlip ? 'flip-a' : 'flip-b');
+  }
+
   function onYoutubeNowPlaying(data) {
     const track = document.getElementById('sp-track');
     const artistEl = document.getElementById('sp-artist');
@@ -3449,6 +3628,7 @@
     const conn = document.getElementById('mp-conn');
     const status = document.getElementById('mp-status');
     const live = document.getElementById('mp-live');
+    const idleScan = document.getElementById('mp-idle-scan');
     if (!track) return;
     if (_spProgressTimer) { clearInterval(_spProgressTimer); _spProgressTimer = null; }
 
@@ -3462,16 +3642,30 @@
       artFrame.style.transform = '';
       artFrame.style.boxShadow = '';
       fill.style.width = '0%';
+      fill.classList.remove('mp-playing');
       ring.setAttribute('stroke-dashoffset', MP_RING_CIRCUMFERENCE);
       conn.textContent = 'NOT CONNECTED';
       status.textContent = 'NOT CONNECTED';
       document.getElementById('mp-elapsed').textContent = '0:00';
       document.getElementById('mp-remaining').textContent = '-0:00';
       live.classList.add('paused');
+      if (idleScan) idleScan.style.opacity = '1';
+      _mpLastTitle = null;
       return;
     }
 
     conn.textContent = 'CONNECTED';
+    if (data.title && data.title !== _mpLastTitle) {
+      // A real track change (not just a progress-tick re-broadcast of
+      // the same title) -- replay the title glitch and the panels'
+      // corner-trace together, same pairing as the mockup this was
+      // ported from (both driven off one shared "flip" toggle there).
+      _mpLastTitle = data.title;
+      _mpFlipTrace();
+      track.classList.remove('mp-glitch-a', 'mp-glitch-b');
+      void track.offsetWidth;
+      track.classList.add(_mpFlip ? 'mp-glitch-a' : 'mp-glitch-b');
+    }
     track.textContent = data.title || '—';
     artistEl.textContent = data.channel || '';
     album.textContent = 'YouTube';
@@ -3484,8 +3678,10 @@
       placeholder.style.display = 'flex';
     }
     artFrame.classList.toggle('mp-playing', !!data.is_playing);
+    fill.classList.toggle('mp-playing', !!data.is_playing);
     status.textContent = data.is_playing ? 'STREAM STABLE' : 'PAUSED';
     live.classList.toggle('paused', !data.is_playing);
+    if (idleScan) idleScan.style.opacity = data.is_playing ? '0' : '1';
     const playBtn = document.getElementById('sp-playpause');
     if (playBtn) playBtn.textContent = data.is_playing ? '❚❚' : '▶';
 
@@ -3554,7 +3750,8 @@
       const name = (p.name || 'Untitled').replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[c]));
-      return '<div class="mp-pl-row" data-idx="' + idx + '" onclick="playMusicPlaylist(' + idx + ')">' +
+      const delay = Math.min(idx * 26, 380);
+      return '<div class="mp-pl-row" data-idx="' + idx + '" style="animation-delay:' + delay + 'ms" onclick="playMusicPlaylist(' + idx + ')">' +
         '<span class="mp-pl-name">' + name + '</span>' +
         '<span class="mp-pl-meta"></span></div>';
     }).join('');
@@ -5013,6 +5210,7 @@ window.setState('idle');
         ov.classList.add('on');
         if (btn) btn.classList.add('on');
         try { requestMusicPlaylists(); } catch (e) {}
+        try { _mpFlipTrace(); } catch (e) {}
       } else {
         ov.classList.remove('on');
         if (btn) btn.classList.remove('on');
@@ -5022,6 +5220,36 @@ window.setState('idle');
       if (e.key === 'Escape' && document.getElementById('music-overlay').classList.contains('on')) {
         toggleMusic(false);
       }
+    });
+    // Transport press: ripple + glow flash on every sp-btn click
+    // (prev/play-pause/next/shuffle alike), deliberately no chromatic-
+    // aberration split -- see the CSS section comment. Delegated on
+    // .mp-transport so it never has to touch the buttons' own onclick
+    // wiring (youtubeControl(...)/toggleMusicShuffleNext() keep firing
+    // exactly as before; this only adds a visual on top).
+    let _mpPressFlip = false;
+    document.addEventListener('DOMContentLoaded', () => {
+      const transport = document.querySelector('.mp-transport');
+      if (!transport) return;
+      transport.addEventListener('click', (e) => {
+        const btn = e.target.closest('.sp-btn');
+        if (!btn) return;
+        const rect = btn.getBoundingClientRect();
+        const size = Math.max(rect.width, rect.height) * 1.5;
+        const cx = (typeof e.clientX === 'number' && e.clientX) ? e.clientX : rect.left + rect.width / 2;
+        const cy = (typeof e.clientY === 'number' && e.clientY) ? e.clientY : rect.top + rect.height / 2;
+        const ripple = document.createElement('span');
+        ripple.className = 'mp-ripple' + (btn.id === 'sp-playpause' ? ' accent' : '');
+        ripple.style.width = ripple.style.height = size + 'px';
+        ripple.style.left = (cx - rect.left - size / 2) + 'px';
+        ripple.style.top = (cy - rect.top - size / 2) + 'px';
+        btn.appendChild(ripple);
+        ripple.addEventListener('animationend', () => ripple.remove());
+        btn.classList.remove('mp-flash-a', 'mp-flash-b');
+        void btn.offsetWidth;
+        _mpPressFlip = !_mpPressFlip;
+        btn.classList.add(_mpPressFlip ? 'mp-flash-a' : 'mp-flash-b');
+      });
     });
   </script>
 
