@@ -506,6 +506,27 @@ def _player_api_call(page, method: str) -> bool:
         return False
 
 
+def _seek_to(page, seconds: float) -> bool:
+    """Seek the current video to an absolute position via #movie_player's
+    own seekTo(seconds, allowSeekAhead) method -- same direct-DOM-method
+    approach as _player_api_call (works regardless of window focus/
+    visibility), just with an argument to pass through. allowSeekAhead=
+    true so it seeks even into not-yet-buffered data rather than
+    clamping to what's already loaded, matching what clicking YouTube's
+    own scrub bar does. Returns True if the call was made, False on any
+    failure (including no video loaded) -- never raises."""
+    try:
+        return bool(page.evaluate(
+            "([s]) => { const p = document.getElementById('movie_player'); "
+            "if (p && typeof p.seekTo === 'function') { "
+            "p.seekTo(s, true); return true; } return false; }",
+            [seconds]))
+    except Exception as e:
+        print(f"[youtube_player] seekTo({seconds}) call failed: {e}",
+              flush=True)
+        return False
+
+
 def _dispatch(page, name: str, args: tuple) -> dict:
     if name == "play_url":
         (url,) = args
@@ -594,6 +615,13 @@ def _dispatch(page, name: str, args: tuple) -> dict:
               flush=True)
         return {"ok": True, "was_paused": paused}
 
+    if name == "seek":
+        (seconds,) = args
+        ok = _seek_to(page, seconds)
+        print(f"[youtube_player] seek to {seconds:.1f}s "
+              f"({'ok' if ok else 'failed -- no video loaded?'})", flush=True)
+        return {"ok": ok, "error": None if ok else "seekTo call failed"}
+
     if name == "get_now_playing":
         url = page.url
         m = _VIDEO_ID_RE.search(url)
@@ -678,6 +706,12 @@ def get_current_video_id() -> Optional[str]:
     player thread isn't up."""
     result = _enqueue("get_current_video_id", ())
     return result.get("video_id") if result.get("ok") else None
+
+
+def seek(seconds: float) -> dict:
+    """Seek the current video to an absolute position (seconds from the
+    start). Used by the HUD's click-to-seek on the progress bar."""
+    return _enqueue("seek", (seconds,))
 
 
 def toggle_play_pause() -> dict:

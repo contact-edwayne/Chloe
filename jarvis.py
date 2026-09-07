@@ -4243,6 +4243,20 @@ async def handle_youtube_control(data, websocket):
                                     "uploader": result.get("uploader")})
         return
 
+    if action == "seek":
+        seconds = data.get("seconds")
+        try:
+            seconds = float(seconds)
+        except (TypeError, ValueError):
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing/invalid seconds"})
+            return
+        result = await asyncio.to_thread(youtube_player.seek, seconds)
+        await _ws_send(websocket, {"type": "youtube_control_result",
+                                    "ok": result.get("ok", False), "action": action,
+                                    "error": result.get("error")})
+        return
+
     fn = {
         "previous": youtube_player.previous_track,
         "next": youtube_player.next_track,
