@@ -5,13 +5,16 @@ Playback goes through actual browser automation of a real YouTube tab
 (Ed's choice, 2026-09-01) -- not a local media player -- and launches
 non-headless (Chromium's headless audio output is unreliable and would
 risk breaking both playback and the WASAPI-loopback visualizer capture)
-but STARTS MINIMIZED (Ed's later choice, 2026-09-07, once the MUSIC
-panel was live: he wants Chloe's own player to feel like where the
-music plays from, not a browser window popping up on his desktop).
-Audio keeps playing and the DOM stays fully readable while minimized --
-Chromium doesn't throttle either for a minimized (as opposed to fully
-hidden/occluded) window, so this doesn't touch playback or now-playing
-detection at all, only whether Ed has to look at it. One
+but launches POSITIONED OFF-SCREEN, not minimized (Ed's later choice,
+2026-09-07, once the MUSIC panel was live: he wants Chloe's own player
+to feel like where the music plays from, not a browser window popping
+up on his desktop). Off-screen rather than minimized is deliberate: an
+earlier version of this fix actually minimized the window, which DID
+hide it but also made Chromium treat it as occluded/hidden and throttle
+its background CPU after about a minute, killing playback -- a window
+merely positioned off-screen is never occluded, so audio keeps playing
+and the DOM stays fully readable the whole time. See _launch_page's own
+comment for the full history. One
 dedicated background thread owns the Playwright instance, browser,
 context, and the single Page for the life of the jarvis.py process;
 every public function here enqueues a command onto that thread rather
