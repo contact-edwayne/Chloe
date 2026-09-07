@@ -384,6 +384,7 @@
     border-radius: 2px;
     margin-top: 0;
     overflow: hidden;
+    cursor: pointer;
   }
   .sp-progress-fill {
     height: 100%;
@@ -3600,6 +3601,22 @@
   // only while something's actually playing.
   // ──────────────────────────────────────────────────────────────────────────
   let _spProgressTimer = null;
+  let _mpDurationMs = 0;
+  // Status-message lock: onYoutubeNowPlaying overwrites #mp-status on
+  // every broadcast now (~every 3s, since youtube_hud.py's periodic-
+  // resync fix), which was silently eating transient messages like a
+  // shuffle fallback explanation or a play/search error before Ed could
+  // ever see them. Anything that wants its message to actually be seen
+  // sets this lock for a few seconds; onYoutubeNowPlaying skips writing
+  // #mp-status (but still updates everything else -- art, title,
+  // progress, etc.) while the lock is active.
+  let _mpStatusLockUntil = 0;
+  function _mpSetStatus(text, lockMs) {
+    const status = document.getElementById('mp-status');
+    if (!status) return;
+    status.textContent = text;
+    _mpStatusLockUntil = Date.now() + (lockMs || 0);
+  }
   function _mpFmtTime(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
@@ -3651,12 +3668,13 @@
       fill.classList.remove('mp-playing');
       ring.setAttribute('stroke-dashoffset', MP_RING_CIRCUMFERENCE);
       conn.textContent = 'NOT CONNECTED';
-      status.textContent = 'NOT CONNECTED';
+      if (Date.now() >= _mpStatusLockUntil) status.textContent = 'NOT CONNECTED';
       document.getElementById('mp-elapsed').textContent = '0:00';
       document.getElementById('mp-remaining').textContent = '-0:00';
       live.classList.add('paused');
       if (idleScan) idleScan.style.opacity = '1';
       _mpLastTitle = null;
+      _mpDurationMs = 0;
       return;
     }
 
@@ -3685,7 +3703,10 @@
     }
     artFrame.classList.toggle('mp-playing', !!data.is_playing);
     fill.classList.toggle('mp-playing', !!data.is_playing);
-    status.textContent = data.is_playing ? 'STREAM STABLE' : 'PAUSED';
+    if (Date.now() >= _mpStatusLockUntil) {
+      status.textContent = data.is_playing ? 'STREAM STABLE' : 'PAUSED';
+    }
+    _mpDurationMs = data.duration_ms || 0;
     live.classList.toggle('paused', !data.is_playing);
     if (idleScan) idleScan.style.opacity = data.is_playing ? '0' : '1';
     const playBtn = document.getElementById('sp-playpause');
@@ -3839,18 +3860,19 @@
     }
   }
   function onYoutubeControlResult(data) {
-    const status = document.getElementById('mp-status');
     if (!data.ok) {
       console.warn('[youtube] control action failed:', data.action, data.error);
-      if (status && (data.action === 'play_playlist' || data.action === 'search_and_play')) {
-        status.textContent = 'ERROR: ' + (data.error || 'failed');
+      if (data.action === 'play_playlist' || data.action === 'search_and_play' || data.action === 'seek') {
+        _mpSetStatus('ERROR: ' + (data.error || 'failed'), 6000);
       }
       return;
     }
-    if (data.action === 'play_playlist' && data.shuffle && data.shuffle_note && status) {
+    if (data.action === 'play_playlist' && data.shuffle && data.shuffle_note) {
       // Honest fallback: shuffle was requested but couldn't be fully
-      // honored (see youtube_playlists.play_playlist's shuffle_note).
-      status.textContent = 'SHUFFLE: ' + data.shuffle_note;
+      // honored (see youtube_playlists.play_playlist's shuffle_note) --
+      // most likely cause is yt-dlp not being installed/reachable on
+      // this machine. Locked for a few seconds so it's actually seen.
+      _mpSetStatus('SHUFFLE: ' + data.shuffle_note, 6000);
     }
   }
 
@@ -5266,6 +5288,29 @@ window.setState('idle');
         _mpPressFlip = !_mpPressFlip;
         btn.classList.add(_mpPressFlip ? 'mp-flash-a' : 'mp-flash-b');
       });
+
+      const progressBar = document.querySelector('.sp-progress');
+      if (progressBar) {
+        progressBar.addEventListener('click', (e) => {
+          if (!_mpDurationMs || _mpDurationMs <= 0) return;
+          const rect = progressBar.getBoundingClientRect();
+          const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+          const targetMs = frac * _mpDurationMs;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'youtube_control', action: 'seek', seconds: targetMs / 1000 }));
+          }
+          // Optimistic UI update -- don't wait for the next ~3s poll
+          // broadcast to reflect where the user just clicked.
+          const fill = document.getElementById('sp-progress-fill');
+          const ring = document.getElementById('mp-progress-circle');
+          if (fill) fill.style.width = (frac * 100) + '%';
+          if (ring) ring.setAttribute('stroke-dashoffset', (MP_RING_CIRCUMFERENCE * (1 - frac)).toFixed(1));
+          const elapsedEl = document.getElementById('mp-elapsed');
+          const remainingEl = document.getElementById('mp-remaining');
+          if (elapsedEl) elapsedEl.textContent = _mpFmtTime(targetMs);
+          if (remainingEl) remainingEl.textContent = '-' + _mpFmtTime(Math.max(0, _mpDurationMs - targetMs));
+        });
+      }
     });
   </script>
 
