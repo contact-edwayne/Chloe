@@ -597,7 +597,16 @@ def _launch_page(pw):
         # downloading (they ship via the same component-updater
         # mechanism) -- see module docstring fix #1.
         "ignore_default_args": ["--disable-component-update",
-                                 "--disable-background-networking"],
+                                 "--disable-background-networking",
+                                 # Sets navigator.webdriver = true and
+                                 # is itself a detectable automation
+                                 # fingerprint. See fix round 2026-09-07
+                                 # #10 (ADSTATE instrumentation caught
+                                 # the player resetting to UNSTARTED --
+                                 # not pausing -- on both death paths;
+                                 # points at YouTube's own bot
+                                 # detection, not throttling/focus).
+                                 "--enable-automation"],
         # Minimized via _hide_browser_window (confirmed live to
         # actually hide the window -- two other hiding tricks tried
         # after it, off-screen position and a layered 0-alpha window,
@@ -623,7 +632,12 @@ def _launch_page(pw):
                  # happened even with hiding fully disabled (2026-09-07
                  # round 7), which points at media suspension rather
                  # than generic backgrounding/timers.
-                 "--disable-background-media-suspend"],
+                 "--disable-background-media-suspend",
+                 # Same reasoning as dropping --enable-automation above
+                 # -- this blink feature is what makes Chromium mark
+                 # itself as automation-controlled to page JS in the
+                 # first place.
+                 "--disable-blink-features=AutomationControlled"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
@@ -633,6 +647,17 @@ def _launch_page(pw):
     # every future launch instead of starting from blank each time.
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(_BRAVE_PROFILE_DIR), **launch_kwargs)
+    # Belt-and-suspenders alongside the launch-arg changes above: force
+    # navigator.webdriver to read undefined (a real user's browser
+    # never has this property at all) before any page script runs, on
+    # every navigation this context makes -- not just the first.
+    try:
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', "
+            "{get: () => undefined});")
+    except Exception as e:
+        print(f"[youtube_player] couldn't install the webdriver-masking "
+              f"init script: {e}", flush=True)
     if _DEBUG_FORCE_FOREGROUND:
         _force_foreground_once()
     _hide_browser_window()
