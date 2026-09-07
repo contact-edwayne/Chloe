@@ -280,6 +280,7 @@ def _player_loop() -> None:
 
 
 _DEBUG_NO_HIDE = os.environ.get("CHLOE_YOUTUBE_DEBUG_NO_HIDE", "").strip() == "1"
+_DEBUG_HIDE = os.environ.get("CHLOE_YOUTUBE_DEBUG_HIDE", "").strip() == "1"
 
 
 _DEBUG_FORCE_FOREGROUND = os.environ.get(
@@ -405,6 +406,10 @@ def _hide_browser_window() -> None:
               "visible)", flush=True)
         return
 
+    if _DEBUG_HIDE:
+        print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 -- matched "
+              f"pid(s) {sorted(pids)}", flush=True)
+
     def _minimize_if_ours(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd):
             return True
@@ -413,13 +418,29 @@ def _hide_browser_window() -> None:
         except Exception:
             return True
         if pid in pids:
+            if _DEBUG_HIDE:
+                try:
+                    title = win32gui.GetWindowText(hwnd)
+                except Exception:
+                    title = "<unreadable>"
+                minimized_already = win32gui.IsIconic(hwnd)
+                print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 -- "
+                      f"visible window hwnd={hwnd} pid={pid} "
+                      f"title={title!r} already_minimized={minimized_already}",
+                      flush=True)
             try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-            except Exception:
-                pass
+            except Exception as e:
+                if _DEBUG_HIDE:
+                    print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 -- "
+                          f"ShowWindow(SW_MINIMIZE) on hwnd={hwnd} "
+                          f"raised: {e}", flush=True)
         return True
 
-    for _ in range(5):
+    for sweep_i in range(5):
+        if _DEBUG_HIDE:
+            print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 -- "
+                  f"sweep {sweep_i + 1}/5", flush=True)
         try:
             win32gui.EnumWindows(_minimize_if_ours, None)
         except Exception as e:
