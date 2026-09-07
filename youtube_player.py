@@ -176,6 +176,15 @@ def _find_brave_executable() -> Optional[str]:
     override = os.environ.get("CHLOE_BRAVE_PATH", "").strip()
     if override:
         return override if os.path.isfile(override) else None
+    # Brave has an open, unfixed bug (brave-browser#55195) where its
+    # audio manager silently falls back to a FAKE/null-sink output
+    # stream after focus/foreground changes -- playback state keeps
+    # reporting normally while real audio goes silent. Confirmed NOT
+    # reproducible in plain Chromium on the same system. Default to
+    # Playwright's bundled Chromium instead; set CHLOE_YOUTUBE_USE_BRAVE=1
+    # to opt back into Brave (e.g. once/if that bug is fixed upstream).
+    if os.environ.get("CHLOE_YOUTUBE_USE_BRAVE", "").strip() != "1":
+        return None
     for candidate in _BRAVE_CANDIDATE_PATHS:
         if os.path.isfile(candidate):
             return candidate
