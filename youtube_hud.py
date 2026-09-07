@@ -44,7 +44,13 @@ documents.
 One background thread, started lazily via start() (same lazy-thread
 pattern as spotify_hud.py/youtube_player.py's owner thread -- importing
 this module must never start capturing audio or touching the browser as
-a side effect). Two nested loops:
+a side effect). IMPORTANT, and easy to get wrong (got it wrong once,
+2026-09-07): start()'s poll loop itself must ALSO never be what launches
+the YouTube browser -- it only checks youtube_player.is_running() (a
+pure status check) and treats "not running yet" as "nothing playing,"
+never calling into youtube_player in a way that would trigger its own
+lazy browser launch. The browser should only ever open because Ed (or a
+voice command) actually asked to play something. Two nested loops:
   - Outer: poll get_now_playing() every _POLL_INTERVAL_S seconds.
     Broadcasts a "youtube_now_playing" HUD message only when the
     video/is_playing state actually CHANGES.
@@ -107,8 +113,20 @@ def _broadcast(msg: dict) -> None:
 
 
 def _get_now_playing() -> Optional[dict]:
-    """Never raises -- see module docstring."""
+    """Never raises -- see module docstring. Also never LAUNCHES the
+    browser: checks youtube_player.is_running() first (a pure status
+    check) and returns None immediately if it isn't, rather than
+    calling get_now_playing() -- which would enqueue a command and
+    trigger _ensure_owner_thread() the moment this poll loop's first
+    tick runs, opening Brave at every Chloe boot regardless of whether
+    Ed ever asked for music. This is the actual fix for that (2026-09-07,
+    Ed: "brave browser is coming up on startup of chloe") -- the owner
+    thread should only ever start because someone actually requested
+    playback (a voice command, or a MUSIC panel action), never as a
+    side effect of this poll loop checking in."""
     try:
+        if not youtube_player.is_running():
+            return None
         return youtube_player.get_now_playing()
     except Exception as e:
         print(f"[youtube_hud] get_now_playing() errored: {e}", flush=True)

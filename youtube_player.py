@@ -190,6 +190,16 @@ _VIDEO_ID_RE = re.compile(r"[?&]v=([A-Za-z0-9_-]{6,})")
 # Owner thread                                                                #
 # --------------------------------------------------------------------------- #
 
+def is_running() -> bool:
+    """True if the owner thread (and therefore the browser) is already
+    up. Never starts anything -- the one safe way for a caller to check
+    "is Chloe already playing something" without itself becoming the
+    reason the browser launches (see youtube_hud.py's poll loop, which
+    must never be the trigger that opens the browser at boot just
+    because it's checking for now-playing state)."""
+    return _owner_thread is not None and _owner_thread.is_alive()
+
+
 def _ensure_owner_thread() -> None:
     """Start the owner thread on first use. Lazy, not at import time --
     importing this module must never launch a browser as a side effect
