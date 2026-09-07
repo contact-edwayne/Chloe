@@ -398,6 +398,30 @@ def _focus_player(page, timeout: int = 4000) -> bool:
         return False
 
 
+def _player_api_call(page, method: str) -> bool:
+    """Call a method directly on YouTube's own #movie_player element
+    (playVideo/pauseVideo/nextVideo/previousVideo) via page.evaluate().
+    This is a direct DOM/JS method call, not synthetic input, so it
+    works even when the page/window doesn't have OS focus -- unlike a
+    keyboard shortcut (page.keyboard.press), which depends on the
+    window actually being focused. Since the browser window is now
+    deliberately positioned off-screen and never focused (see
+    _launch_page), keyboard shortcuts are no longer reliable, and this
+    is the primary path; callers fall back to the focus+keyboard
+    approach only if this returns False. Returns True if the method
+    existed and was called, False otherwise (including on any error --
+    never raises)."""
+    try:
+        return bool(page.evaluate(
+            "(m) => { const p = document.getElementById('movie_player'); "
+            "if (p && typeof p[m] === 'function') { p[m](); return true; } "
+            "return false; }", method))
+    except Exception as e:
+        print(f"[youtube_player] #movie_player.{method}() call failed: "
+              f"{e}", flush=True)
+        return False
+
+
 def _dispatch(page, name: str, args: tuple) -> dict:
     if name == "play_url":
         (url,) = args
@@ -426,14 +450,16 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         return {"ok": True, "url": page.url}
 
     if name == "next_track":
-        _focus_player(page)  # best-effort; see _focus_player docstring
-        page.keyboard.press("Shift+N")
+        if not _player_api_call(page, "nextVideo"):
+            _focus_player(page)  # best-effort; see _focus_player docstring
+            page.keyboard.press("Shift+N")
         print("[youtube_player] next track", flush=True)
         return {"ok": True}
 
     if name == "previous_track":
-        _focus_player(page)  # best-effort; see _focus_player docstring
-        page.keyboard.press("Shift+P")
+        if not _player_api_call(page, "previousVideo"):
+            _focus_player(page)  # best-effort; see _focus_player docstring
+            page.keyboard.press("Shift+P")
         print("[youtube_player] previous track", flush=True)
         return {"ok": True}
 
@@ -441,8 +467,9 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         paused = _get_paused_state(page)
         if paused is True:
             return {"ok": True, "already_paused": True}
-        _focus_player(page)  # best-effort; see _focus_player docstring
-        page.keyboard.press("k")
+        if not _player_api_call(page, "pauseVideo"):
+            _focus_player(page)  # best-effort; see _focus_player docstring
+            page.keyboard.press("k")
         print("[youtube_player] paused", flush=True)
         return {"ok": True, "already_paused": False}
 
@@ -450,8 +477,9 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         paused = _get_paused_state(page)
         if paused is False:
             return {"ok": True, "already_playing": True}
-        _focus_player(page)  # best-effort; see _focus_player docstring
-        page.keyboard.press("k")
+        if not _player_api_call(page, "playVideo"):
+            _focus_player(page)  # best-effort; see _focus_player docstring
+            page.keyboard.press("k")
         print("[youtube_player] resumed", flush=True)
         return {"ok": True, "already_playing": False}
 
@@ -466,13 +494,18 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         return {"ok": True, "video_id": m.group(1) if m else None, "url": url}
 
     if name == "toggle_play_pause":
-        # Atomic on the owner thread: read real .paused state and press
-        # the toggle key in one dispatch, instead of two separate
-        # _enqueue round-trips (which would race against Ed clicking the
-        # tab himself between them).
+        # Atomic on the owner thread: read real .paused state and act on
+        # it in one dispatch, instead of two separate _enqueue round-
+        # trips (which would race against Ed clicking the tab himself
+        # between them). Uses the read state to call the exact API
+        # method needed (see _player_api_call) rather than a blind
+        # toggle key, which is more reliable now that keyboard shortcuts
+        # can't be counted on for an unfocused, off-screen window.
         paused = _get_paused_state(page)
-        _focus_player(page)  # best-effort; see _focus_player docstring
-        page.keyboard.press("k")
+        method = "playVideo" if paused else "pauseVideo"
+        if not _player_api_call(page, method):
+            _focus_player(page)  # best-effort; see _focus_player docstring
+            page.keyboard.press("k")
         print(f"[youtube_player] toggled play/pause (was_paused={paused})",
               flush=True)
         return {"ok": True, "was_paused": paused}
