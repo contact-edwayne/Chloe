@@ -274,9 +274,9 @@
   #mp-orb-target .left {
     width: 100%; height: 100%; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 8px; padding: 0;
+    zoom: 0.55;
   }
   #mp-orb-target .hud-area { flex: 1; min-height: 0; width: 100%; }
-  #mp-orb-target .hud-stack { max-width: 200px; margin: 0 auto; }
   #mp-orb-target .state-controls { flex-wrap: wrap; justify-content: center; }
 
   .mp-chat-panel { flex: 1; min-height: 0; }
@@ -286,7 +286,19 @@
   }
   #mp-chat-target .chat-header { flex: 0 0 auto; }
   #mp-chat-target #chatlog { flex: 1; min-height: 0; overflow-y: auto; }
-  #mp-chat-target .chat-input-row { flex: 0 0 auto; }
+  #mp-chat-target .chat-input-row {
+    flex: 0 0 auto; flex-wrap: wrap; padding: 8px 10px; gap: 6px;
+  }
+  #mp-chat-target .chat-input {
+    flex: 1 1 90px; min-width: 70px; padding: 8px 10px; font-size: 12px;
+  }
+  #mp-chat-target .attach-btn,
+  #mp-chat-target .ptt-btn,
+  #mp-chat-target .send-btn {
+    flex: 0 0 auto; padding: 0 10px; font-size: 9px; letter-spacing: 1px;
+  }
+  #mp-chat-target .attach-btn { font-size: 15px; padding: 0 10px; }
+  #mp-chat-target .send-btn { padding: 7px 12px; }
 
   .mp-visualizer-panel { min-height: 440px; }
   #mp-visualizer-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
