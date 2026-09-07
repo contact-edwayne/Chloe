@@ -57,6 +57,56 @@ if getattr(sys, "frozen", False):
         # If redirect fails, just continue without one — better than crashing.
         pass
 
+# ─── OLLAMA AUTO-START ───────────────────────────────────────────────────────
+# Chloe's local chat fallback (qwen2.5:14b) needs Ollama serving on
+# localhost:11434. Normally something else already started it -- the
+# chloe_ollama_serve Startup shortcut at login, or start_chloe_full.bat's own
+# health check before it launches this script. But if THIS script gets run
+# directly (double-clicking Chloe.exe, or `python start_jarvis.py` from a
+# terminal), neither of those ran, so check again here and launch Ollama
+# ourselves if it's down. Cheap and idempotent -- if something already
+# answers on :11434 this does nothing and returns immediately.
+def _ensure_ollama_running():
+    import urllib.request
+    try:
+        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2)
+        return  # already up
+    except Exception:
+        pass
+
+    if os.name != "nt":
+        print("[chloe] Ollama not responding on :11434 (non-Windows -- not "
+              "auto-starting it here).")
+        return
+
+    import subprocess
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
+        Path("C:/Program Files/Ollama/ollama.exe"),
+    ]
+    ollama_exe = next((c for c in candidates if c.exists()), None)
+    if ollama_exe is None:
+        print("[chloe] Ollama not responding on :11434 and ollama.exe wasn't "
+              "found in the usual install locations -- local chat fallback "
+              "will be unavailable until you start Ollama yourself.")
+        return
+
+    try:
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.Popen(
+            [str(ollama_exe), "serve"],
+            creationflags=CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"[chloe] Ollama wasn't running -- launched it hidden ({ollama_exe})")
+        time.sleep(3)  # give it a moment to bind the port before anything probes it
+    except Exception as e:
+        print(f"[chloe] tried to auto-start Ollama but failed: {e}")
+
+
+_ensure_ollama_running()
+
 # ─── BACKEND BOOTSTRAP ───────────────────────────────────────────────────────
 # WebSocket server starts in a daemon thread; jarvis (voice loop) starts
 # in another after a brief delay to let the WS server bind its port.
