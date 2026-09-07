@@ -3,7 +3,15 @@ Persistent browser-controlled YouTube player for Chloe.
 
 Playback goes through actual browser automation of a real YouTube tab
 (Ed's choice, 2026-09-01) -- not a local media player -- and launches
-non-headless so the tab is actually visible (also Ed's choice). One
+non-headless (Chromium's headless audio output is unreliable and would
+risk breaking both playback and the WASAPI-loopback visualizer capture)
+but STARTS MINIMIZED (Ed's later choice, 2026-09-07, once the MUSIC
+panel was live: he wants Chloe's own player to feel like where the
+music plays from, not a browser window popping up on his desktop).
+Audio keeps playing and the DOM stays fully readable while minimized --
+Chromium doesn't throttle either for a minimized (as opposed to fully
+hidden/occluded) window, so this doesn't touch playback or now-playing
+detection at all, only whether Ed has to look at it. One
 dedicated background thread owns the Playwright instance, browser,
 context, and the single Page for the life of the jarvis.py process;
 every public function here enqueues a command onto that thread rather
@@ -247,7 +255,7 @@ def _launch_page(pw):
     if brave_path:
         print(f"[youtube_player] launching Brave ({brave_path}) with the "
               f"dedicated Chloe profile at {_BRAVE_PROFILE_DIR} "
-              f"(non-headless)...", flush=True)
+              f"(non-headless, starting minimized)...", flush=True)
     else:
         print("[youtube_player] Brave not found at any known install path "
               "(set CHLOE_BRAVE_PATH to override) -- falling back to "
@@ -261,6 +269,15 @@ def _launch_page(pw):
         # mechanism) -- see module docstring fix #1.
         "ignore_default_args": ["--disable-component-update",
                                  "--disable-background-networking"],
+        # Start minimized (Ed, 2026-09-07) -- a real Chromium switch, so
+        # the window never visibly flashes open even once before it can
+        # be minimized after the fact. Audio/DOM are unaffected (see
+        # module docstring). If a future Chromium build ever stops
+        # honoring this flag, the next fallback would be a win32gui
+        # ShowWindow(SW_MINIMIZE) call keyed off this exact process's
+        # PID right after launch -- not attempted here since this flag
+        # is expected to just work and needs live verification first.
+        "args": ["--start-minimized"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
