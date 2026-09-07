@@ -519,6 +519,23 @@ def _seek_to(page, seconds: float) -> bool:
         return False
 
 
+def _set_volume_pct(page, pct: float) -> bool:
+    """Set player volume (0-100) via #movie_player's own setVolume(pct)
+    method -- same direct-DOM-method approach as _player_api_call/
+    _seek_to (works regardless of window focus/visibility). Returns True
+    if the call was made, False on any failure -- never raises."""
+    try:
+        return bool(page.evaluate(
+            "([v]) => { const p = document.getElementById('movie_player'); "
+            "if (p && typeof p.setVolume === 'function') { "
+            "p.setVolume(v); return true; } return false; }",
+            [pct]))
+    except Exception as e:
+        print(f"[youtube_player] setVolume({pct}) call failed: {e}",
+              flush=True)
+        return False
+
+
 def _dispatch(page, name: str, args: tuple) -> dict:
     if name == "play_url":
         (url,) = args
@@ -614,6 +631,15 @@ def _dispatch(page, name: str, args: tuple) -> dict:
               f"({'ok' if ok else 'failed -- no video loaded?'})", flush=True)
         return {"ok": ok, "error": None if ok else "seekTo call failed"}
 
+    if name == "set_volume":
+        (pct,) = args
+        pct = max(0, min(100, pct))
+        ok = _set_volume_pct(page, pct)
+        print(f"[youtube_player] set volume to {pct:.0f}% "
+              f"({'ok' if ok else 'failed -- no video loaded?'})", flush=True)
+        return {"ok": ok, "volume": pct if ok else None,
+                "error": None if ok else "setVolume call failed"}
+
     if name == "get_now_playing":
         url = page.url
         m = _VIDEO_ID_RE.search(url)
@@ -698,6 +724,12 @@ def get_current_video_id() -> Optional[str]:
     player thread isn't up."""
     result = _enqueue("get_current_video_id", ())
     return result.get("video_id") if result.get("ok") else None
+
+
+def set_volume(pct: float) -> dict:
+    """Set player volume, 0-100. Used by the HUD's click-to-set volume
+    bar."""
+    return _enqueue("set_volume", (pct,))
 
 
 def seek(seconds: float) -> dict:

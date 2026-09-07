@@ -4257,6 +4257,21 @@ async def handle_youtube_control(data, websocket):
                                     "error": result.get("error")})
         return
 
+    if action == "set_volume":
+        pct = data.get("pct")
+        try:
+            pct = float(pct)
+        except (TypeError, ValueError):
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing/invalid pct"})
+            return
+        result = await asyncio.to_thread(youtube_player.set_volume, pct)
+        await _ws_send(websocket, {"type": "youtube_control_result",
+                                    "ok": result.get("ok", False), "action": action,
+                                    "volume": result.get("volume"),
+                                    "error": result.get("error")})
+        return
+
     fn = {
         "previous": youtube_player.previous_track,
         "next": youtube_player.next_track,
