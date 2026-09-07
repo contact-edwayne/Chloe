@@ -42,14 +42,20 @@
   #hub-header-left { display: flex; align-items: center; gap: 16px; min-width: 0; }
   #crumb-back { flex: none; width: 36px; height: 36px; display: grid; place-items: center; background: #0d0f16; border: 1px solid var(--acc); color: var(--acc); cursor: pointer; font-size: 13px; box-shadow: 0 0 18px var(--glow); }
   #crumb-back:hover { background: #12161f; }
+  #crumb-back[hidden] { display: none !important; }
   #crumb-kicker { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .34em; color: var(--acc); }
   #crumb-title { font-family: 'JetBrains Mono', monospace; font-size: 21px; font-weight: 700; letter-spacing: .16em; color: #eafcff; margin-top: 5px; text-shadow: 0 0 18px var(--glow); }
   #btn-customize { flex: none; display: flex; align-items: center; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; background: #0d0f16; border: 1px solid var(--line); color: var(--acc); padding: 11px 15px; cursor: pointer; }
   #btn-customize:hover { border-color: var(--acc); box-shadow: 0 0 18px var(--glow); }
 
-  /* views share this footprint */
+  /* views share this footprint. !important is load-bearing here: each
+     view's own ID rule below sets its own `display` (grid/flex) so it
+     lays out correctly *when shown*, and an ID selector always beats this
+     class+attribute selector on specificity alone -- without !important,
+     the per-view display would win even while [hidden] is set, so every
+     view rendered at once, stacked in the flex column. */
   .view { position: relative; flex: 1; min-height: 0; animation: mountIn .3s ease; }
-  .view[hidden] { display: none; }
+  .view[hidden] { display: none !important; }
 
   /* home */
   #view-home { display: grid; grid-template-rows: 1fr auto; min-height: 0; }
