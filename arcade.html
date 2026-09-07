@@ -273,7 +273,7 @@
           <div id="upload-track"><div id="upload-bar"></div></div>
         </div>
         <button id="btn-add-rom">+ ADD ROM</button>
-        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin" style="display:none">
+        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img" style="display:none">
       </div>
     </div>
     <div id="rom-grid"></div>
@@ -341,18 +341,19 @@
   'use strict';
 
   // ---- constants -----------------------------------------------------
-  var SYSTEMS = ['NES','GB / GBC','GBA','SNES','MEGA DRIVE'];
+  var SYSTEMS = ['NES','GB / GBC','GBA','SNES','MEGA DRIVE','N64','PS1'];
   var FILTERS = [
     { label: 'ALL', key: 'ALL' }, { label: 'NES', key: 'nes' }, { label: 'GB/GBC', key: 'gb' },
-    { label: 'GBA', key: 'gba' }, { label: 'SNES', key: 'snes' }, { label: 'MEGA DRIVE', key: 'segaMD' }
+    { label: 'GBA', key: 'gba' }, { label: 'SNES', key: 'snes' }, { label: 'MEGA DRIVE', key: 'segaMD' },
+    { label: 'N64', key: 'n64' }, { label: 'PS1', key: 'psx' }
   ];
-  var TAGS = { nes: 'NES', gb: 'GB', gba: 'GBA', snes: 'SNES', segaMD: 'MD' };
+  var TAGS = { nes: 'NES', gb: 'GB', gba: 'GBA', snes: 'SNES', segaMD: 'MD', n64: 'N64', psx: 'PS1' };
   var SCHEMES = [
     { key: 'SPECTRE', label: 'SPECTRE', acc: '#00e5ff', acc2: '#b06cff', ink: '#ff6ec7', line: '#00e5ff33', glow: '#00e5ff44' },
     { key: 'EMBER',   label: 'EMBER',   acc: '#ffab2e', acc2: '#ff5a3c', ink: '#ffd479', line: '#ffab2e33', glow: '#ffab2e44' },
     { key: 'VERDANT', label: 'VERDANT', acc: '#5cf08a', acc2: '#c2ff3d', ink: '#a8ffcf', line: '#5cf08a33', glow: '#5cf08a44' }
   ];
-  var UP_ACCEPT_RE = /\.(nes|fds|gb|gbc|sgb|gba|sfc|smc|md|gen|smd|bin)$/i;
+  var UP_ACCEPT_RE = /\.(nes|fds|gb|gbc|sgb|gba|sfc|smc|md|gen|smd|bin|n64|z64|v64|cue|chd|pbp|img)$/i;
   var LS_PREFIX = 'chloe_arcade_';
 
   function rel(path) { return new URL(path, document.baseURI).href; }

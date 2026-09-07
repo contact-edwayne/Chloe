@@ -226,6 +226,11 @@ _ROM_SYSTEMS = {
     ".gba": "gba",
     ".sfc": "snes", ".smc": "snes",
     ".md": "segaMD", ".gen": "segaMD", ".smd": "segaMD", ".bin": "segaMD",
+    ".n64": "n64", ".z64": "n64", ".v64": "n64",
+    # PS1 discs are normally a .cue pointing at .bin track(s), or a single
+    # .chd/.pbp. ".bin" alone is already claimed by Genesis above, so upload
+    # PS1 games as the .cue (with its .bin file(s) alongside it) or as .chd/.pbp.
+    ".cue": "psx", ".chd": "psx", ".pbp": "psx", ".img": "psx",
 }
 
 
