@@ -152,6 +152,7 @@ def _build_playing_broadcast(np: dict) -> dict:
     duration_s = np.get("duration_s")
     return {
         "type": "youtube_now_playing", "playing": True,
+        "video_id": video_id,
         "title": np.get("title"), "channel": np.get("channel"),
         "album_art_url": (
             f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
