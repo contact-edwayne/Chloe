@@ -87,7 +87,12 @@ _POLL_INTERVAL_S = 3.0
 _VIZ_FPS = 20
 _VIZ_BINS = 24
 _SAMPLE_RATE = 44100
-_BLOCK_SIZE = 1024
+# One block == one visualizer frame's worth of audio (_SAMPLE_RATE /
+# _VIZ_FPS samples). Previously a fixed 1024 (~23.2ms) regardless of
+# _VIZ_FPS, which under-consumed audio relative to the ~50ms/frame the
+# loop was paced to via a manual sleep -- see _run_visualizer_until_
+# stopped for why that caused an unbounded WASAPI capture backlog.
+_BLOCK_SIZE = round(_SAMPLE_RATE / _VIZ_FPS)
 
 _thread: Optional[threading.Thread] = None
 _thread_lock = threading.Lock()
@@ -133,6 +138,33 @@ def _get_now_playing() -> Optional[dict]:
         return None
 
 
+def _build_playing_broadcast(np: dict) -> dict:
+    """Build the youtube_now_playing broadcast dict for a currently-
+    playing track. Shared by _poll_loop (on state change) and
+    _run_visualizer_until_stopped's periodic recheck (so progress_ms/
+    duration_ms get re-synced roughly every _POLL_INTERVAL_S instead of
+    only once at state change) -- see module docstring, 2026-09-07 fix
+    for progress/visuals drifting out of sync over a long track."""
+    video_id = np.get("video_id")
+    progress_s = np.get("progress_s")
+    duration_s = np.get("duration_s")
+    return {
+        "type": "youtube_now_playing", "playing": True,
+        "title": np.get("title"), "channel": np.get("channel"),
+        "album_art_url": (
+            f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+            if video_id else None
+        ),
+        "is_playing": np.get("is_playing"),
+        "progress_ms": (
+            round(progress_s * 1000) if progress_s is not None else None
+        ),
+        "duration_ms": (
+            round(duration_s * 1000) if duration_s is not None else None
+        ),
+    }
+
+
 def _poll_loop() -> None:
     global _last_broadcast_state
     print("[youtube_hud] now-playing poll loop started", flush=True)
@@ -147,24 +179,7 @@ def _poll_loop() -> None:
             if not np or not np.get("playing"):
                 _broadcast({"type": "youtube_now_playing", "playing": False})
             else:
-                video_id = np.get("video_id")
-                progress_s = np.get("progress_s")
-                duration_s = np.get("duration_s")
-                _broadcast({
-                    "type": "youtube_now_playing", "playing": True,
-                    "title": np.get("title"), "channel": np.get("channel"),
-                    "album_art_url": (
-                        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                        if video_id else None
-                    ),
-                    "is_playing": np.get("is_playing"),
-                    "progress_ms": (
-                        round(progress_s * 1000) if progress_s is not None else None
-                    ),
-                    "duration_ms": (
-                        round(duration_s * 1000) if duration_s is not None else None
-                    ),
-                })
+                _broadcast(_build_playing_broadcast(np))
 
         if np and np.get("is_playing"):
             _run_visualizer_until_stopped()
@@ -198,7 +213,6 @@ def _run_visualizer_until_stopped() -> None:
         return
 
     last_playback_check = time.time()
-    frame_interval = 1.0 / _VIZ_FPS
 
     try:
         extra = sd.WasapiSettings(loopback=True)
@@ -216,15 +230,18 @@ def _run_visualizer_until_stopped() -> None:
                         print("[youtube_hud] playback stopped -- ending "
                               "visualizer capture", flush=True)
                         return
+                    _broadcast(_build_playing_broadcast(np_state))
                 try:
-                    block, _overflow = stream.read(_BLOCK_SIZE)
+                    block, overflowed = stream.read(_BLOCK_SIZE)
                 except Exception as e:
                     print(f"[youtube_hud] audio read error, ending "
                           f"visualizer capture: {e}", flush=True)
                     return
+                if overflowed:
+                    print("[youtube_hud] WASAPI capture overflow "
+                          "(frame dropped)", flush=True)
                 bins = _fft_bins(block, np)
                 _broadcast({"type": "youtube_visualizer", "bins": bins})
-                time.sleep(max(0.0, frame_interval - (time.time() - now)))
     except Exception as e:
         print(f"[youtube_hud] visualizer stream failed to open, "
               f"disabling for this video: {e}", flush=True)
