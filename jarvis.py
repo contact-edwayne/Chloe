@@ -399,10 +399,18 @@ KOKORO_SPEED       = float(os.environ.get("KOKORO_SPEED", "1.0"))
 #      without langdetect installed, Latin-script replies stay on the
 #      default English voice exactly as before this change -- no regression,
 #      partial multilingual coverage out of the box.
-# Short text (<12 chars -- "okay", "yes", a greeting) skips detection
-# entirely and stays English; both tiers are unreliable at that length and
-# the voice shouldn't flip languages on a one-word reply.
+# Short text (<20 chars -- "okay", "yes", a greeting, "Playing Main.",
+# "Skipped.") skips detection entirely and stays English; both tiers are
+# unreliable at that length and the voice shouldn't flip languages on a
+# one-word or one-phrase reply.
 _langdetect_available = None  # type: ignore[var-annotated]
+
+# langdetect's confidence is genuinely unreliable below a full sentence,
+# and skews toward false "foreign" verdicts on short, proper-noun-heavy
+# English (a song/artist name, a terse canned status reply). Only trust
+# a non-English call when langdetect itself is confident; anything under
+# the bar is treated as English.
+_LANGDETECT_MIN_PROB = 0.90
 
 
 def _try_langdetect(text: str):
@@ -410,10 +418,16 @@ def _try_langdetect(text: str):
     if _langdetect_available is False:
         return None
     try:
-        from langdetect import detect, DetectorFactory
+        from langdetect import detect_langs, DetectorFactory
         DetectorFactory.seed = 0  # deterministic across calls
         _langdetect_available = True
-        return detect(text)
+        langs = detect_langs(text)
+        if not langs:
+            return None
+        top = langs[0]
+        if top.prob < _LANGDETECT_MIN_PROB:
+            return "en"
+        return top.lang
     except ImportError:
         _langdetect_available = False
         return None
@@ -457,7 +471,7 @@ def _script_guess(text: str):
 def _detect_reply_lang(text: str) -> str:
     """Best-effort ISO 639-1 code for `text`, defaulting to 'en'."""
     t = (text or "").strip()
-    if len(t) < 12:
+    if len(t) < 20:
         return "en"
     code = _try_langdetect(t)
     if code:
