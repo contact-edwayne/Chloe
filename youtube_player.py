@@ -419,12 +419,15 @@ def _hide_browser_window() -> None:
                 pass
         return True
 
-    try:
-        win32gui.EnumWindows(_minimize_if_ours, None)
-    except Exception as e:
-        print(f"[youtube_player] minimizing the automation browser "
-              f"window failed (non-fatal, window may still be visible): "
-              f"{e}", flush=True)
+    for _ in range(5):
+        try:
+            win32gui.EnumWindows(_minimize_if_ours, None)
+        except Exception as e:
+            print(f"[youtube_player] minimizing the automation browser "
+                  f"window failed (non-fatal, window may still be "
+                  f"visible): {e}", flush=True)
+            break
+        time.sleep(0.3)
 
 
 # Ed confirmed LIVE (2026-09-07, round 3): music STILL dies after about
@@ -559,18 +562,32 @@ def _grant_autoplay_permission() -> None:
         return
     try:
         data = json.loads(prefs_path.read_text(encoding="utf-8"))
+        changed = False
         profile = data.setdefault("profile", {})
         defaults = profile.setdefault("default_content_setting_values", {})
         if defaults.get("autoplay") != 1:
             defaults["autoplay"] = 1
-            prefs_path.write_text(json.dumps(data), encoding="utf-8")
+            changed = True
             print("[youtube_player] granted autoplay permission in the "
                   "automation profile (Brave's own autoplay setting is "
                   "separate from Chromium's gesture policy)", flush=True)
+        # This profile gets killed via Ctrl+C/process-kill on nearly
+        # every restart, which Chromium reads as a crash -- normally
+        # masked by --enable-automation, which we no longer pass (see
+        # fix round 2026-09-07 #10/#11 above). Telling it the last exit
+        # was clean, every launch, means the "Restore pages?" infobar
+        # (a real top-level UI element that needs an actual click and
+        # that our one-shot window-minimize sweep may not even catch)
+        # never has a reason to appear in the first place.
+        if profile.get("exit_type") != "Normal" or not profile.get("exited_cleanly", False):
+            profile["exit_type"] = "Normal"
+            profile["exited_cleanly"] = True
+            changed = True
+        if changed:
+            prefs_path.write_text(json.dumps(data), encoding="utf-8")
     except Exception as e:
-        print(f"[youtube_player] couldn't pre-seed autoplay permission "
-              f"(non-fatal, the nudge-click fallback still runs): {e}",
-              flush=True)
+        print(f"[youtube_player] couldn't pre-seed autoplay permission / "
+              f"clean-exit state (non-fatal): {e}", flush=True)
 
 
 def _launch_page(pw):
