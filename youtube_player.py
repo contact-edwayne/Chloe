@@ -431,6 +431,29 @@ def _hide_browser_window() -> None:
                       f"title={title!r} already_minimized={minimized_already}",
                       flush=True)
             try:
+                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                new_ex_style = ((ex_style | win32con.WS_EX_TOOLWINDOW)
+                                & ~win32con.WS_EX_APPWINDOW)
+                if new_ex_style != ex_style:
+                    # Doesn't reliably take effect on a live window
+                    # without a hide/re-show cycle -- safe now that the
+                    # window is also positioned off-screen (see
+                    # --window-position in _launch_page), so the
+                    # re-show never actually appears on Ed's monitor.
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                    win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE,
+                                            new_ex_style)
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    if _DEBUG_HIDE:
+                        print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 "
+                              f"-- stripped taskbar presence from "
+                              f"hwnd={hwnd}", flush=True)
+            except Exception as e:
+                if _DEBUG_HIDE:
+                    print(f"[youtube_player] CHLOE_YOUTUBE_DEBUG_HIDE=1 "
+                          f"-- couldn't strip taskbar presence from "
+                          f"hwnd={hwnd}: {e}", flush=True)
+            try:
                 win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
             except Exception as e:
                 if _DEBUG_HIDE:
@@ -683,7 +706,14 @@ def _launch_page(pw):
                  # the brief visible flash at launch that
                  # _hide_browser_window's post-hoc ShowWindow call
                  # can't fully avoid (2026-09-07 round 12).
-                 "--start-minimized"],
+                 "--start-minimized",
+                 # Positions the window off any real monitor's bounds
+                 # from the moment it's created, so there's nothing for
+                 # the compositor to paint on Ed's actual screen --
+                 # independent of the --start-minimized/ShowWindow
+                 # timing race that still let a brief flash through
+                 # (2026-09-07 round 13).
+                 "--window-position=-32000,-32000"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
