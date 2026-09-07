@@ -257,73 +257,6 @@ def _player_loop() -> None:
             fut.set_result(result)
 
 
-def _hide_browser_window() -> None:
-    """Best-effort, never raises: find the automation browser's actual
-    OS window and minimize it via the real Win32 API, rather than
-    trusting the --start-minimized launch flag alone (see the comment
-    in _launch_page's launch_kwargs -- that flag was confirmed live NOT
-    to be honored). The window is found by matching _BRAVE_PROFILE_DIR
-    in a running browser process's command line -- a path unique to
-    Chloe's dedicated automation profile, so this can never match a
-    window that isn't the one this module just launched (Ed's own
-    Brave/Chrome never runs with --user-data-dir pointed at it). Every
-    failure mode here (psutil/pywin32 missing, no matching process yet,
-    the enumeration itself erroring) just leaves the window visible --
-    exactly the pre-fix behavior, never worse."""
-    try:
-        import psutil
-        import win32con
-        import win32gui
-        import win32process
-    except ImportError:
-        return
-
-    profile_marker = str(_BRAVE_PROFILE_DIR)
-    pids: set = set()
-    deadline = time.time() + 4.0
-    while time.time() < deadline and not pids:
-        for proc in psutil.process_iter(("pid", "name", "cmdline")):
-            try:
-                name = (proc.info.get("name") or "").lower()
-                if "brave" not in name and "chrome" not in name:
-                    continue
-                cmdline = proc.info.get("cmdline") or []
-                if any(profile_marker in arg for arg in cmdline):
-                    pids.add(proc.info["pid"])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        if not pids:
-            time.sleep(0.2)
-
-    if not pids:
-        print("[youtube_player] couldn't find the automation browser's "
-              "own process to minimize its window (it may still be "
-              "visible) -- window-position/-start-minimized are the "
-              "only mitigations in effect for this launch", flush=True)
-        return
-
-    def _minimize_if_ours(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return True
-        try:
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        except Exception:
-            return True
-        if pid in pids:
-            try:
-                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
-            except Exception:
-                pass
-        return True
-
-    try:
-        win32gui.EnumWindows(_minimize_if_ours, None)
-    except Exception as e:
-        print(f"[youtube_player] minimizing the automation browser "
-              f"window failed (non-fatal, window may still be visible): "
-              f"{e}", flush=True)
-
-
 def _launch_page(pw):
     """Launch Brave (or fall back to bundled Chromium) against the
     dedicated persistent profile and return its page. Callable more than
@@ -333,7 +266,7 @@ def _launch_page(pw):
     if brave_path:
         print(f"[youtube_player] launching Brave ({brave_path}) with the "
               f"dedicated Chloe profile at {_BRAVE_PROFILE_DIR} "
-              f"(non-headless, starting minimized)...", flush=True)
+              f"(non-headless, positioned off-screen)...", flush=True)
     else:
         print("[youtube_player] Brave not found at any known install path "
               "(set CHLOE_BRAVE_PATH to override) -- falling back to "
@@ -347,17 +280,23 @@ def _launch_page(pw):
         # mechanism) -- see module docstring fix #1.
         "ignore_default_args": ["--disable-component-update",
                                  "--disable-background-networking"],
-        # Start minimized AND pushed off-screen (Ed, 2026-09-07).
-        # --start-minimized alone turned out not to be honored on Ed's
-        # machine (confirmed live: the window opened fully visible and
-        # focused) -- --window-position is plain window geometry, not a
-        # window-state request, so it doesn't depend on Chromium's
-        # automation launch path choosing to respect it the way
-        # --start-minimized apparently doesn't. Kept both anyway (belt
-        # and suspenders, harmless either way) plus an active Win32
-        # minimize right after launch -- see _hide_browser_window()
-        # below, called from _launch_page().
-        "args": ["--start-minimized", "--window-position=-32000,-32000"],
+        # Pushed off-screen, NOT minimized (Ed, 2026-09-07, revised).
+        # Two things were tried and rejected first: --start-minimized
+        # (confirmed live not honored -- the window opened fully visible
+        # and focused), then an active Win32 SW_MINIMIZE call right
+        # after launch (DID hide the window, but playback then died
+        # after about a minute -- a minimized window is occluded/hidden
+        # from Chromium's Page Visibility API, and hidden tabs are
+        # subject to background CPU throttling/freezing after roughly a
+        # minute unless Chromium reliably recognizes them as audible,
+        # which isn't guaranteed for a window minimized via an external
+        # Win32 call). --window-position is plain geometry, not a
+        # window-state request: a window sitting off-screen but NOT
+        # minimized is never occluded/hidden, so document.visibilityState
+        # stays 'visible' the whole time and none of that throttling
+        # applies. Costs a taskbar entry (a non-minimized window always
+        # has one) -- a fair trade for playback that doesn't die.
+        "args": ["--window-position=-32000,-32000"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
@@ -367,7 +306,6 @@ def _launch_page(pw):
     # every future launch instead of starting from blank each time.
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(_BRAVE_PROFILE_DIR), **launch_kwargs)
-    _hide_browser_window()
     # A window closed by hand looks like an unclean shutdown to
     # Brave/Chromium, which can restore the previous tab(s) on the next
     # launch -- asynchronously, just after launch_persistent_context
