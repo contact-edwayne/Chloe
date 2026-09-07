@@ -51,9 +51,11 @@ pure status check) and treats "not running yet" as "nothing playing,"
 never calling into youtube_player in a way that would trigger its own
 lazy browser launch. The browser should only ever open because Ed (or a
 voice command) actually asked to play something. Two nested loops:
-  - Outer: poll get_now_playing() every _POLL_INTERVAL_S seconds.
-    Broadcasts a "youtube_now_playing" HUD message only when the
-    video/is_playing state actually CHANGES.
+  - Outer: poll get_now_playing() every _POLL_INTERVAL_S seconds and
+    broadcast a "youtube_now_playing" HUD message every tick (not just
+    on change -- see _poll_loop, 2026-09-07 fix for progress/visuals
+    drifting out of sync over a long track, especially when the
+    visualizer itself never manages to start).
   - Inner (only while is_playing is True): open a WASAPI loopback
     stream and broadcast "youtube_visualizer" frames (normalized FFT
     magnitude bins) at roughly _VIZ_FPS per second. Torn down the
@@ -166,20 +168,14 @@ def _build_playing_broadcast(np: dict) -> dict:
 
 
 def _poll_loop() -> None:
-    global _last_broadcast_state
     print("[youtube_hud] now-playing poll loop started", flush=True)
     while True:
         np = _get_now_playing()
 
-        state = None
-        if np and np.get("playing"):
-            state = (np.get("video_id"), np.get("is_playing"))
-        if state != _last_broadcast_state:
-            _last_broadcast_state = state
-            if not np or not np.get("playing"):
-                _broadcast({"type": "youtube_now_playing", "playing": False})
-            else:
-                _broadcast(_build_playing_broadcast(np))
+        if not np or not np.get("playing"):
+            _broadcast({"type": "youtube_now_playing", "playing": False})
+        else:
+            _broadcast(_build_playing_broadcast(np))
 
         if np and np.get("is_playing"):
             _run_visualizer_until_stopped()
