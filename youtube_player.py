@@ -148,6 +148,8 @@ Two more follow-up fixes (Ed, 2026-09-01, round 2 -- live testing again):
 
 from __future__ import annotations
 
+import ctypes
+import json
 import os
 import queue
 import re
@@ -336,6 +338,152 @@ def _hide_browser_window() -> None:
               f"{e}", flush=True)
 
 
+# Ed confirmed LIVE (2026-09-07, round 3): music STILL dies after about
+# a minute -- 6th attempt now, and every attempt so far (minimize,
+# off-screen, layered-alpha, anti-throttle Chromium launch flags) has
+# targeted CHROMIUM'S OWN background-tab throttling. All 6 failing
+# identically, regardless of whether the window is minimized, moved
+# off-screen, or made invisible via alpha, is itself informative: the
+# one thing every attempt has in common is that Windows sees this as a
+# background/unfocused app the whole time it plays, and ~60s is a very
+# characteristic delay for Windows' OWN scheduler-level power
+# throttling (EcoQoS / "efficiency mode" for background processes) to
+# kick in -- a completely different, OS-level mechanism that Chromium's
+# own --disable-background-timer-throttling family of flags has no
+# effect on, because it isn't Chromium doing the throttling in this
+# theory, it's Windows throttling the whole process's CPU/scheduling
+# priority regardless of what Chromium itself wants to do.
+#
+# Fix: explicitly opt the automation browser's processes OUT of Windows
+# power throttling via SetProcessInformation(ProcessPowerThrottling),
+# the documented API for exactly this
+# (https://learn.microsoft.com/windows/win32/procthread/process-power-throttling).
+# Applied to the main browser process AND every child process
+# (renderer/GPU/audio service, etc. -- these don't repeat the profile
+# path in their own command line, so _hide_browser_window's cmdline
+# match alone would miss them; walking the process tree from the
+# matched root via psutil catches all of them regardless).
+def _disable_power_throttling_for_pid(pid: int) -> bool:
+    """Best-effort: ask Windows to never apply EXECUTION_SPEED power
+    throttling to this process. Returns False (never raises) on any
+    failure -- missing ctypes.windll (non-Windows), the process already
+    exited, insufficient access, etc."""
+    if not hasattr(ctypes, "windll"):
+        return False
+    PROCESS_SET_INFORMATION = 0x0200
+    PROCESS_QUERY_INFORMATION = 0x0400
+    ProcessPowerThrottling = 4  # PROCESS_INFORMATION_CLASS
+
+    class _PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+        _fields_ = [("Version", ctypes.c_ulong),
+                    ("ControlMask", ctypes.c_ulong),
+                    ("StateMask", ctypes.c_ulong)]
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(
+            PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            state = _PROCESS_POWER_THROTTLING_STATE(
+                Version=1,               # PROCESS_POWER_THROTTLING_CURRENT_VERSION
+                ControlMask=0x1,         # PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+                StateMask=0,             # 0 = force this mechanism OFF
+            )
+            return bool(kernel32.SetProcessInformation(
+                handle, ProcessPowerThrottling,
+                ctypes.byref(state), ctypes.sizeof(state)))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def _disable_power_throttling() -> None:
+    """Best-effort, never raises: find the automation browser's root
+    process (same profile-marker match as _hide_browser_window) plus
+    its full process tree, and disable Windows power throttling on all
+    of them. See the fix comment above _disable_power_throttling_for_pid
+    for why this targets a different layer than the existing anti-
+    throttle Chromium launch args."""
+    try:
+        import psutil
+    except ImportError:
+        return
+
+    profile_marker = str(_BRAVE_PROFILE_DIR)
+    root_pids = set()
+    deadline = time.time() + 4.0
+    while time.time() < deadline and not root_pids:
+        for proc in psutil.process_iter(("pid", "name", "cmdline")):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if "brave" not in name and "chrome" not in name:
+                    continue
+                cmdline = proc.info.get("cmdline") or []
+                if any(profile_marker in arg for arg in cmdline):
+                    root_pids.add(proc.info["pid"])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not root_pids:
+            time.sleep(0.2)
+
+    if not root_pids:
+        print("[youtube_player] couldn't find the automation browser's "
+              "process tree to exempt from Windows power throttling",
+              flush=True)
+        return
+
+    all_pids = set(root_pids)
+    for root_pid in root_pids:
+        try:
+            all_pids.update(
+                c.pid for c in psutil.Process(root_pid).children(recursive=True))
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    ok_count = sum(_disable_power_throttling_for_pid(pid) for pid in all_pids)
+    print(f"[youtube_player] disabled Windows power throttling on "
+          f"{ok_count}/{len(all_pids)} automation browser process(es)",
+          flush=True)
+
+
+def _grant_autoplay_permission() -> None:
+    """Best-effort, never raises: pre-seed the profile's own Preferences
+    file so autoplay is allowed for every site by default. Separate
+    from the --autoplay-policy launch flag (which addresses Chromium's
+    own built-in gesture requirement) -- Brave layers its OWN autoplay
+    permission on top (brave://settings/content/autoplay, default
+    Block), and that layer isn't touched by the launch flag at all,
+    which would explain why _focus_player's nudge click was still
+    firing on every play even after adding it (Ed, 2026-09-07 round 3:
+    "popup browser still happens... appears for a split second then
+    goes away" -- exactly what the click-then-reminimize fallback looks
+    like when the click IS still needed). Must run BEFORE the browser
+    process starts -- Chromium only reads Preferences at launch, so a
+    change made afterward wouldn't take effect until the next cold
+    start. Silently does nothing if the profile hasn't been launched
+    once yet (Preferences doesn't exist yet) -- it will next time."""
+    prefs_path = _BRAVE_PROFILE_DIR / "Default" / "Preferences"
+    if not prefs_path.is_file():
+        return
+    try:
+        data = json.loads(prefs_path.read_text(encoding="utf-8"))
+        profile = data.setdefault("profile", {})
+        defaults = profile.setdefault("default_content_setting_values", {})
+        if defaults.get("autoplay") != 1:
+            defaults["autoplay"] = 1
+            prefs_path.write_text(json.dumps(data), encoding="utf-8")
+            print("[youtube_player] granted autoplay permission in the "
+                  "automation profile (Brave's own autoplay setting is "
+                  "separate from Chromium's gesture policy)", flush=True)
+    except Exception as e:
+        print(f"[youtube_player] couldn't pre-seed autoplay permission "
+              f"(non-fatal, the nudge-click fallback still runs): {e}",
+              flush=True)
+
+
 def _launch_page(pw):
     """Launch Brave (or fall back to bundled Chromium) against the
     dedicated persistent profile and return its page. Callable more than
@@ -352,6 +500,7 @@ def _launch_page(pw):
               "(set CHLOE_BRAVE_PATH to override) -- falling back to "
               "Playwright's bundled Chromium instead", flush=True)
     _BRAVE_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _grant_autoplay_permission()
     launch_kwargs = {
         "headless": False,
         # Playwright's default args include --disable-component-update,
@@ -388,6 +537,7 @@ def _launch_page(pw):
     context = pw.chromium.launch_persistent_context(
         user_data_dir=str(_BRAVE_PROFILE_DIR), **launch_kwargs)
     _hide_browser_window()
+    _disable_power_throttling()
     # A window closed by hand looks like an unclean shutdown to
     # Brave/Chromium, which can restore the previous tab(s) on the next
     # launch -- asynchronously, just after launch_persistent_context

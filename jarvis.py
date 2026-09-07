@@ -4256,6 +4256,8 @@ async def handle_youtube_control(data, websocket):
                                         "action": action, "error": "missing/invalid seconds"})
             return
         result = await asyncio.to_thread(youtube_player.seek, seconds)
+        if result.get("ok"):
+            await asyncio.to_thread(youtube_hud.refresh_now)
         await _ws_send(websocket, {"type": "youtube_control_result",
                                     "ok": result.get("ok", False), "action": action,
                                     "error": result.get("error")})
