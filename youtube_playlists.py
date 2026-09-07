@@ -426,6 +426,211 @@ def _format_stop_result(result: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Song identification / info lookup                                           #
+# --------------------------------------------------------------------------- #
+# Three tiers, cheapest first:
+#   1. "what song is this"       -- local only, reads get_now_playing()
+#   2. "tell me about this song" -- + iTunes Search API (artist/album/year)
+#   3. "tell me about this artist" -- + a Wikipedia summary for a bio
+# Every pattern here is fully anchored (^...$ against the already wake-
+# word-stripped/lowercased/punctuation-trimmed `raw`), same conservative
+# shape as _is_skip_command/_is_pause_command above -- no loose substring
+# matching that could misfire on unrelated chat.
+
+_SONG_ID_PATTERNS = [
+    re.compile(r"^what(?:'s|s| is) (?:this|the) song(?: called)?$"),
+    re.compile(r"^what(?:'s|s| is) (?:this|the) track(?: called)?$"),
+    re.compile(r"^what(?:'s|s| is) (?:currently )?playing$"),
+    re.compile(r"^who(?:'s|s| is) (?:this|it) by$"),
+    re.compile(r"^who sings this(?: song)?$"),
+    re.compile(r"^name (?:this|that) song$"),
+    re.compile(r"^name (?:this|that) track$"),
+    re.compile(r"^what song is (?:this|playing)$"),
+    re.compile(r"^what track is this$"),
+]
+
+_SONG_INFO_PATTERNS = [
+    re.compile(r"^tell me about (?:this|the) song$"),
+    re.compile(r"^more about (?:this|the) song$"),
+    re.compile(r"^song info(?:rmation)?$"),
+    re.compile(r"^what album is this(?: song)? from$"),
+]
+
+_ARTIST_INFO_PATTERNS = [
+    re.compile(r"^tell me about (?:this|the) artist$"),
+    re.compile(r"^tell me about (?:this|the) singer$"),
+    re.compile(r"^more about (?:this|the) artist$"),
+    re.compile(r"^who(?:'s|s| is) (?:this|the) artist$"),
+    re.compile(r"^artist info(?:rmation)?$"),
+    re.compile(r"^artist bio$"),
+]
+
+
+def _is_song_id_command(raw: str) -> bool:
+    return any(pat.match(raw) for pat in _SONG_ID_PATTERNS)
+
+
+def _is_song_info_command(raw: str) -> bool:
+    return any(pat.match(raw) for pat in _SONG_INFO_PATTERNS)
+
+
+def _is_artist_info_command(raw: str) -> bool:
+    return any(pat.match(raw) for pat in _ARTIST_INFO_PATTERNS)
+
+
+_TITLE_CLEAN_RE = re.compile(
+    r"\s*[\(\[][^\)\]]*(?:official|lyric|audio|video|hd|4k|remaster"
+    r"|visualizer|explicit)[^\)\]]*[\)\]]\s*",
+    re.IGNORECASE,
+)
+_TOPIC_SUFFIX_RE = re.compile(r"\s*-\s*Topic$", re.IGNORECASE)
+
+
+def _clean_title(title: str) -> str:
+    """Strip common upload-title noise -- "(Official Video)", "[Lyrics]",
+    "(HD)", etc. Best-effort only; leaves the raw title alone if nothing
+    matches rather than risk mangling a title that legitimately contains
+    parens."""
+    if not title:
+        return title
+    cleaned = _TITLE_CLEAN_RE.sub(" ", title)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    return cleaned or title.strip()
+
+
+def _guess_artist_and_song(now_playing: dict) -> tuple[Optional[str], str]:
+    """Best-effort (artist, song_title) from whatever get_now_playing()
+    gave us -- no network call, this is the fast path "what song is
+    this" uses directly and the other two intents use to build their
+    lookup query. Preference order: a YouTube Music "<Artist> - Topic"
+    auto-generated channel (YouTube-verified artist name, most
+    reliable) > an "Artist - Title" shaped video title (common upload
+    convention, not guaranteed) > the channel name as a last-resort
+    guess with no real confidence either way."""
+    title = _clean_title(now_playing.get("title") or "")
+    channel = (now_playing.get("channel") or "").strip()
+    topic_m = _TOPIC_SUFFIX_RE.search(channel) if channel else None
+    if topic_m:
+        artist = channel[:topic_m.start()].strip()
+        if artist:
+            return artist, title
+    if " - " in title:
+        left, right = title.split(" - ", 1)
+        left, right = left.strip(), right.strip()
+        if left and right:
+            return left, right
+    return (channel or None), title
+
+
+def _handle_song_id() -> str:
+    np = youtube_player.get_now_playing()
+    if not np or not np.get("playing"):
+        return "Nothing's playing right now."
+    artist, song = _guess_artist_and_song(np)
+    if not song:
+        return "Something's playing but I couldn't read the title."
+    if artist:
+        return f'This is "{song}" by {artist}.'
+    return f'This is "{song}", uploaded by {np.get("channel") or "an unknown channel"}.'
+
+
+_ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
+_LOOKUP_TIMEOUT_S = 6
+
+
+def _itunes_lookup(term: str) -> Optional[dict]:
+    """iTunes Search API -- free, no key, no auth. Only used by the
+    "tell me about..." intents (NOT plain "what song is this", which
+    stays local for speed). Returns the top match or None on any
+    failure -- network error, timeout, or genuinely no results -- so
+    callers fall back to the local-only reply instead of erroring out
+    loud or inventing details."""
+    try:
+        import requests
+        r = requests.get(
+            _ITUNES_SEARCH_URL,
+            params={"term": term, "media": "music", "entity": "song", "limit": 1},
+            timeout=_LOOKUP_TIMEOUT_S,
+        )
+        r.raise_for_status()
+        results = (r.json() or {}).get("results") or []
+        return results[0] if results else None
+    except Exception as e:
+        print(f"[youtube_playlists] iTunes lookup failed for {term!r}: {e}",
+              file=sys.stderr)
+        return None
+
+
+def _wikipedia_summary(name: str) -> Optional[str]:
+    """First paragraph of the Wikipedia summary for `name`, or None on
+    any failure/disambiguation/no-match. Only used by "tell me about
+    this artist" for the bio blurb."""
+    try:
+        import requests
+        r = requests.get(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/"
+            + requests.utils.quote(name, safe=""),
+            headers={"User-Agent": "Chloe-personal-assistant/1.0"},
+            timeout=_LOOKUP_TIMEOUT_S,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        if data.get("type") == "disambiguation":
+            return None
+        return (data.get("extract") or "").strip() or None
+    except Exception as e:
+        print(f"[youtube_playlists] Wikipedia lookup failed for {name!r}: {e}",
+              file=sys.stderr)
+        return None
+
+
+def _handle_song_info() -> str:
+    np = youtube_player.get_now_playing()
+    if not np or not np.get("playing"):
+        return "Nothing's playing right now."
+    artist, song = _guess_artist_and_song(np)
+    term = f"{artist} {song}" if artist else song
+    hit = _itunes_lookup(term) if term else None
+    if not hit:
+        return _handle_song_id()
+    track = hit.get("trackName") or song
+    real_artist = hit.get("artistName") or artist
+    album = hit.get("collectionName")
+    release = hit.get("releaseDate") or ""
+    year = release[:4] if release else None
+    genre = hit.get("primaryGenreName")
+    parts = [f'"{track}" by {real_artist}' if real_artist else f'"{track}"']
+    if album:
+        parts.append(f'from the album "{album}"' + (f", {year}" if year else ""))
+    elif year:
+        parts.append(f"released {year}")
+    if genre:
+        parts.append(f"genre {genre}")
+    return ", ".join(parts) + "."
+
+
+def _handle_artist_info() -> str:
+    np = youtube_player.get_now_playing()
+    if not np or not np.get("playing"):
+        return "Nothing's playing right now."
+    artist, song = _guess_artist_and_song(np)
+    term = f"{artist} {song}" if artist else song
+    hit = _itunes_lookup(term) if term else None
+    real_artist = (hit.get("artistName") if hit else None) or artist
+    if not real_artist:
+        return ("I can't tell who the artist is from what YouTube gives me "
+                f"for this video (uploaded by {np.get('channel') or 'an unknown channel'}).")
+    bio = _wikipedia_summary(real_artist)
+    if bio:
+        return f"{real_artist}: {bio}"
+    genre = hit.get("primaryGenreName") if hit else None
+    if genre:
+        return f"This is by {real_artist} ({genre}) -- couldn't find a bio for them."
+    return f"This is by {real_artist} -- couldn't find any more info on them."
+
+
+# --------------------------------------------------------------------------- #
 # Search and play (read-only yt-dlp search, no API key/auth)                  #
 # --------------------------------------------------------------------------- #
 
@@ -793,6 +998,13 @@ def try_handle_youtube_command(text: str) -> Optional[str]:
         return _format_resume_result(youtube_player.resume())
     if _is_stop_command(raw):
         return _format_stop_result(youtube_player.stop())
+
+    if _is_song_id_command(raw):
+        return _handle_song_id()
+    if _is_artist_info_command(raw):
+        return _handle_artist_info()
+    if _is_song_info_command(raw):
+        return _handle_song_info()
 
     query = _parse_search_query(raw)
     if query is not None:
