@@ -78,6 +78,7 @@ start() -- idempotent, call once at jarvis.py boot.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from typing import Optional
@@ -98,6 +99,8 @@ _BLOCK_SIZE = round(_SAMPLE_RATE / _VIZ_FPS)
 
 _thread: Optional[threading.Thread] = None
 _thread_lock = threading.Lock()
+
+_DEBUG_ADSTATE = os.environ.get("CHLOE_YOUTUBE_DEBUG_ADSTATE", "").strip() == "1"
 
 
 def start() -> None:
@@ -213,6 +216,14 @@ def _poll_loop() -> None:
         # tick must never take the whole loop down again.
         try:
             np = _get_now_playing()
+
+            if _DEBUG_ADSTATE and np:
+                print(f"[youtube_hud] ADSTATE playing={np.get('playing')} "
+                      f"is_playing={np.get('is_playing')} "
+                      f"player_state={np.get('player_state')} "
+                      f"ad_showing={np.get('ad_showing')} "
+                      f"progress_s={np.get('progress_s')} "
+                      f"duration_s={np.get('duration_s')}", flush=True)
 
             if not np or not np.get("playing"):
                 _broadcast({"type": "youtube_now_playing", "playing": False})

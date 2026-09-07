@@ -958,13 +958,22 @@ def _dispatch(page, name: str, args: tuple) -> dict:
                 "      videoId = (vd && vd.video_id) ? vd.video_id : null;"
                 "    }"
                 "  } catch (e) {}"
+                "  let playerState = null;"
+                "  try {"
+                "    if (p && typeof p.getPlayerState === 'function') "
+                "playerState = p.getPlayerState();"
+                "  } catch (e) {}"
+                "  const adShowing = !!(p && p.classList && "
+                "p.classList.contains('ad-showing'));"
                 "  return {"
                 "    title: title,"
                 "    channel: chEl ? chEl.textContent.trim() : null,"
                 "    paused: v ? v.paused : null,"
                 "    current_time: v ? v.currentTime : null,"
                 "    duration: v ? v.duration : null,"
-                "    video_id: videoId"
+                "    video_id: videoId,"
+                "    player_state: playerState,"
+                "    ad_showing: adShowing"
                 "  };"
                 "}"
             )
@@ -989,6 +998,8 @@ def _dispatch(page, name: str, args: tuple) -> dict:
             "is_playing": (paused is False) if paused is not None else None,
             "progress_s": info.get("current_time"),
             "duration_s": info.get("duration"),
+            "player_state": info.get("player_state"),
+            "ad_showing": info.get("ad_showing"),
         }
 
     return {"ok": False, "error": f"unknown player command: {name!r}"}
