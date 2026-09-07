@@ -190,6 +190,22 @@ def _build_playing_broadcast(np: dict) -> dict:
     }
 
 
+def notify_voice_play_started() -> None:
+    """Call right after a voice command successfully starts playback
+    (a resolved playlist or a search-and-play) -- see
+    youtube_playlists.try_handle_youtube_command's call sites. Does an
+    immediate refresh_now() (same instant-sync the HUD's own play/
+    search buttons already get) plus a one-shot youtube_open_panel
+    broadcast so hud.html's MUSIC overlay actually opens instead of
+    playing silently in the background. Never raises."""
+    try:
+        refresh_now()
+    except Exception as e:
+        print(f"[youtube_hud] refresh_now() during voice-play notify "
+              f"failed: {e}", flush=True)
+    _broadcast({"type": "youtube_open_panel"})
+
+
 def refresh_now() -> None:
     """Immediately fetch and broadcast now-playing state instead of
     waiting for _poll_loop's next tick. Call this right after a control

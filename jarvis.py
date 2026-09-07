@@ -4231,6 +4231,52 @@ async def handle_youtube_control(data, websocket):
                                     "shuffle_note": result.get("shuffle_note")})
         return
 
+    if action == "add_playlist":
+        name = data.get("name")
+        url = data.get("url")
+        if not name or not url:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing name or url"})
+            return
+        try:
+            entry = await asyncio.to_thread(_youtube_playlists.add_playlist, name, url)
+        except Exception as e:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": str(e)})
+            return
+        await _ws_send(websocket, {"type": "youtube_control_result", "ok": True,
+                                    "action": action, "name": entry.get("name")})
+        return
+
+    if action == "rename_playlist":
+        old_name = data.get("old_name")
+        new_name = data.get("new_name")
+        if not old_name or not new_name:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing old_name or new_name"})
+            return
+        try:
+            entry = await asyncio.to_thread(_youtube_playlists.rename_playlist, old_name, new_name)
+        except Exception as e:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": str(e)})
+            return
+        await _ws_send(websocket, {"type": "youtube_control_result", "ok": True,
+                                    "action": action, "name": entry.get("name")})
+        return
+
+    if action == "delete_playlist":
+        name = data.get("name")
+        if not name:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing name"})
+            return
+        deleted = await asyncio.to_thread(_youtube_playlists.delete_playlist, name)
+        await _ws_send(websocket, {"type": "youtube_control_result",
+                                    "ok": deleted, "action": action,
+                                    "error": None if deleted else f"no playlist named {name!r}"})
+        return
+
     if action == "search_and_play":
         query = data.get("query")
         if not query:

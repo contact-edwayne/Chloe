@@ -133,6 +133,56 @@ def list_playlists() -> list[dict]:
     return _load_config().get("playlists", [])
 
 
+def rename_playlist(old_name: str, new_name: str) -> dict:
+    """Rename a configured playlist in place -- same dict object stays
+    in the config list, so any cached video_ids/video_ids_fetched_at
+    (see _store_video_ids) travel with it; no re-fetch needed just
+    because the name changed. Exact match only (never _resolve_playlist's
+    fuzzy lookup) -- this is a deliberate UI action against one specific
+    known entry, not a voice command guessing at free text. Raises
+    ValueError (never silently no-ops) if old_name doesn't resolve to an
+    existing playlist, new_name is empty, or new_name collides with a
+    DIFFERENT existing playlist. Returns the renamed entry."""
+    old_name = (old_name or "").strip().lower()
+    new_name = (new_name or "").strip().lower()
+    if not old_name:
+        raise ValueError("old playlist name required")
+    if not new_name:
+        raise ValueError("new playlist name required")
+    cfg = _load_config()
+    playlists = cfg.get("playlists", [])
+    target = None
+    for p in playlists:
+        if p.get("name") == old_name:
+            target = p
+            break
+    if target is None:
+        raise ValueError(f"no playlist named {old_name!r}")
+    if new_name != old_name and any(p.get("name") == new_name for p in playlists):
+        raise ValueError(f"a playlist named {new_name!r} already exists")
+    target["name"] = new_name
+    _save_config(cfg)
+    return target
+
+
+def delete_playlist(name: str) -> bool:
+    """Delete a configured playlist by exact name (see rename_playlist's
+    docstring for why exact-only, not fuzzy). Returns True if a playlist
+    was actually removed, False if nothing matched (never raises for a
+    not-found name -- the UI action is idempotent either way)."""
+    name = (name or "").strip().lower()
+    if not name:
+        return False
+    cfg = _load_config()
+    playlists = cfg.get("playlists", [])
+    kept = [p for p in playlists if p.get("name") != name]
+    if len(kept) == len(playlists):
+        return False
+    cfg["playlists"] = kept
+    _save_config(cfg)
+    return True
+
+
 def _resolve_playlist(name: str) -> Optional[dict]:
     """Resolve free-text against configured playlist names. Same
     resolution order as lights._resolve_targets: exact match first, then
@@ -171,6 +221,9 @@ def _resolve_playlist(name: str) -> Optional[dict]:
 # branches that would need to stay in sync.
 _PLAY_PREFIX_RE = re.compile(r"^(?:play|put\s+on)\s+(.+)$")
 _LEADING_FILLER_RE = re.compile(r"^(?:my|the)\s+")
+# "play playlist main" / "play playlist called main" -- the leading
+# counterpart to _TRAILING_PLAYLIST_RE below ("play main playlist").
+_LEADING_PLAYLIST_RE = re.compile(r"^playlist\s+(?:called\s+|named\s+)?")
 _TRAILING_PLAYLIST_RE = re.compile(r"\s+playlist$")
 _TRAILING_ON_YOUTUBE_RE = re.compile(r"\s+on\s+youtube$")
 _WAKE_PREFIX_RE = re.compile(r"^\s*(?:hey\s+)?chloe[,:]?\s*")
@@ -206,6 +259,7 @@ def parse_intent(text: str) -> Optional[tuple[str, bool]]:
         return None
     name = m.group(1).strip()
     name = _LEADING_FILLER_RE.sub("", name)
+    name = _LEADING_PLAYLIST_RE.sub("", name)
     name = _TRAILING_PLAYLIST_RE.sub("", name)
     name = _TRAILING_ON_YOUTUBE_RE.sub("", name)
     name = name.strip()
@@ -465,6 +519,12 @@ def _handle_search_and_play(query: str) -> str:
     result = search_and_play(query)
     if not result.get("ok"):
         return f"Couldn't find or play that: {result.get('error', 'unknown error')}."
+    try:
+        import youtube_hud
+        youtube_hud.notify_voice_play_started()
+    except Exception as e:
+        print(f"[youtube_playlists] couldn't notify the HUD to open "
+              f"(non-fatal): {e}", file=sys.stderr)
     return f"Playing {result['title']} by {result['uploader']}."
 
 
@@ -754,6 +814,13 @@ def try_handle_youtube_command(text: str) -> Optional[str]:
         # plays a single top result, so there's nothing to shuffle.
         return _handle_search_and_play(name)
     result = play_playlist(entry["name"], shuffle=shuffle)
+    if result.get("ok"):
+        try:
+            import youtube_hud
+            youtube_hud.notify_voice_play_started()
+        except Exception as e:
+            print(f"[youtube_playlists] couldn't notify the HUD to open "
+                  f"(non-fatal): {e}", file=sys.stderr)
     return _format_result(result)
 
 

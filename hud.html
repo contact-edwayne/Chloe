@@ -350,6 +350,21 @@
   .mp-pl-name { font-size: 14px; letter-spacing: 0.03em; color: #9fd8de; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mp-pl-meta { font-size: 11px; letter-spacing: 0.1em; color: #5e959e; white-space: nowrap; }
   .mp-pl-empty { padding: 26px 12px; text-align: center; font-size: 12px; letter-spacing: 0.16em; color: #35636d; }
+  .mp-pl-actions { display: flex; gap: 6px; opacity: 0.55; transition: opacity 0.15s ease; }
+  .mp-pl-row:hover .mp-pl-actions { opacity: 1; }
+  .mp-pl-icon-btn {
+    font-size: 13px; line-height: 1; padding: 2px 5px; color: #9fd8de; background: transparent;
+    border: 1px solid var(--border2); border-radius: 2px; cursor: pointer;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .mp-pl-icon-btn:hover { color: var(--cyan); border-color: var(--cyan); background: rgba(0, 247, 255, 0.07); }
+  .mp-pl-icon-btn.danger:hover { color: #ff6b6b; border-color: #ff6b6b; background: rgba(255, 107, 107, 0.08); }
+  .mp-pl-add-btn {
+    font-size: 13px; padding: 2px 9px; color: var(--cyan); background: transparent;
+    border: 1px solid var(--border2); border-radius: 2px; cursor: pointer; letter-spacing: 0.08em;
+    font-family: 'Share Tech Mono', monospace; margin-left: 6px;
+  }
+  .mp-pl-add-btn:hover { border-color: var(--cyan); background: rgba(0, 247, 255, 0.08); }
 
   /* SPECTRUM (right) */
   .mp-spectrum-box { display: flex; flex-direction: column; gap: 8px; flex: 1; }
@@ -1901,6 +1916,7 @@
           <div class="mp-search">
             <span>⌕</span>
             <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS OR ENTER TO PLAY…" oninput="renderMusicPlaylists()" onkeydown="if(event.key==='Enter'){musicSearchAndPlay(this.value); event.preventDefault();}">
+            <button class="mp-pl-add-btn" title="Add a playlist" onclick="promptAddMusicPlaylist()">+ ADD</button>
           </div>
           <div id="mp-playlist-list"></div>
         </div>
@@ -2805,6 +2821,8 @@
       onYoutubeControlResult(data);
     } else if (data.type === 'youtube_playlists') {
       onYoutubePlaylists(data);
+    } else if (data.type === 'youtube_open_panel') {
+      toggleMusic(true);
     } else if (data.type === 'jobs_state_update') {
       onJobsState(data);
     } else if (data.type === 'jobs_run_result') {
@@ -3896,8 +3914,49 @@
       const delay = Math.min(idx * 26, 380);
       return '<div class="mp-pl-row" data-idx="' + idx + '" style="animation-delay:' + delay + 'ms" onclick="playMusicPlaylist(' + idx + ')">' +
         '<span class="mp-pl-name">' + name + '</span>' +
-        '<span class="mp-pl-meta"></span></div>';
+        '<span class="mp-pl-actions">' +
+          '<button class="mp-pl-icon-btn" title="Rename" onclick="event.stopPropagation(); renameMusicPlaylist(' + idx + ')">\u270E</button>' +
+          '<button class="mp-pl-icon-btn danger" title="Delete" onclick="event.stopPropagation(); deleteMusicPlaylist(' + idx + ')">\u00D7</button>' +
+        '</span></div>';
     }).join('');
+  }
+
+  function promptAddMusicPlaylist() {
+    const name = (window.prompt('Playlist name:') || '').trim();
+    if (!name) return;
+    const url = (window.prompt('YouTube playlist URL for "' + name + '":') || '').trim();
+    if (!url) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'youtube_control', action: 'add_playlist', name, url }));
+    }
+    document.getElementById('mp-status').textContent = 'ADDING PLAYLIST…';
+  }
+
+  function renameMusicPlaylist(idx) {
+    const p = _mpPlaylists[idx];
+    if (!p || !p.name) return;
+    const newName = (window.prompt('Rename "' + p.name + '" to:', p.name) || '').trim();
+    if (!newName || newName.toLowerCase() === p.name.toLowerCase()) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'youtube_control', action: 'rename_playlist',
+        old_name: p.name, new_name: newName,
+      }));
+    }
+    if (_mpCurrentPlaylistName && _mpCurrentPlaylistName.toLowerCase() === p.name.toLowerCase()) {
+      _mpCurrentPlaylistName = newName;
+    }
+    document.getElementById('mp-status').textContent = 'RENAMING…';
+  }
+
+  function deleteMusicPlaylist(idx) {
+    const p = _mpPlaylists[idx];
+    if (!p || !p.name) return;
+    if (!window.confirm('Delete playlist "' + p.name + '"? This only removes it from Chloe -- the real YouTube playlist is untouched.')) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'youtube_control', action: 'delete_playlist', name: p.name }));
+    }
+    document.getElementById('mp-status').textContent = 'DELETING…';
   }
 
   function playMusicPlaylist(idx) {
@@ -3992,13 +4051,21 @@
       ws.send(JSON.stringify({ type: 'youtube_control', action: action }));
     }
   }
+  const _MP_PLAYLIST_MUTATIONS = ['add_playlist', 'rename_playlist', 'delete_playlist'];
+
   function onYoutubeControlResult(data) {
     if (!data.ok) {
       console.warn('[youtube] control action failed:', data.action, data.error);
-      if (data.action === 'play_playlist' || data.action === 'search_and_play' || data.action === 'seek' || data.action === 'set_volume') {
+      if (data.action === 'play_playlist' || data.action === 'search_and_play' || data.action === 'seek' || data.action === 'set_volume' ||
+          _MP_PLAYLIST_MUTATIONS.includes(data.action)) {
         _mpSetStatus('ERROR: ' + (data.error || 'failed'), 6000);
       }
       return;
+    }
+    if (_MP_PLAYLIST_MUTATIONS.includes(data.action)) {
+      requestMusicPlaylists();
+      const verb = data.action === 'add_playlist' ? 'ADDED' : data.action === 'rename_playlist' ? 'RENAMED' : 'DELETED';
+      _mpSetStatus(verb + ': ' + (data.name || ''), 3000);
     }
     if (data.action === 'play_playlist' && data.shuffle && data.shuffle_note) {
       // Honest fallback: shuffle was requested but couldn't be fully
