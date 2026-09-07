@@ -266,6 +266,9 @@ def _player_loop() -> None:
             fut.set_result(result)
 
 
+_DEBUG_NO_HIDE = os.environ.get("CHLOE_YOUTUBE_DEBUG_NO_HIDE", "").strip() == "1"
+
+
 def _hide_browser_window() -> None:
     """Best-effort, never raises: find the automation browser's actual
     OS window and minimize it via the real Win32 API. This exact
@@ -285,6 +288,12 @@ def _hide_browser_window() -> None:
     pywin32 missing, no matching process yet, the enumeration itself
     erroring) just leaves the window visible -- exactly the pre-fix
     behavior, never worse."""
+    if _DEBUG_NO_HIDE:
+        print("[youtube_player] CHLOE_YOUTUBE_DEBUG_NO_HIDE=1 -- leaving "
+              "the automation window visible (debug test for the ~60s "
+              "playback death)", flush=True)
+        return
+
     try:
         import psutil
         import win32con
