@@ -1650,7 +1650,7 @@
       <button class="brain-btn" id="brain-btn" onclick="toggleBrainGraph()" title="Open brain graph view">BRAIN</button>
       <button class="brain-btn" id="chess-btn" onclick="toggleChess()" title="Play chess against Chloe">CHESS</button>
       <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Pokémon (gen1recomp)">ARCADE</button>
-      <button class="brain-btn" id="music-btn" onclick="toggleMusic()" title="Spotify player">MUSIC</button>
+      <button class="brain-btn" id="music-btn" onclick="toggleMusic()" title="YouTube player">MUSIC</button>
       <span class="sys-tag">ONLINE</span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
         <span class="lbl">₿</span><span id="balance-value">—</span> sat
@@ -1659,12 +1659,17 @@
     </span>
   </div>
 
-  <!-- MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; toggleable overlay
-       matching BRAIN/CHESS/ARCADE, restyled to Ed's supplied design --
-       see the CSS comment above for what was and wasn't carried over
-       and why. See spotify_hud.py for the backend poll/broadcast side,
-       and handle_spotify_control in jarvis.py for what the transport
-       and playlist actions actually do. -->
+  <!-- MUSIC OVERLAY -- YouTube player (Ed, 2026-09-06, pivoted from
+       Spotify 2026-09-07 after Spotify's Web API turned out to require
+       the app owner's account to have Premium for essentially everything
+       -- see youtube_hud.py's docstring for the full story). Toggleable
+       overlay matching BRAIN/CHESS/ARCADE, restyled to Ed's supplied
+       design -- see the CSS comment above for what was and wasn't
+       carried over and why. See youtube_hud.py for the backend poll/
+       broadcast side, and handle_youtube_control in jarvis.py for what
+       the transport, search and playlist actions actually do. Spotify's
+       equivalent code (spotify_hud.py/handle_spotify_control) is left
+       in place, dormant. -->
   <div id="music-overlay">
     <button id="music-close" onclick="toggleMusic(false)">CLOSE [Esc]</button>
     <div class="mp-wrap">
@@ -1694,7 +1699,7 @@
           <div class="mp-track-block">
             <div class="mp-title" id="sp-track">Not connected</div>
             <div class="mp-artist" id="sp-artist"></div>
-            <div class="mp-album" id="sp-album">Spotify</div>
+            <div class="mp-album" id="sp-album">YouTube</div>
           </div>
         </div>
 
@@ -1703,7 +1708,7 @@
           <div class="mp-panel-head"><span id="mp-pl-count">PLAYLISTS // 00</span><span>CLICK TO PLAY</span></div>
           <div class="mp-search">
             <span>⌕</span>
-            <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS…" oninput="renderMusicPlaylists()">
+            <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS OR ENTER TO PLAY…" oninput="renderMusicPlaylists()" onkeydown="if(event.key==='Enter'){musicSearchAndPlay(this.value); event.preventDefault();}">
           </div>
           <div id="mp-playlist-list"></div>
         </div>
@@ -1721,10 +1726,10 @@
       <!-- TRANSPORT -->
       <div class="mp-transport">
         <div class="sp-controls">
-          <button class="sp-btn" id="sp-prev" title="Previous" onclick="spotifyControl('previous')">◄◄</button>
-          <button class="sp-btn sp-btn-play" id="sp-playpause" title="Play/Pause" onclick="spotifyControl('play_pause')">▶</button>
-          <button class="sp-btn" id="sp-next" title="Next" onclick="spotifyControl('next')">▶▶</button>
-          <button class="sp-btn" id="sp-shuffle" title="Shuffle" onclick="spotifyControl('shuffle')">SHUF</button>
+          <button class="sp-btn" id="sp-prev" title="Previous" onclick="youtubeControl('previous')">◄◄</button>
+          <button class="sp-btn sp-btn-play" id="sp-playpause" title="Play/Pause" onclick="youtubeControl('toggle_play_pause')">▶</button>
+          <button class="sp-btn" id="sp-next" title="Next" onclick="youtubeControl('next')">▶▶</button>
+          <button class="sp-btn" id="sp-shuffle" title="Shuffle next playlist launch" onclick="toggleMusicShuffleNext()">SHUF</button>
         </div>
         <span id="mp-elapsed">0:00</span>
         <div class="sp-progress"><div class="sp-progress-fill" id="sp-progress-fill"></div></div>
@@ -2584,14 +2589,14 @@
       setState('idle');
     } else if (data.type === 'wallet_balance_result') {
       onWalletBalanceResult(data);
-    } else if (data.type === 'spotify_now_playing') {
-      onSpotifyNowPlaying(data);
-    } else if (data.type === 'spotify_visualizer') {
-      onSpotifyVisualizer(data);
-    } else if (data.type === 'spotify_control_result') {
-      onSpotifyControlResult(data);
-    } else if (data.type === 'spotify_playlists') {
-      onSpotifyPlaylists(data);
+    } else if (data.type === 'youtube_now_playing') {
+      onYoutubeNowPlaying(data);
+    } else if (data.type === 'youtube_visualizer') {
+      onYoutubeVisualizer(data);
+    } else if (data.type === 'youtube_control_result') {
+      onYoutubeControlResult(data);
+    } else if (data.type === 'youtube_playlists') {
+      onYoutubePlaylists(data);
     } else if (data.type === 'jobs_state_update') {
       onJobsState(data);
     } else if (data.type === 'jobs_run_result') {
@@ -3416,12 +3421,13 @@
   });
 
   // ──────────────────────────────────────────────────────────────────────────
-  // SPOTIFY NOW-PLAYING WIDGET (Ed, 2026-09-06) — fully backend-pushed, no
-  // polling from this side: spotify_hud.py's poll loop broadcasts
-  // spotify_now_playing whenever the track/is_playing state actually
-  // changes, and spotify_visualizer frames (real WASAPI-loopback FFT bins,
-  // NOT Spotify-API-derived — see that module's docstring) only while
-  // something's actually playing.
+  // YOUTUBE NOW-PLAYING WIDGET (Ed, 2026-09-06, pivoted from Spotify
+  // 2026-09-07 — see youtube_hud.py's docstring for why) — fully
+  // backend-pushed, no polling from this side: youtube_hud.py's poll
+  // loop broadcasts youtube_now_playing whenever the video/is_playing
+  // state actually changes, and youtube_visualizer frames (real WASAPI-
+  // loopback FFT bins, same capture approach as the old Spotify path)
+  // only while something's actually playing.
   // ──────────────────────────────────────────────────────────────────────────
   let _spProgressTimer = null;
   function _mpFmtTime(ms) {
@@ -3431,7 +3437,7 @@
 
   const MP_RING_CIRCUMFERENCE = 502.7;  // 2*pi*80, matches the r=80 progress circle
 
-  function onSpotifyNowPlaying(data) {
+  function onYoutubeNowPlaying(data) {
     const track = document.getElementById('sp-track');
     const artistEl = document.getElementById('sp-artist');
     const album = document.getElementById('sp-album');
@@ -3449,7 +3455,7 @@
     if (!data.playing) {
       track.textContent = 'Nothing playing';
       artistEl.textContent = '';
-      album.textContent = 'Spotify';
+      album.textContent = 'YouTube';
       art.style.visibility = 'hidden';
       placeholder.style.display = 'flex';
       artFrame.classList.remove('mp-playing');
@@ -3466,9 +3472,9 @@
     }
 
     conn.textContent = 'CONNECTED';
-    track.textContent = data.track || '—';
-    artistEl.textContent = (data.artists || []).join(', ');
-    album.textContent = data.album || '';
+    track.textContent = data.title || '—';
+    artistEl.textContent = data.channel || '';
+    album.textContent = 'YouTube';
     if (data.album_art_url) {
       art.src = data.album_art_url;
       art.style.visibility = 'visible';
@@ -3485,7 +3491,7 @@
 
     // Smooth-fill the progress bar/ring client-side between the
     // (infrequent, ~3s) backend polls rather than only jumping on each
-    // poll tick -- spotify_hud.py sends progress_ms/duration_ms as of
+    // poll tick -- youtube_hud.py sends progress_ms/duration_ms as of
     // the LAST poll, so this is an estimate that re-syncs on every new
     // broadcast, same idea as any media player's client-side progress
     // interpolation.
@@ -3510,18 +3516,23 @@
     }
   }
 
-  // ─── Playlists panel (real data: spotify_api.list_playlists() via
-  // handle_spotify_control's "list_playlists" action; click-to-play
-  // goes through spotify_player.play_uri() via "play_playlist"). ───
+  // ─── Playlists panel (real data: youtube_playlists.list_playlists()
+  // via handle_youtube_control's "list_playlists" action; click-to-play
+  // goes through youtube_playlists.play_playlist() via "play_playlist").
+  // Rows are keyed by array index (data-idx), not by name baked into the
+  // onclick string -- a playlist name with quotes/apostrophes in it can't
+  // break the generated HTML this way, unlike escaping it into a string
+  // literal would risk. ───
   let _mpPlaylists = [];
+  let _mpShuffleNext = false;
 
   function requestMusicPlaylists() {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'spotify_control', action: 'list_playlists' }));
+      ws.send(JSON.stringify({ type: 'youtube_control', action: 'list_playlists' }));
     }
   }
 
-  function onSpotifyPlaylists(data) {
+  function onYoutubePlaylists(data) {
     _mpPlaylists = (data.ok && Array.isArray(data.playlists)) ? data.playlists : [];
     renderMusicPlaylists();
   }
@@ -3539,25 +3550,43 @@
       return;
     }
     list.innerHTML = rows.map(p => {
+      const idx = _mpPlaylists.indexOf(p);
       const name = (p.name || 'Untitled').replace(/[&<>"']/g, c => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[c]));
-      const meta = (p.tracks_total != null ? p.tracks_total + ' TRK' : '');
-      const uri = (p.uri || '').replace(/"/g, '&quot;');
-      return '<div class="mp-pl-row" onclick="playMusicPlaylist(\'' + uri + '\')">' +
+      return '<div class="mp-pl-row" data-idx="' + idx + '" onclick="playMusicPlaylist(' + idx + ')">' +
         '<span class="mp-pl-name">' + name + '</span>' +
-        '<span class="mp-pl-meta">' + meta + '</span></div>';
+        '<span class="mp-pl-meta"></span></div>';
     }).join('');
   }
 
-  function playMusicPlaylist(uri) {
-    if (!uri) return;
+  function playMusicPlaylist(idx) {
+    const p = _mpPlaylists[idx];
+    if (!p || !p.name) return;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'spotify_control', action: 'play_playlist', uri: uri }));
+      ws.send(JSON.stringify({
+        type: 'youtube_control', action: 'play_playlist',
+        name: p.name, shuffle: _mpShuffleNext,
+      }));
     }
+    document.getElementById('mp-status').textContent = 'LOADING…';
   }
 
-  function onSpotifyVisualizer(data) {
+  function toggleMusicShuffleNext() {
+    _mpShuffleNext = !_mpShuffleNext;
+    document.getElementById('sp-shuffle').classList.toggle('active', _mpShuffleNext);
+  }
+
+  function musicSearchAndPlay(query) {
+    query = (query || '').trim();
+    if (!query) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'youtube_control', action: 'search_and_play', query: query }));
+    }
+    document.getElementById('mp-status').textContent = 'SEARCHING…';
+  }
+
+  function onYoutubeVisualizer(data) {
     const canvas = document.getElementById('sp-viz');
     if (!canvas || !Array.isArray(data.bins)) return;
     const ctx = canvas.getContext('2d');
@@ -3577,7 +3606,7 @@
     }
     // Bass-reactive album disc (Ed's "standalone" mockup export did this
     // off a local Web Audio AnalyserNode; ours uses the real bass energy
-    // already present in these bins -- spotify_hud.py's log-spaced FFT
+    // already present in these bins -- youtube_hud.py's log-spaced FFT
     // puts the lowest frequencies in the first couple of bins -- so the
     // disc genuinely pulses with whatever's audible, not a canned loop).
     const artFrame = document.getElementById('mp-art-frame');
@@ -3593,27 +3622,22 @@
 
   // Transport buttons -- direct WS control, bypasses voice/chat entirely
   // (same "PWA/HUD call the backend directly" shape as the wallet/lights
-  // buttons elsewhere in this file). handle_spotify_control in jarvis.py
-  // dispatches to spotify_player.py's OS-level media-key/URI/shuffle
-  // functions -- see that module's docstring for why free-tier Spotify
-  // needs OS-level control instead of the Web API's player endpoints.
-  function spotifyControl(action) {
-    if (action === 'shuffle') {
-      document.getElementById('sp-shuffle').classList.toggle('active');
-    }
+  // buttons elsewhere in this file). handle_youtube_control in jarvis.py
+  // dispatches to youtube_player.py's real DOM-level previous/next/
+  // toggle_play_pause functions -- unlike the old Spotify path, these
+  // aren't OS-level media-key simulation, they're genuine control of the
+  // Playwright-owned tab. Shuffle isn't a transport action here: it's a
+  // local "apply on next playlist launch" flag (toggleMusicShuffleNext,
+  // in the playlists section above), since YouTube has no live-shuffle-
+  // toggle equivalent to send.
+  function youtubeControl(action) {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'spotify_control', action: action }));
+      ws.send(JSON.stringify({ type: 'youtube_control', action: action }));
     }
   }
-  function onSpotifyControlResult(data) {
+  function onYoutubeControlResult(data) {
     if (!data.ok) {
-      console.warn('[spotify] control action failed:', data.action, data.error);
-      // Shuffle's active-state toggle above is optimistic (no reliable
-      // way to read Spotify's real shuffle state back) -- revert it on a
-      // reported failure so the button doesn't lie about what happened.
-      if (data.action === 'shuffle') {
-        document.getElementById('sp-shuffle').classList.toggle('active');
-      }
+      console.warn('[youtube] control action failed:', data.action, data.error);
     }
   }
 
@@ -4975,10 +4999,10 @@ window.setState('idle');
     });
   </script>
 
-  <!-- Music (Spotify player) overlay toggle -- mirrors toggleChess/
+  <!-- Music (YouTube player) overlay toggle -- mirrors toggleChess/
        toggleEmulator exactly, minus the iframe src-swap since there's no
        separate page to load; the panel's content is inline HTML fed by
-       spotify_hud.py's broadcasts (onSpotifyNowPlaying/onSpotifyVisualizer),
+       youtube_hud.py's broadcasts (onYoutubeNowPlaying/onYoutubeVisualizer),
        unaffected by opening/closing this overlay. -->
   <script>
     function toggleMusic(force) {
