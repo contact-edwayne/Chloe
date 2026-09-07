@@ -21,6 +21,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage, QWebEngineProfile
 
 # ─── PATH RESOLUTION ─────────────────────────────────────────────────────────
@@ -167,8 +168,19 @@ class Page(QWebEnginePage):
 app = QApplication(sys.argv)
 app.setApplicationName("CHLOE")
 
+# Without this, Windows shows the generic Python interpreter icon for this
+# window's taskbar button/Alt-Tab entry instead of Chloe's actual icon --
+# app.setApplicationName() alone doesn't cover that, a real window/app icon
+# is needed. chloe_icon.ico lives next to this script (bundled_dir covers
+# both dev and frozen/PyInstaller runs).
+_icon_path = bundled_dir / "chloe_icon.ico"
+if _icon_path.exists():
+    app.setWindowIcon(QIcon(str(_icon_path)))
+
 window = QMainWindow()
 window.setWindowTitle("CHLOE")
+if _icon_path.exists():
+    window.setWindowIcon(QIcon(str(_icon_path)))
 # Default size matches the HUD design canvas (1100x760) plus a small
 # allowance for window chrome. Below this size the .jr frame goes fluid
 # and the chat panel auto-fits, so a smaller window is still usable.
