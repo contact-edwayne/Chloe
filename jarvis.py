@@ -32,6 +32,23 @@ import os
 import queue
 import re as _re
 import sys
+
+# Windows: stdout/stderr default to the system ANSI codepage (cp1252) even
+# when redirected to a file, not UTF-8 -- any print() with a unicode
+# character outside that codepage (arrows, smart quotes, emoji, ...)
+# raises UnicodeEncodeError from inside the print call itself. Normally
+# just lost log noise, but see the 2026-09-07 story below for a case
+# where that crash silently discarded a successful TTS synthesis.
+# Reconfigure early (before any of the imports below can print anything
+# during their own module load) so a stray non-ASCII character degrades
+# to a replacement glyph instead of raising.
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import tempfile
 import threading
 import time
