@@ -548,7 +548,15 @@ def _launch_page(pw):
                  # 2026-09-07 #2) -- Chromium skips the user-gesture
                  # requirement for autoplay entirely instead of us
                  # having to satisfy it with a real click every time.
-                 "--autoplay-policy=no-user-gesture-required"],
+                 "--autoplay-policy=no-user-gesture-required",
+                 # The three flags above only cover CPU/JS-timer
+                 # throttling for backgrounded pages -- separate from
+                 # Chromium's media-suspension path, which targets
+                 # audio/video elements directly. Dies-at-exactly-60s
+                 # happened even with hiding fully disabled (2026-09-07
+                 # round 7), which points at media suspension rather
+                 # than generic backgrounding/timers.
+                 "--disable-background-media-suspend"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
