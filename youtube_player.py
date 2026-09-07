@@ -722,6 +722,11 @@ def _dispatch(page, name: str, args: tuple) -> dict:
     if name == "play_url":
         (url,) = args
         page.goto(url, timeout=30000)
+        # See this function's fix note above _dispatch (2026-09-07
+        # round 5): re-minimize after every navigation, not just once
+        # at initial launch -- a goto() can bring the window forward on
+        # its own regardless of autoplay/click behavior.
+        _hide_browser_window()
         print(f"[youtube_player] playing {url}", flush=True)
         # Chromium blocks unmuted autoplay until this profile/domain has
         # real engagement history -- autoplay=1 in the URL isn't enough
