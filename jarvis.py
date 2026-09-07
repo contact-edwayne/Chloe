@@ -49,6 +49,8 @@ import lights as _lights
 from lights import try_handle_lights_command
 import youtube_playlists as _youtube_playlists
 from youtube_playlists import try_handle_youtube_command
+import youtube_player
+import youtube_hud
 from spotify_commands import try_handle_spotify_command
 import spotify_api
 import spotify_player
@@ -4112,6 +4114,7 @@ async def _dispatch(data, websocket):
     elif t == "ptt_stop":  await handle_ptt_stop(data, websocket)
     elif t == "ptt_audio": await handle_ptt_audio(data, websocket)
     elif t == "spotify_control":         await handle_spotify_control(data, websocket)
+    elif t == "youtube_control":         await handle_youtube_control(data, websocket)
     elif t == "wallet_balance":         await handle_wallet_balance(data, websocket)
     elif t == "wallet_create_invoice":  await handle_wallet_create_invoice(data, websocket)
     elif t == "wallet_send":            await handle_wallet_send(data, websocket)
@@ -4196,6 +4199,59 @@ async def handle_spotify_control(data, websocket):
         return
     result = await asyncio.to_thread(fn)
     await _ws_send(websocket, {"type": "spotify_control_result", "ok": result.get("ok", False),
+                                "action": action, "error": result.get("error")})
+
+
+async def handle_youtube_control(data, websocket):
+    action = data.get("action")
+
+    if action == "list_playlists":
+        try:
+            playlists = await asyncio.to_thread(_youtube_playlists.list_playlists)
+        except Exception as e:
+            await _ws_send(websocket, {"type": "youtube_playlists", "ok": False, "error": str(e)})
+            return
+        await _ws_send(websocket, {"type": "youtube_playlists", "ok": True, "playlists": playlists})
+        return
+
+    if action == "play_playlist":
+        name = data.get("name")
+        shuffle = bool(data.get("shuffle", False))
+        if not name:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing name"})
+            return
+        result = await asyncio.to_thread(_youtube_playlists.play_playlist, name, shuffle)
+        await _ws_send(websocket, {"type": "youtube_control_result",
+                                    "ok": result.get("ok", False), "action": action,
+                                    "error": result.get("error"), "name": result.get("name")})
+        return
+
+    if action == "search_and_play":
+        query = data.get("query")
+        if not query:
+            await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                        "action": action, "error": "missing query"})
+            return
+        result = await asyncio.to_thread(_youtube_playlists.search_and_play, query)
+        await _ws_send(websocket, {"type": "youtube_control_result",
+                                    "ok": result.get("ok", False), "action": action,
+                                    "error": result.get("error"),
+                                    "title": result.get("title"),
+                                    "uploader": result.get("uploader")})
+        return
+
+    fn = {
+        "previous": youtube_player.previous_track,
+        "next": youtube_player.next_track,
+        "toggle_play_pause": youtube_player.toggle_play_pause,
+    }.get(action)
+    if fn is None:
+        await _ws_send(websocket, {"type": "youtube_control_result", "ok": False,
+                                    "action": action, "error": f"unknown action: {action!r}"})
+        return
+    result = await asyncio.to_thread(fn)
+    await _ws_send(websocket, {"type": "youtube_control_result", "ok": result.get("ok", False),
                                 "action": action, "error": result.get("error")})
 
 
@@ -10668,14 +10724,25 @@ threading.Thread(target=_warm_wallet, daemon=True,
 threading.Thread(target=_warm_kokoro_model, daemon=True,
                  name="kokoro-warm").start()
 
-# Spotify now-playing/visualizer HUD feed (Ed, 2026-09-06) -- lazy-started
-# background poll loop, see spotify_hud.py's own docstring. Never blocks
-# startup and never raises: every failure mode inside it (not connected,
-# no WASAPI device, sounddevice missing) is caught and logged there.
+# Spotify now-playing/visualizer HUD feed (Ed, 2026-09-06) -- NOT started
+# as of 2026-09-07: Ed pivoted the MUSIC panel to YouTube after Spotify's
+# Web API turned out to require the app owner's account to have Premium
+# for essentially everything (search, playlists, /me -- not just playback
+# control), confirmed via live 403s on his free account. spotify_hud.py/
+# spotify_api.py/spotify_player.py/spotify_commands.py are left in place,
+# dormant -- harmless, reversible, still correct if Ed ever gets Premium
+# -- just not actively polling/broadcasting, since that would compete
+# with youtube_hud.py below for the same MUSIC panel DOM elements.
+#
+# YouTube now-playing/visualizer HUD feed -- same lazy-started background
+# poll loop shape, see youtube_hud.py's own docstring. Never blocks
+# startup and never raises: every failure mode inside it (player thread
+# not up yet, no WASAPI device, sounddevice missing) is caught and
+# logged there.
 try:
-    spotify_hud.start()
+    youtube_hud.start()
 except Exception as e:
-    print(f"[chloe] spotify_hud failed to start: {e}", flush=True)
+    print(f"[chloe] youtube_hud failed to start: {e}", flush=True)
 
 # /summarize_old auto-cadence (pillar 4 follow-up). Opt-in via
 # CHLOE_SUMMARIZE_AUTO=1. No-op when disabled — keeps the manual slash

@@ -429,6 +429,58 @@ def _dispatch(page, name: str, args: tuple) -> dict:
         m = _VIDEO_ID_RE.search(url)
         return {"ok": True, "video_id": m.group(1) if m else None, "url": url}
 
+    if name == "toggle_play_pause":
+        # Atomic on the owner thread: read real .paused state and press
+        # the toggle key in one dispatch, instead of two separate
+        # _enqueue round-trips (which would race against Ed clicking the
+        # tab himself between them).
+        paused = _get_paused_state(page)
+        _focus_player(page)  # best-effort; see _focus_player docstring
+        page.keyboard.press("k")
+        print(f"[youtube_player] toggled play/pause (was_paused={paused})",
+              flush=True)
+        return {"ok": True, "was_paused": paused}
+
+    if name == "get_now_playing":
+        url = page.url
+        m = _VIDEO_ID_RE.search(url)
+        video_id = m.group(1) if m else None
+        if video_id is None:
+            return {"ok": True, "playing": False}
+        try:
+            info = page.evaluate(
+                "() => {"
+                "  const v = document.querySelector('.html5-main-video') "
+                "|| document.querySelector('video');"
+                "  const chEl = document.querySelector("
+                "'ytd-video-owner-renderer #channel-name a, "
+                "ytd-channel-name #text');"
+                "  let title = document.title || '';"
+                "  if (title.endsWith(' - YouTube')) "
+                "title = title.slice(0, -10);"
+                "  return {"
+                "    title: title,"
+                "    channel: chEl ? chEl.textContent.trim() : null,"
+                "    paused: v ? v.paused : null,"
+                "    current_time: v ? v.currentTime : null,"
+                "    duration: v ? v.duration : null"
+                "  };"
+                "}"
+            )
+        except Exception as e:
+            print(f"[youtube_player] get_now_playing DOM read failed: {e}",
+                  flush=True)
+            info = {}
+        paused = info.get("paused")
+        return {
+            "ok": True, "playing": True, "video_id": video_id, "url": url,
+            "title": info.get("title") or None,
+            "channel": info.get("channel"),
+            "is_playing": (paused is False) if paused is not None else None,
+            "progress_s": info.get("current_time"),
+            "duration_s": info.get("duration"),
+        }
+
     return {"ok": False, "error": f"unknown player command: {name!r}"}
 
 
@@ -473,3 +525,32 @@ def get_current_video_id() -> Optional[str]:
     player thread isn't up."""
     result = _enqueue("get_current_video_id", ())
     return result.get("video_id") if result.get("ok") else None
+
+
+def toggle_play_pause() -> dict:
+    """Single toggle for a HUD play/pause button -- reads the real
+    .paused state and presses YouTube's own "k" shortcut in one atomic
+    dispatch (see _dispatch's "toggle_play_pause" case)."""
+    return _enqueue("toggle_play_pause", ())
+
+
+def get_now_playing() -> Optional[dict]:
+    """Live now-playing info read straight from the persistent page's
+    own DOM -- title via document.title (stable across YouTube
+    redesigns, same reasoning this module already applies to playback
+    control), channel via a best-effort selector (soft-fails to None,
+    never breaks the rest of the payload), and is_playing/progress/
+    duration from the real <video> element, the same source
+    _get_paused_state already reads for pause()/resume(). No network
+    call, no yt-dlp -- genuinely live state of whatever's already on
+    screen, not a cached guess.
+
+    Returns {"playing": False} (not None) when nothing's loaded --
+    about:blank, the YouTube homepage, a URL with no video id -- so
+    youtube_hud.py's poll loop can tell "connected but idle" apart from
+    "player thread isn't even up", which returns None instead (the
+    enqueue itself failed)."""
+    result = _enqueue("get_now_playing", ())
+    if not result.get("ok"):
+        return None
+    return {k: v for k, v in result.items() if k != "ok"}

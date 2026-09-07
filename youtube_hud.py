@@ -1,0 +1,253 @@
+"""
+youtube_hud.py -- Feeds the HUD's "now playing" MUSIC panel from Chloe's
+existing YouTube player (youtube_player.py's persistent, Playwright-
+controlled Brave tab), plus a real-time audio visualizer via a Windows
+WASAPI LOOPBACK capture of actual system audio output.
+
+Why this exists (2026-09-07): the MUSIC overlay was originally built
+around Spotify (see spotify_hud.py), but Spotify's Web API turned out to
+require the APP OWNER'S account to have an active Premium subscription
+for essentially everything -- not just playback control, but /me,
+/search, and /me/playlists too (a platform-wide policy change from
+~Feb-Mar 2026, confirmed live via 403 "Active premium subscription
+required for the owner of the app" on all three, 2026-09-06/07). That's
+a hard, unfixable-in-code restriction on Ed's free account. Ed asked to
+pivot the MUSIC panel to YouTube instead -- which Chloe already has a
+mature, working integration for (youtube_player.py/youtube_playlists.py,
+built 2026-09-01, well before Spotify): a REAL persistent browser tab
+Chloe actually controls, no DRM, no premium gate, real search-and-play
+via yt-dlp, real playlist launch. spotify_hud.py/spotify_api.py/
+spotify_player.py/spotify_commands.py are left in place, dormant --
+harmless, reversible, and still correct code if Ed ever gets Premium --
+but this module is what actually drives the MUSIC panel now.
+
+Now-playing data source: youtube_player.get_now_playing() reads title/
+channel/is_playing/progress straight from the persistent page's own DOM
+(document.title + the real <video> element's .paused/.currentTime/
+.duration) -- no network call, no yt-dlp, genuinely live state of
+whatever's already loaded in that tab. Album art needs no lookup at all
+(unlike Spotify's SMTC path, which has no art URL and had a documented
+no-op stub): YouTube's thumbnail CDN serves a public, unauthenticated
+image for any video id at a stable, well-known URL pattern
+(https://i.ytimg.com/vi/<id>/hqdefault.jpg), so album_art_url is just
+built directly from the video id, no search/cache needed.
+
+Visualizer: same WASAPI-loopback + live FFT approach as spotify_hud.py,
+duplicated here rather than imported from it -- deliberately, so this
+new module can't regress the already-verified-working Spotify capture
+path, and vice versa. It captures whatever's actually audible system-
+wide, exactly as before: reacts to the YouTube tab's audio specifically
+only in the sense that that's what's actually playing when Ed uses this
+panel, same honest trade-off spotify_hud.py's own docstring already
+documents.
+
+One background thread, started lazily via start() (same lazy-thread
+pattern as spotify_hud.py/youtube_player.py's owner thread -- importing
+this module must never start capturing audio or touching the browser as
+a side effect). Two nested loops:
+  - Outer: poll get_now_playing() every _POLL_INTERVAL_S seconds.
+    Broadcasts a "youtube_now_playing" HUD message only when the
+    video/is_playing state actually CHANGES.
+  - Inner (only while is_playing is True): open a WASAPI loopback
+    stream and broadcast "youtube_visualizer" frames (normalized FFT
+    magnitude bins) at roughly _VIZ_FPS per second. Torn down the
+    instant is_playing goes False or the poll loop's next tick reports
+    something changed.
+
+Defensive by construction throughout (this bridge session cannot
+live-test any of this against Ed's real Brave/WASAPI availability):
+every failure mode -- sounddevice missing, no WASAPI host API, no
+default output device, a mid-stream capture error, the player thread
+not being up yet -- is caught, logged once, and degrades to "now-
+playing text still updates (or shows nothing), visualizer silently
+stays off" rather than crashing jarvis.py's boot thread.
+
+Public API
+----------
+start() -- idempotent, call once at jarvis.py boot.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from typing import Optional
+
+import youtube_player
+import hud_server
+
+_POLL_INTERVAL_S = 3.0
+_VIZ_FPS = 20
+_VIZ_BINS = 24
+_SAMPLE_RATE = 44100
+_BLOCK_SIZE = 1024
+
+_thread: Optional[threading.Thread] = None
+_thread_lock = threading.Lock()
+_last_broadcast_state: Optional[tuple] = None
+
+
+def start() -> None:
+    """Idempotent -- safe to call more than once (e.g. a HUD reconnect
+    path that also wants to make sure the poll loop is alive)."""
+    global _thread
+    with _thread_lock:
+        if _thread is not None and _thread.is_alive():
+            return
+        _thread = threading.Thread(target=_poll_loop, name="youtube-hud", daemon=True)
+        _thread.start()
+
+
+def _broadcast(msg: dict) -> None:
+    try:
+        hud_server.broadcast_sync(json.dumps(msg))
+    except Exception as e:
+        print(f"[youtube_hud] broadcast failed: {e}", flush=True)
+
+
+def _get_now_playing() -> Optional[dict]:
+    """Never raises -- see module docstring."""
+    try:
+        return youtube_player.get_now_playing()
+    except Exception as e:
+        print(f"[youtube_hud] get_now_playing() errored: {e}", flush=True)
+        return None
+
+
+def _poll_loop() -> None:
+    global _last_broadcast_state
+    print("[youtube_hud] now-playing poll loop started", flush=True)
+    while True:
+        np = _get_now_playing()
+
+        state = None
+        if np and np.get("playing"):
+            state = (np.get("video_id"), np.get("is_playing"))
+        if state != _last_broadcast_state:
+            _last_broadcast_state = state
+            if not np or not np.get("playing"):
+                _broadcast({"type": "youtube_now_playing", "playing": False})
+            else:
+                video_id = np.get("video_id")
+                progress_s = np.get("progress_s")
+                duration_s = np.get("duration_s")
+                _broadcast({
+                    "type": "youtube_now_playing", "playing": True,
+                    "title": np.get("title"), "channel": np.get("channel"),
+                    "album_art_url": (
+                        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                        if video_id else None
+                    ),
+                    "is_playing": np.get("is_playing"),
+                    "progress_ms": (
+                        round(progress_s * 1000) if progress_s is not None else None
+                    ),
+                    "duration_ms": (
+                        round(duration_s * 1000) if duration_s is not None else None
+                    ),
+                })
+
+        if np and np.get("is_playing"):
+            _run_visualizer_until_stopped()
+        else:
+            time.sleep(_POLL_INTERVAL_S)
+
+
+def _run_visualizer_until_stopped() -> None:
+    """Runs the WASAPI-loopback-capture + FFT + broadcast loop until
+    playback stops or a capture error occurs. Re-checks
+    _get_now_playing() every _POLL_INTERVAL_S (not every frame) so it
+    still notices a pause/tab-navigation within one poll interval. See
+    spotify_hud.py's identical-shape function for the same reasoning --
+    duplicated here on purpose, not shared, per this module's docstring."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except ImportError as e:
+        print(f"[youtube_hud] numpy/sounddevice not available -- "
+              f"visualizer disabled, now-playing text still works: {e}",
+              flush=True)
+        time.sleep(_POLL_INTERVAL_S)
+        return
+
+    device_index = _find_wasapi_loopback_device(sd)
+    if device_index is None:
+        print("[youtube_hud] no WASAPI loopback output device found -- "
+              "visualizer disabled, now-playing text still works",
+              flush=True)
+        time.sleep(_POLL_INTERVAL_S)
+        return
+
+    last_playback_check = time.time()
+    frame_interval = 1.0 / _VIZ_FPS
+
+    try:
+        extra = sd.WasapiSettings(loopback=True)
+        with sd.InputStream(device=device_index, channels=2,
+                             samplerate=_SAMPLE_RATE, blocksize=_BLOCK_SIZE,
+                             dtype="float32", extra_settings=extra) as stream:
+            print(f"[youtube_hud] visualizer capture started on device "
+                  f"{device_index}", flush=True)
+            while True:
+                now = time.time()
+                if now - last_playback_check > _POLL_INTERVAL_S:
+                    last_playback_check = now
+                    np_state = _get_now_playing()
+                    if not np_state or not np_state.get("is_playing"):
+                        print("[youtube_hud] playback stopped -- ending "
+                              "visualizer capture", flush=True)
+                        return
+                try:
+                    block, _overflow = stream.read(_BLOCK_SIZE)
+                except Exception as e:
+                    print(f"[youtube_hud] audio read error, ending "
+                          f"visualizer capture: {e}", flush=True)
+                    return
+                bins = _fft_bins(block, np)
+                _broadcast({"type": "youtube_visualizer", "bins": bins})
+                time.sleep(max(0.0, frame_interval - (time.time() - now)))
+    except Exception as e:
+        print(f"[youtube_hud] visualizer stream failed to open, "
+              f"disabling for this video: {e}", flush=True)
+        time.sleep(_POLL_INTERVAL_S)
+
+
+def _find_wasapi_loopback_device(sd) -> Optional[int]:
+    try:
+        hostapis = sd.query_hostapis()
+        wasapi_idx = next((i for i, h in enumerate(hostapis)
+                            if "wasapi" in h["name"].lower()), None)
+        if wasapi_idx is None:
+            return None
+        default_output = hostapis[wasapi_idx].get("default_output_device")
+        if default_output is None or default_output < 0:
+            return None
+        return default_output
+    except Exception as e:
+        print(f"[youtube_hud] WASAPI device lookup failed: {e}", flush=True)
+        return None
+
+
+def _fft_bins(block, np) -> list:
+    """Collapse one audio block into _VIZ_BINS normalized (0..1) log-
+    spaced magnitude bins. Identical logic to spotify_hud.py's function
+    of the same name -- see that module for the reasoning; duplicated
+    here per this module's own docstring."""
+    if block.ndim > 1:
+        mono = block.mean(axis=1)
+    else:
+        mono = block
+    windowed = mono * np.hanning(len(mono))
+    spectrum = np.abs(np.fft.rfft(windowed))
+    if spectrum.max() > 0:
+        spectrum = spectrum / spectrum.max()
+    n = len(spectrum)
+    edges = np.unique(np.geomspace(1, n, _VIZ_BINS + 1).astype(int))
+    bins = []
+    for i in range(len(edges) - 1):
+        chunk = spectrum[edges[i]:edges[i + 1]]
+        bins.append(float(chunk.max()) if len(chunk) else 0.0)
+    while len(bins) < _VIZ_BINS:
+        bins.append(0.0)
+    return [round(b, 3) for b in bins[:_VIZ_BINS]]
