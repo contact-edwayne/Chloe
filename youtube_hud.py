@@ -139,6 +139,32 @@ def _get_now_playing() -> Optional[dict]:
         return None
 
 
+def _safe_ms(seconds) -> Optional[int]:
+    """seconds -> milliseconds, or None if seconds is missing/NaN/inf.
+    CONFIRMED live crash (Ed's log, 2026-09-07): the raw <video>
+    element's .duration (and, in principle, .currentTime) is NaN
+    whenever the element has no loaded media metadata -- e.g. exactly
+    the moment a playlist auto-advances and the old video has been
+    torn down but the new one hasn't loaded metadata yet. That NaN
+    survives the JS bridge as a real float('nan') (not None), so
+    round(nan) used to throw ValueError here and permanently kill the
+    poll thread (see _poll_loop). Logged once per occurrence so a
+    persistent NaN (vs. a one-tick blip) is still visible."""
+    if seconds is None:
+        return None
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        print(f"[youtube_hud] non-finite duration/progress reading "
+              f"({seconds!r}) from the player -- likely mid-transition "
+              f"between tracks, treating as unknown for this tick",
+              flush=True)
+        return None
+    return round(seconds * 1000)
+
+
 def _build_playing_broadcast(np: dict) -> dict:
     """Build the youtube_now_playing broadcast dict for a currently-
     playing track. Shared by _poll_loop (on state change) and
@@ -147,8 +173,6 @@ def _build_playing_broadcast(np: dict) -> dict:
     only once at state change) -- see module docstring, 2026-09-07 fix
     for progress/visuals drifting out of sync over a long track."""
     video_id = np.get("video_id")
-    progress_s = np.get("progress_s")
-    duration_s = np.get("duration_s")
     return {
         "type": "youtube_now_playing", "playing": True,
         "video_id": video_id,
@@ -158,12 +182,8 @@ def _build_playing_broadcast(np: dict) -> dict:
             if video_id else None
         ),
         "is_playing": np.get("is_playing"),
-        "progress_ms": (
-            round(progress_s * 1000) if progress_s is not None else None
-        ),
-        "duration_ms": (
-            round(duration_s * 1000) if duration_s is not None else None
-        ),
+        "progress_ms": _safe_ms(np.get("progress_s")),
+        "duration_ms": _safe_ms(np.get("duration_s")),
     }
 
 
@@ -185,12 +205,22 @@ def refresh_now() -> None:
 def _poll_loop() -> None:
     print("[youtube_hud] now-playing poll loop started", flush=True)
     while True:
-        np = _get_now_playing()
+        # Defense in depth, added after a live crash (2026-09-07, see
+        # _safe_ms): nothing supervises/restarts this thread, so ANY
+        # unhandled exception here used to mean "now-playing updates
+        # stop forever for the rest of the process's life" -- silent
+        # and easy to mistake for a real playback failure. One bad
+        # tick must never take the whole loop down again.
+        try:
+            np = _get_now_playing()
 
-        if not np or not np.get("playing"):
-            _broadcast({"type": "youtube_now_playing", "playing": False})
-        else:
-            _broadcast(_build_playing_broadcast(np))
+            if not np or not np.get("playing"):
+                _broadcast({"type": "youtube_now_playing", "playing": False})
+            else:
+                _broadcast(_build_playing_broadcast(np))
+        except Exception as e:
+            print(f"[youtube_hud] poll tick failed (continuing): {e}",
+                  flush=True)
 
         time.sleep(_POLL_INTERVAL_S)
 
