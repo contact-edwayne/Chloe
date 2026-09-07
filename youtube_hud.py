@@ -98,7 +98,6 @@ _BLOCK_SIZE = round(_SAMPLE_RATE / _VIZ_FPS)
 
 _thread: Optional[threading.Thread] = None
 _thread_lock = threading.Lock()
-_last_broadcast_state: Optional[tuple] = None
 
 
 def start() -> None:
@@ -166,6 +165,21 @@ def _build_playing_broadcast(np: dict) -> dict:
             round(duration_s * 1000) if duration_s is not None else None
         ),
     }
+
+
+def refresh_now() -> None:
+    """Immediately fetch and broadcast now-playing state instead of
+    waiting for _poll_loop's next tick. Call this right after a control
+    action that changes what's loaded (next/previous/play_playlist/
+    search_and_play) -- closes the up-to-_POLL_INTERVAL_S window where
+    the HUD's video/album art still shows the track that just ended.
+    Safe no-op if the player isn't running (_get_now_playing already
+    checks is_running() and never launches the browser itself)."""
+    np = _get_now_playing()
+    if not np or not np.get("playing"):
+        _broadcast({"type": "youtube_now_playing", "playing": False})
+    else:
+        _broadcast(_build_playing_broadcast(np))
 
 
 def _poll_loop() -> None:

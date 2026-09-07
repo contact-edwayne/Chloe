@@ -371,7 +371,13 @@ def _launch_page(pw):
         # need a backgrounded tab to keep running at full rate).
         "args": ["--disable-backgrounding-occluded-windows",
                  "--disable-renderer-backgrounding",
-                 "--disable-background-timer-throttling"],
+                 "--disable-background-timer-throttling",
+                 # Removes the NEED for _focus_player's nudge click in
+                 # play_url (see that function's docstring, fix round
+                 # 2026-09-07 #2) -- Chromium skips the user-gesture
+                 # requirement for autoplay entirely instead of us
+                 # having to satisfy it with a real click every time.
+                 "--autoplay-policy=no-user-gesture-required"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
@@ -480,6 +486,17 @@ def _focus_player(page, timeout: int = 4000) -> bool:
     since the shortcut can still land even without a clean focus click."""
     try:
         page.click("#movie_player", timeout=timeout, force=True)
+        # A real click on the minimized automation window appears to
+        # force Chromium to restore/show it (Ed, 2026-09-07: "popup
+        # browser still appears when I hit play" -- this click, in
+        # play_url's autoplay nudge, is the one call site that fires on
+        # essentially every play). Re-minimize right after so it
+        # doesn't stay visible. Belt-and-suspenders alongside the
+        # --autoplay-policy launch flag (see _launch_page), which
+        # should mean play_url rarely needs this click at all now --
+        # but next/previous/pause/resume/toggle still fall back to it
+        # when the direct #movie_player JS method call fails.
+        _hide_browser_window()
         return True
     except Exception as e:
         print(f"[youtube_player] player focus click missed (continuing "
@@ -523,8 +540,10 @@ def _seek_to(page, seconds: float) -> bool:
     try:
         return bool(page.evaluate(
             "([s]) => { const p = document.getElementById('movie_player'); "
-            "if (p && typeof p.seekTo === 'function') { "
-            "p.seekTo(s, true); return true; } return false; }",
+            "if (!p || typeof p.seekTo !== 'function') return false; "
+            "p.seekTo(s, true); "
+            "if (typeof p.playVideo === 'function') { p.playVideo(); } "
+            "return true; }",
             [seconds]))
     except Exception as e:
         print(f"[youtube_player] seekTo({seconds}) call failed: {e}",

@@ -3863,6 +3863,7 @@
   // literal would risk. ───
   let _mpPlaylists = [];
   let _mpShuffleNext = false;
+  let _mpCurrentPlaylistName = null;
 
   function requestMusicPlaylists() {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -3902,6 +3903,7 @@
   function playMusicPlaylist(idx) {
     const p = _mpPlaylists[idx];
     if (!p || !p.name) return;
+    _mpCurrentPlaylistName = p.name;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: 'youtube_control', action: 'play_playlist',
@@ -3914,11 +3916,27 @@
   function toggleMusicShuffleNext() {
     _mpShuffleNext = !_mpShuffleNext;
     document.getElementById('sp-shuffle').classList.toggle('active', _mpShuffleNext);
+    // Ed, 2026-09-07 round 2: "songs not shuffling, just going in
+    // order still" -- this button used to only arm shuffle for the
+    // NEXT playlist you click, which is silent/no-op if something's
+    // already playing. If a playlist is currently loaded, reshuffle
+    // and restart IT right now instead of doing nothing. Toggling
+    // back off intentionally does nothing live -- there's no YouTube
+    // API to "un-shuffle" a queue that's already playing, only a
+    // fresh (honest) re-launch, which flipping shuffle back on will do.
+    if (_mpShuffleNext && _mpCurrentPlaylistName && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'youtube_control', action: 'play_playlist',
+        name: _mpCurrentPlaylistName, shuffle: true,
+      }));
+      document.getElementById('mp-status').textContent = 'RESHUFFLING…';
+    }
   }
 
   function musicSearchAndPlay(query) {
     query = (query || '').trim();
     if (!query) return;
+    _mpCurrentPlaylistName = null;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'youtube_control', action: 'search_and_play', query: query }));
     }

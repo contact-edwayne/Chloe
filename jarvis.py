@@ -4222,6 +4222,8 @@ async def handle_youtube_control(data, websocket):
                                         "action": action, "error": "missing name"})
             return
         result = await asyncio.to_thread(_youtube_playlists.play_playlist, name, shuffle)
+        if result.get("ok"):
+            await asyncio.to_thread(youtube_hud.refresh_now)
         await _ws_send(websocket, {"type": "youtube_control_result",
                                     "ok": result.get("ok", False), "action": action,
                                     "error": result.get("error"), "name": result.get("name"),
@@ -4236,6 +4238,8 @@ async def handle_youtube_control(data, websocket):
                                         "action": action, "error": "missing query"})
             return
         result = await asyncio.to_thread(_youtube_playlists.search_and_play, query)
+        if result.get("ok"):
+            await asyncio.to_thread(youtube_hud.refresh_now)
         await _ws_send(websocket, {"type": "youtube_control_result",
                                     "ok": result.get("ok", False), "action": action,
                                     "error": result.get("error"),
@@ -4282,6 +4286,8 @@ async def handle_youtube_control(data, websocket):
                                     "action": action, "error": f"unknown action: {action!r}"})
         return
     result = await asyncio.to_thread(fn)
+    if result.get("ok") and action in ("previous", "next"):
+        await asyncio.to_thread(youtube_hud.refresh_now)
     await _ws_send(websocket, {"type": "youtube_control_result", "ok": result.get("ok", False),
                                 "action": action, "error": result.get("error")})
 
