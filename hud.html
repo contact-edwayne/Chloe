@@ -3826,14 +3826,33 @@
     } catch (e) {}
   }
 
-  // ─── Visualizer canvas (replaces the VIDEO embed, Ed round 15) ───
+  // ─── Visualizer canvas: "Phosphor Scope" (Ed round 16, from Claude
+  // Design) -- replaces the round-15 bar equalizer. Ported from the
+  // .dc.html canvas component's draw(dt) method; see the comment block
+  // above for what changed vs. that source. ───
   let _mpVizPlaying = false;
   let _mpVizRaf = null;
-  const _MP_VIZ_BARS = 28;
-  const _mpVizPhase = Array.from({length: _MP_VIZ_BARS}, () => Math.random() * Math.PI * 2);
+  let _mpVizEnergy = 0;
+  let _mpVizT = 0;
+  let _mpVizLast = null;
+
+  // Tunables, taken from the artboard's own default props.
+  const _MP_VIZ_PERSISTENCE = 0.28;   // phosphor trail half-life, seconds
+  const _MP_VIZ_BPM = 118;            // fake synth beat
+  const _MP_VIZ_GLOW = 1;
+  const _MP_VIZ_HOT = '#ff3ec8';      // secondary (magenta) trace color
 
   function _mpUpdateVisualizerState(data) {
     _mpVizPlaying = !!(data && data.playing && data.is_playing);
+  }
+
+  function _mpVizBeat(t) {
+    const p = 60 / _MP_VIZ_BPM;
+    const i = Math.floor(t / p), ph = (t / p) % 1;
+    const accent = i % 4 === 0 ? 1 : (i % 2 === 0 ? 0.8 : 0.58);
+    let e = Math.exp(-ph * 7) * accent;
+    if (ph > 0.5) e = Math.max(e, Math.exp(-(ph - 0.5) * 15) * 0.28);
+    return e;
   }
 
   function _mpDrawVisualizer() {
@@ -3844,44 +3863,119 @@
     const w = box ? box.clientWidth : 0;
     const h = box ? box.clientHeight : 0;
     if (w === 0 || h === 0) return;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const pw = Math.round(w * dpr), ph2 = Math.round(h * dpr);
+    if (canvas.width !== pw || canvas.height !== ph2) { canvas.width = pw; canvas.height = ph2; }
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.clearRect(0, 0, w, h);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const t = performance.now() / 1000;
-    const envelope = _mpVizPlaying ? (0.55 + 0.45 * Math.sin(t * 0.7)) : 0;
-    const gap = 4;
-    const barW = Math.max(2, (w - gap * (_MP_VIZ_BARS - 1)) / _MP_VIZ_BARS);
-    const baseline = h - 6;
+    const now = performance.now();
+    if (_mpVizLast === null) _mpVizLast = now;
+    let dt = (now - _mpVizLast) / 1000;
+    _mpVizLast = now;
+    if (dt > 0.12) dt = 0.12;
+    _mpVizT += dt;
 
-    for (let i = 0; i < _MP_VIZ_BARS; i++) {
-      const phase = _mpVizPhase[i];
-      let amp;
-      if (_mpVizPlaying) {
-        const wobble =
-          Math.sin(t * 2.6 + phase) * 0.5 +
-          Math.sin(t * 5.1 + phase * 1.7) * 0.3 +
-          Math.sin(t * 1.3 + phase * 0.6) * 0.2;
-        amp = Math.max(0.06, (wobble * 0.5 + 0.5) * envelope);
-      } else {
-        amp = 0.05 + 0.02 * Math.sin(t * 0.5 + phase);
-      }
-      const barH = Math.max(2, amp * (h - 16));
-      const x = i * (barW + gap);
-      const y = baseline - barH;
-      const grad = ctx.createLinearGradient(0, y, 0, baseline);
-      if (_mpVizPlaying) {
-        grad.addColorStop(0, 'rgba(0, 247, 255, 0.95)');
-        grad.addColorStop(1, 'rgba(255, 0, 200, 0.35)');
-      } else {
-        grad.addColorStop(0, 'rgba(0, 247, 255, 0.25)');
-        grad.addColorStop(1, 'rgba(0, 247, 255, 0.06)');
-      }
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, barW, barH);
+    const target = _mpVizPlaying ? 1 : 0;
+    _mpVizEnergy += (target - _mpVizEnergy) * (1 - Math.exp(-dt / (target > _mpVizEnergy ? 0.3 : 0.85)));
+    const e = _mpVizEnergy, t = _mpVizT, g = _MP_VIZ_GLOW, hot = _MP_VIZ_HOT;
+    const b = _mpVizBeat(t);
+
+    const tau = Math.max(0.05, _MP_VIZ_PERSISTENCE);
+    const fade = Math.min(0.6, 1 - Math.exp(-dt / tau));
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(0,4,8,' + fade.toFixed(4) + ')';
+    ctx.fillRect(0, 0, w, h);
+
+    const hy = Math.round(h * 0.5) + 0.5;
+    const amp = h * 0.19 * (0.1 + 0.9 * e) * (0.72 + 0.5 * b * e);
+    const step = Math.max(2, w / 220);
+    const pts = [], pts2 = [];
+    const blipX = (t * 0.2) % 1.35;
+    for (let x = 0; x <= w + step; x += step) {
+      const u = Math.min(1, x / w);
+      const env = 0.38 + 0.62 * Math.sin(Math.max(0, Math.min(1, u)) * Math.PI);
+      const blip = Math.exp(-Math.pow((u - blipX) * 30, 2)) * (1 - e) * h * 0.075;
+      const wave = Math.sin(u * 3.1 - t * 0.9) * 0.42
+        + Math.sin(u * 9.2 + t * 2.05) * 0.5
+        + Math.sin(u * 21.4 - t * 3.4) * 0.28 * (0.4 + 0.6 * e)
+        + Math.sin(u * 43.7 + t * 5.9) * 0.16 * e
+        + Math.sin(u * 87.3 - t * 9.1) * 0.07 * e;
+      pts.push([x, hy - wave * amp * env - blip]);
+      const w2 = Math.sin(u * 9.2 + t * 2.05 + 0.62) * 0.46
+        + Math.sin(u * 17.9 - t * 2.7) * 0.3
+        + Math.sin(u * 5.4 + t * 1.4) * 0.24;
+      pts2.push([x, hy - w2 * amp * env * 0.78]);
     }
+
+    const path = p => {
+      ctx.beginPath();
+      for (let i = 0; i < p.length; i++) i ? ctx.lineTo(p[i][0], p[i][1]) : ctx.moveTo(p[0][0], p[0][1]);
+    };
+    const trace = (p, color, lw, alpha, blur) => {
+      path(p);
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.lineWidth = lw; ctx.strokeStyle = color; ctx.globalAlpha = alpha;
+      ctx.shadowBlur = blur * g; ctx.shadowColor = color;
+      ctx.stroke();
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+    };
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    trace(pts2, hot, 1.5, 0.34 + 0.34 * e, 14);
+    trace(pts, '#00f7ff', 2, 0.92, 18);
+    if (b > 0.6 && e > 0.4) trace(pts, '#eaffff', 1, (b - 0.6) * 1.6 * e, 24);
+    ctx.save();
+    ctx.translate(0, hy * 2 + 3);
+    ctx.scale(1, -0.44);
+    trace(pts, '#00f7ff', 2.2, 0.2 + 0.14 * e, 12);
+    trace(pts2, hot, 1.6, 0.14 + 0.08 * e, 10);
+    ctx.restore();
+    ctx.restore();
+
+    // Reflection falloff -- also keeps trails below the horizon shorter than above.
+    const rg = ctx.createLinearGradient(0, hy, 0, h);
+    rg.addColorStop(0, 'rgba(0,4,8,0)');
+    rg.addColorStop(0.55, 'rgba(0,4,8,0.55)');
+    rg.addColorStop(1, 'rgba(0,4,8,0.95)');
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, hy, w, h - hy);
+
+    // Graticule
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0,247,255,0.055)';
+    const gs = 28, off = (t * 7 * e) % gs;
+    for (let x = -off; x < w; x += gs) { ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, 0); ctx.lineTo(Math.round(x) + 0.5, h); ctx.stroke(); }
+    for (let y = hy % gs; y < h; y += gs) { ctx.beginPath(); ctx.moveTo(0, Math.round(y) + 0.5); ctx.lineTo(w, Math.round(y) + 0.5); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(0,247,255,' + (0.18 + 0.3 * e).toFixed(3) + ')';
+    for (let k = 0; k <= 8; k++) {
+      const x = Math.round((w / 8) * k) + 0.5;
+      const len = k % 4 === 0 ? 9 : 5;
+      ctx.beginPath(); ctx.moveTo(x, hy - len); ctx.lineTo(x, hy + len); ctx.stroke();
+    }
+    ctx.strokeStyle = 'rgba(0,247,255,' + (0.22 + 0.3 * b * e + 0.14 * (1 - e)).toFixed(3) + ')';
+    ctx.shadowBlur = 12 * g; ctx.shadowColor = '#00f7ff';
+    ctx.beginPath(); ctx.moveTo(0, hy); ctx.lineTo(w, hy); ctx.stroke();
+    ctx.restore();
+
+    // Rolling scanline band + vignette
+    const bandY = ((t * 42) % (h + 90)) - 90;
+    const bg = ctx.createLinearGradient(0, bandY, 0, bandY + 90);
+    bg.addColorStop(0, 'rgba(0,247,255,0)');
+    bg.addColorStop(0.5, 'rgba(0,247,255,' + (0.035 + 0.02 * e).toFixed(3) + ')');
+    bg.addColorStop(1, 'rgba(0,247,255,0)');
+    ctx.fillStyle = bg; ctx.fillRect(0, bandY, w, 90);
+    ctx.globalAlpha = 0.1;
+    ctx.fillStyle = '#000408';
+    for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+    ctx.globalAlpha = 1;
+    const vg = ctx.createRadialGradient(w / 2, hy, Math.min(w, h) * 0.18, w / 2, hy, Math.max(w, h) * 0.78);
+    vg.addColorStop(0, 'rgba(0,4,8,0)');
+    vg.addColorStop(1, 'rgba(0,4,8,0.75)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
   }
 
   document.addEventListener('DOMContentLoaded', () => {
