@@ -262,6 +262,34 @@
   .mp-col-stack { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
   .mp-col-stack .mp-panel { min-height: 0; }
   .mp-output { flex: 1; justify-content: center; }
+
+  /* CHLOE orb + CHAT panels (Ed, round 15) -- the real .left/chat
+     elements get reparented in here (see _mpOpenPortals), these rules
+     only ever apply while that's the case. */
+  .mp-orb-panel { flex: 0 0 260px; }
+  .mp-orb-target {
+    flex: 1; min-height: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #mp-orb-target .left {
+    width: 100%; height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px; padding: 0;
+  }
+  #mp-orb-target .hud-area { flex: 1; min-height: 0; width: 100%; }
+  #mp-orb-target .hud-stack { max-width: 200px; margin: 0 auto; }
+  #mp-orb-target .state-controls { flex-wrap: wrap; justify-content: center; }
+
+  .mp-chat-panel { flex: 1; min-height: 0; }
+  .mp-chat-target {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  #mp-chat-target .chat-header { flex: 0 0 auto; }
+  #mp-chat-target #chatlog { flex: 1; min-height: 0; overflow-y: auto; }
+  #mp-chat-target .chat-input-row { flex: 0 0 auto; }
+
+  .mp-visualizer-panel { min-height: 440px; }
+  #mp-visualizer-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .mp-volume-bar {
     position: relative; height: 8px; background: #03151b;
     border: 1px solid var(--border2); cursor: pointer;
@@ -1878,70 +1906,83 @@
     <div class="mp-wrap">
       <div class="mp-cols">
 
-        <!-- NOW PLAYING -->
-        <div class="mp-panel">
-          <div class="mp-sweep" style="animation-duration:11s"></div>
-          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
-          <div class="mp-panel-head"><span>● NOW PLAYING</span><span id="mp-conn">NOT CONNECTED</span></div>
-          <div class="mp-ring-wrap">
-            <svg class="mp-ring-a" viewBox="0 0 210 210">
-              <circle cx="105" cy="105" r="101" fill="none" stroke="var(--border2)" stroke-width="1" stroke-dasharray="2 9"/>
-              <circle cx="105" cy="3.5" r="2.4" fill="var(--cyan)"/>
-            </svg>
-            <svg class="mp-ring-b" viewBox="0 0 210 210">
-              <circle cx="105" cy="105" r="88" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="1 5"/>
-            </svg>
-            <svg class="mp-progress-ring" viewBox="0 0 210 210">
-              <circle cx="105" cy="105" r="80" fill="none" stroke="var(--border)" stroke-width="3"/>
-              <circle id="mp-progress-circle" cx="105" cy="105" r="80" fill="none" stroke="var(--magenta)"
-                      stroke-width="3" stroke-dasharray="502.7" stroke-dashoffset="502.7"/>
-            </svg>
-            <div class="mp-art-frame" id="mp-art-frame">
-              <img id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
-              <div id="mp-art-placeholder">♪</div>
-            </div>
-          </div>
-          <div class="mp-track-block">
-            <div class="mp-title" id="sp-track">Not connected</div>
-            <div class="mp-artist" id="sp-artist"></div>
-            <div class="mp-album" id="sp-album">YouTube</div>
-          </div>
-        </div>
-
-        <!-- PLAYLISTS -->
-        <div class="mp-panel">
-          <div class="mp-sweep" style="animation-duration:13s"></div>
-          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
-          <div class="mp-panel-head"><span id="mp-pl-count">PLAYLISTS // 00</span><span>CLICK TO PLAY</span></div>
-          <div class="mp-search">
-            <span>⌕</span>
-            <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS OR ENTER TO PLAY…" oninput="renderMusicPlaylists()" onkeydown="if(event.key==='Enter'){musicSearchAndPlay(this.value); event.preventDefault();}">
-            <button class="mp-pl-add-btn" title="Add a playlist" onclick="promptAddMusicPlaylist()">+ ADD</button>
-          </div>
-          <div id="mp-playlist-list"></div>
-        </div>
-
-        <!-- SPECTRUM + OUTPUT (stacked, matches Ed's design pass' RIGHT
-             column -- fills the column with real content instead of
-             stretching SPECTRUM alone). -->
+        <!-- NOW PLAYING + PLAYLISTS, stacked (Ed, round 15) -->
         <div class="mp-col-stack">
           <div class="mp-panel">
-            <div class="mp-sweep" style="animation-duration:9s"></div>
+            <div class="mp-sweep" style="animation-duration:11s"></div>
             <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
-            <div class="mp-panel-head"><span>VIDEO</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
-            <div class="mp-video-box">
-              <div id="mp-yt-embed"></div>
-              <div class="mp-video-placeholder" id="mp-video-placeholder">NOTHING PLAYING</div>
+            <div class="mp-panel-head"><span>● NOW PLAYING</span><span id="mp-conn">NOT CONNECTED</span></div>
+            <div class="mp-ring-wrap">
+              <svg class="mp-ring-a" viewBox="0 0 210 210">
+                <circle cx="105" cy="105" r="101" fill="none" stroke="var(--border2)" stroke-width="1" stroke-dasharray="2 9"/>
+                <circle cx="105" cy="3.5" r="2.4" fill="var(--cyan)"/>
+              </svg>
+              <svg class="mp-ring-b" viewBox="0 0 210 210">
+                <circle cx="105" cy="105" r="88" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="1 5"/>
+              </svg>
+              <svg class="mp-progress-ring" viewBox="0 0 210 210">
+                <circle cx="105" cy="105" r="80" fill="none" stroke="var(--border)" stroke-width="3"/>
+                <circle id="mp-progress-circle" cx="105" cy="105" r="80" fill="none" stroke="var(--magenta)"
+                        stroke-width="3" stroke-dasharray="502.7" stroke-dashoffset="502.7"/>
+              </svg>
+              <div class="mp-art-frame" id="mp-art-frame">
+                <img id="sp-art" src="" alt="" onerror="this.style.visibility='hidden'">
+                <div id="mp-art-placeholder">♪</div>
+              </div>
+            </div>
+            <div class="mp-track-block">
+              <div class="mp-title" id="sp-track">Not connected</div>
+              <div class="mp-artist" id="sp-artist"></div>
+              <div class="mp-album" id="sp-album">YouTube</div>
             </div>
           </div>
-          <div class="mp-panel mp-output">
-            <div class="mp-sweep" style="animation-duration:15s"></div>
+
+          <div class="mp-panel mp-playlists-panel">
+            <div class="mp-sweep" style="animation-duration:13s"></div>
             <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
-            <div class="mp-panel-head"><span>OUTPUT</span><span id="mp-volume-label">100%</span></div>
-            <div class="mp-volume-bar" id="mp-volume-bar">
-              <div class="mp-volume-fill" id="mp-volume-fill" style="width:100%"></div>
+            <div class="mp-panel-head"><span id="mp-pl-count">PLAYLISTS // 00</span><span>CLICK TO PLAY</span></div>
+            <div class="mp-search">
+              <span>⌕</span>
+              <input id="mp-pl-search" placeholder="SEARCH PLAYLISTS OR ENTER TO PLAY…" oninput="renderMusicPlaylists()" onkeydown="if(event.key==='Enter'){musicSearchAndPlay(this.value); event.preventDefault();}">
+              <button class="mp-pl-add-btn" title="Add a playlist" onclick="promptAddMusicPlaylist()">+ ADD</button>
             </div>
-            <div class="mp-output-note">Volume is this player only, not your system volume.</div>
+            <div id="mp-playlist-list"></div>
+          </div>
+        </div>
+
+        <!-- CHLOE + CHAT (Ed, round 15): the real orb and chat log,
+             reparented in here while the panel is open -- see
+             _mpOpenPortals/_mpClosePortals. These start EMPTY; JS fills
+             them. -->
+        <div class="mp-col-stack">
+          <div class="mp-panel mp-orb-panel">
+            <div class="mp-sweep" style="animation-duration:10s"></div>
+            <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
+            <div class="mp-panel-head"><span>● CHLOE</span><span>&nbsp;</span></div>
+            <div id="mp-orb-target" class="mp-orb-target"></div>
+          </div>
+          <div class="mp-panel mp-chat-panel">
+            <div class="mp-sweep" style="animation-duration:17s"></div>
+            <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
+            <div class="mp-panel-head"><span>CHAT</span><span>TALK TO CHLOE</span></div>
+            <div id="mp-chat-target" class="mp-chat-target"></div>
+          </div>
+        </div>
+
+        <!-- VISUALIZER (Ed, round 15): replaces the VIDEO embed.
+             Fake-reactive -- driven by is_playing/progress from the
+             same broadcasts, not real audio analysis (see
+             _mpDrawVisualizer). #mp-live/#mp-video-placeholder keep
+             their names/ids -- onYoutubeNowPlaying already toggles
+             them generically, nothing video-specific about how it uses
+             them. -->
+        <div class="mp-panel mp-visualizer-panel">
+          <div class="mp-sweep" style="animation-duration:9s"></div>
+          <div class="mp-corner tl"></div><div class="mp-corner tr"></div><div class="mp-corner bl"></div><div class="mp-corner br"></div>
+          <div class="mp-panel-head"><span>VISUALIZER</span><span id="mp-live" class="mp-live paused">● LIVE</span></div>
+          <div class="mp-video-box">
+            <canvas id="mp-visualizer-canvas"></canvas>
+            <div class="mp-video-placeholder" id="mp-video-placeholder">NOTHING PLAYING</div>
           </div>
         </div>
       </div>
@@ -1965,7 +2006,7 @@
 
   <div class="body">
     <!-- LEFT: HUD RING + 3D ORB -->
-    <div class="left">
+    <div class="left" id="left-orb-col">
       <div class="hud-area">
         <div class="hud-stack">
           <!-- Outer animated ring -->
@@ -2032,10 +2073,12 @@
         <button class="btn"    data-state="speaking"  onclick="setState('speaking')">SPEAK</button>
       </div>
     </div>
+    <div id="left-orb-anchor" style="display:none"></div>
 
     <!-- RIGHT: CHAT -->
     <div class="chat-area">
-      <div class="chat-header">
+      <div id="chat-portal-anchor" style="display:none"></div>
+      <div class="chat-header" id="chat-header-el">
         <span><span class="indicator"></span>COMM CHANNEL // OPEN</span>
         <span class="ch-label" id="ch-label" onclick="toggleChannel()">CH 01</span>
       </div>
@@ -2117,7 +2160,7 @@
       </div>
 
       <div class="chat-attachments" id="attachments"></div>
-      <div class="chat-input-row">
+      <div class="chat-input-row" id="chat-input-row-el">
         <button class="attach-btn" id="attach-btn" title="Attach files (PDF, DOCX, XLSX, CSV, TXT, MD, images)" onclick="document.getElementById('file-input').click()">+</button>
         <button class="ptt-btn" id="ptt-btn" title="Push to talk (click to toggle, or hold spacebar when chat isn't focused)" onclick="togglePtt()">🎤 PTT</button>
         <input type="text" class="chat-input" id="chat-input" placeholder="Speak to Chloe…" autocomplete="off">
@@ -3771,7 +3814,70 @@
     } catch (e) {}
   }
 
+  // ─── Visualizer canvas (replaces the VIDEO embed, Ed round 15) ───
+  let _mpVizPlaying = false;
+  let _mpVizRaf = null;
+  const _MP_VIZ_BARS = 28;
+  const _mpVizPhase = Array.from({length: _MP_VIZ_BARS}, () => Math.random() * Math.PI * 2);
+
+  function _mpUpdateVisualizerState(data) {
+    _mpVizPlaying = !!(data && data.playing && data.is_playing);
+  }
+
+  function _mpDrawVisualizer() {
+    _mpVizRaf = requestAnimationFrame(_mpDrawVisualizer);
+    const canvas = document.getElementById('mp-visualizer-canvas');
+    if (!canvas || !canvas.isConnected) return;
+    const box = canvas.parentElement;
+    const w = box ? box.clientWidth : 0;
+    const h = box ? box.clientHeight : 0;
+    if (w === 0 || h === 0) return;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, h);
+
+    const t = performance.now() / 1000;
+    const envelope = _mpVizPlaying ? (0.55 + 0.45 * Math.sin(t * 0.7)) : 0;
+    const gap = 4;
+    const barW = Math.max(2, (w - gap * (_MP_VIZ_BARS - 1)) / _MP_VIZ_BARS);
+    const baseline = h - 6;
+
+    for (let i = 0; i < _MP_VIZ_BARS; i++) {
+      const phase = _mpVizPhase[i];
+      let amp;
+      if (_mpVizPlaying) {
+        const wobble =
+          Math.sin(t * 2.6 + phase) * 0.5 +
+          Math.sin(t * 5.1 + phase * 1.7) * 0.3 +
+          Math.sin(t * 1.3 + phase * 0.6) * 0.2;
+        amp = Math.max(0.06, (wobble * 0.5 + 0.5) * envelope);
+      } else {
+        amp = 0.05 + 0.02 * Math.sin(t * 0.5 + phase);
+      }
+      const barH = Math.max(2, amp * (h - 16));
+      const x = i * (barW + gap);
+      const y = baseline - barH;
+      const grad = ctx.createLinearGradient(0, y, 0, baseline);
+      if (_mpVizPlaying) {
+        grad.addColorStop(0, 'rgba(0, 247, 255, 0.95)');
+        grad.addColorStop(1, 'rgba(255, 0, 200, 0.35)');
+      } else {
+        grad.addColorStop(0, 'rgba(0, 247, 255, 0.25)');
+        grad.addColorStop(1, 'rgba(0, 247, 255, 0.06)');
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, barW, barH);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    if (!_mpVizRaf) _mpDrawVisualizer();
+  });
+
   function onYoutubeNowPlaying(data) {
+    _mpUpdateVisualizerState(data);
     _mpSyncYtEmbed(data);
     const track = document.getElementById('sp-track');
     const artistEl = document.getElementById('sp-artist');
@@ -5444,6 +5550,49 @@ window.setState('idle');
        youtube_hud.py's broadcasts (onYoutubeNowPlaying/onYoutubeVisualizer),
        unaffected by opening/closing this overlay. -->
   <script>
+    const _MP_CHAT_PORTAL_IDS = ['chat-header-el', 'chatlog', 'attachments', 'chat-input-row-el', 'drop-zone'];
+    let _mpPortalOpen = false;
+
+    function _mpOpenPortals() {
+      if (_mpPortalOpen) return;
+      _mpPortalOpen = true;
+      try {
+        const orbTarget = document.getElementById('mp-orb-target');
+        const leftEl = document.getElementById('left-orb-col');
+        if (orbTarget && leftEl) orbTarget.appendChild(leftEl);
+      } catch (e) { console.warn('[music] orb portal failed', e); }
+      try {
+        const chatTarget = document.getElementById('mp-chat-target');
+        if (chatTarget) {
+          _MP_CHAT_PORTAL_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) chatTarget.appendChild(el);
+          });
+        }
+      } catch (e) { console.warn('[music] chat portal failed', e); }
+    }
+
+    function _mpClosePortals() {
+      if (!_mpPortalOpen) return;
+      _mpPortalOpen = false;
+      try {
+        const leftEl = document.getElementById('left-orb-col');
+        const anchor = document.getElementById('left-orb-anchor');
+        if (leftEl && anchor && anchor.parentNode) {
+          anchor.parentNode.insertBefore(leftEl, anchor);
+        }
+      } catch (e) { console.warn('[music] orb portal restore failed', e); }
+      try {
+        const anchor = document.getElementById('chat-portal-anchor');
+        if (anchor && anchor.parentNode) {
+          _MP_CHAT_PORTAL_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) anchor.parentNode.insertBefore(el, anchor);
+          });
+        }
+      } catch (e) { console.warn('[music] chat portal restore failed', e); }
+    }
+
     function toggleMusic(force) {
       const ov = document.getElementById('music-overlay');
       const btn = document.getElementById('music-btn');
@@ -5453,9 +5602,11 @@ window.setState('idle');
         if (btn) btn.classList.add('on');
         try { requestMusicPlaylists(); } catch (e) {}
         try { _mpFlipTrace(); } catch (e) {}
+        _mpOpenPortals();
       } else {
         ov.classList.remove('on');
         if (btn) btn.classList.remove('on');
+        _mpClosePortals();
       }
     }
     document.addEventListener('keydown', (e) => {
