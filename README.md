@@ -2,7 +2,8 @@
 
 > A local-first, multimodal AI assistant with a holographic HUD, a real-time
 > voice pipeline, a self-maintained knowledge wiki, a 3D brain-graph
-> visualizer, a mobile PWA over Tailscale, smart-home control, and Bitcoin
+> visualizer, a mobile PWA over Tailscale, smart-home control, voice-controlled
+> music with a real-time audio visualizer, a retro-gaming arcade, and Bitcoin
 > Lightning integration. Built end-to-end by Edward Wayne.
 
 [![Chloe demo](demo.gif)](https://youtu.be/76BGUzwDIIQ)
@@ -40,7 +41,10 @@ designed and built from scratch.
 - Hybrid LLM inference — local `qwen2.5:32b` via Ollama on a 7900 XTX, with
   Groq (`llama-3.3-70b-versatile` and `compound-mini` for search) as cloud
   burst. Fallback in both directions on quota or empty response.
-- Text-to-speech via Kokoro local (`af_heart` voice) or ElevenLabs neural
+- Three-tier text-to-speech fallback — ElevenLabs neural (opt-in premium) →
+  Kokoro local (`af_heart`, GPU-free) → edge-tts (always-available default) —
+  plus automatic non-Latin-script voice switching (Chinese/Japanese/Korean/
+  Russian/Arabic/Hebrew/Greek/Hindi/Thai) for replies in other languages
 - Per-sentence streaming TTS — orb starts pulsing within ~500ms of generation
   beginning, not after the full reply is buffered
 - Full state machine: **Idle → Listening → Thinking → Speaking** with barge-in
@@ -122,6 +126,41 @@ designed and built from scratch.
 - Router keywords tightened to avoid false positives ("Hans Zimmer score"
   used to route to compound-mini and burn quota — fixed)
 
+### 🎵 Music & Media Control
+- Voice-controlled YouTube playback — search-and-play and queueing via
+  `yt-dlp`, driven through a persistent Playwright-controlled browser (no
+  API key needed to play; OAuth + the YouTube Data API power "add to
+  playlist")
+- Spotify desktop control built around the free-tier API's restrictions —
+  OS-level global media keys for playback control, Windows SMTC for
+  now-playing, instead of fighting 403s from the Web API's player endpoints
+- Song and artist identification — "what song is this" resolves from live
+  playback metadata; "tell me more about this song" cross-references the
+  iTunes Search API and Wikipedia's REST API for album, genre, and bio detail
+- **Phosphor Scope** visualizer — WASAPI loopback capture + real-time FFT
+  (24 log-spaced frequency bins, ~20fps) drives a custom canvas oscilloscope
+  panel with genuine audio-reactive amplitude and bloom, not a synthetic
+  beat clock, plus time-based phosphor-trail persistence for the retro-CRT look
+- Automatic mic ducking — playback volume drops for the duration of an
+  active voice recording so loud music doesn't bleed into STT and get
+  misheard, then restores to the exact prior level
+
+### 🎮 Arcade & Games
+- Unified **Arcade hub** — one launcher for Chess, a native Pokémon Gen-1
+  recompilation, and a retro multi-system emulator, with a customizable
+  accent-color theme (three schemes) and CRT/motion toggles persisted
+  per device
+- Retro emulation — NES, Game Boy/GBC, GBA, SNES, and Genesis via
+  **EmulatorJS** (WASM libretro cores), with a ROM library (browse, filter,
+  drag-and-drop upload) and USB gamepad support out of the box
+- Chess engine — a negamax/alpha-beta opponent over a material +
+  positional evaluation, with difficulty that auto-tunes toward competitive
+  games and a style-learning profile (openings, aggression, blunder rate)
+  that feeds Chloe's own in-game commentary
+- Pokémon Gen-1 recompilation launched and tracked as its own native OS
+  process (LÖVE2D/SDL2), not browser-emulated — the HUD panel owns
+  launch/stop and status, not the gameplay itself
+
 ---
 
 ## Architecture
@@ -180,6 +219,11 @@ flowchart TD
 | Search | Groq compound-mini with router heuristic |
 | Packaging | PyInstaller — standalone .exe, no Python required |
 | Transport | WebSocket real-time bidirectional bridge |
+| Chess Engine | Custom negamax/alpha-beta over `python-chess`, adaptive difficulty + style-learning opponent profile |
+| Retro Emulation | EmulatorJS — WASM libretro cores (NES/GB/GBA/SNES/Genesis) |
+| Music | `yt-dlp` + persistent Playwright browser (YouTube), Windows SMTC + global media keys (Spotify) |
+| Audio Visualization | WASAPI loopback capture + real-time FFT (NumPy) → custom canvas oscilloscope renderer |
+| Song Metadata | iTunes Search API, Wikipedia REST API |
 
 ---
 
@@ -218,6 +262,14 @@ flowchart TD
   anchors, anti-sycophancy rules, and stress-tested character consistency
 - **Desktop application packaging** — PyQt6 native window with embedded
   browser engine; ships as standalone .exe via PyInstaller
+- **Game engine integration** — EmulatorJS (WASM libretro cores) embedded
+  via iframe with gamepad passthrough, plus a native process launched and
+  tracked outside the browser entirely (Pokémon Gen-1 recompilation)
+- **Adaptive game AI** — negamax/alpha-beta chess engine with a difficulty
+  knob that auto-tunes toward competitive games, plus a style-learning
+  profile built from the player's own move history
+- **Real-time audio DSP** — WASAPI loopback capture, windowed FFT,
+  log-spaced frequency binning, driving a custom canvas visualizer at ~20fps
 
 ---
 
@@ -238,6 +290,13 @@ chloe/
 ├── lights.py             # Zengge Magic Home UDP discovery + TCP control
 ├── hud_server.py         # WebSocket bridge — connects HUD to backend
 ├── hud.html              # HUD interface — chat, avatar, state display
+├── arcade.html           # Arcade hub — chess/Pokémon/retro-emulator launcher, ROM library, theming
+├── chloe_chess.py        # Adaptive negamax chess engine + style-learning profile
+├── emulator_lite.html    # EmulatorJS-based retro multi-system emulator panel
+├── youtube_player.py     # Persistent Playwright-driven YouTube playback
+├── youtube_playlists.py  # Voice commands — search/play/queue, song & artist ID
+├── youtube_hud.py        # WASAPI loopback + FFT → Phosphor Scope visualizer feed
+├── spotify_player.py     # OS-level Spotify control (media keys + SMTC)
 ├── brain-graph.html      # 3D force-directed wiki visualizer
 ├── holo.html             # Standalone 3D orb viewer
 ├── holo-app.js           # Three.js scene setup and animation loop
