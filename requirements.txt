@@ -74,6 +74,10 @@ google-api-python-client==2.200.0
 # read via the new dependency below.
 winsdk>=1.0.0b10; sys_platform == "win32"   # SMTC now-playing (spotify_player.get_now_playing)
 
+# ─── Chess (chloe_chess.py / the Arcade hub's chess panel) ──────────────────
+chess>=1.10                      # PyPI package name is "chess", not
+                                  # "python-chess" -- pip install chess
+
 # ─── Misc ────────────────────────────────────────────────────────────────────
 python-dotenv==1.2.2
 
