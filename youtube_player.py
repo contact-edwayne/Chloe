@@ -5,18 +5,20 @@ Playback goes through actual browser automation of a real YouTube tab
 (Ed's choice, 2026-09-01) -- not a local media player -- and launches
 non-headless (Chromium's headless audio output is unreliable and would
 risk breaking both playback and the WASAPI-loopback visualizer capture)
-but is made INVISIBLE via a layered window at 0 alpha (Ed's later
-choice, 2026-09-07, once the MUSIC panel was live: he wants Chloe's own
-player to feel like where the music plays from, not a browser window
-popping up on his desktop). Two earlier hiding approaches were tried
-and both got playback killed after about a minute -- minimizing the
-window, and positioning it off-screen -- because both make Windows'
-DWM consider the window occluded, which is what Chromium's background-
-tab CPU throttling keys off. A layered window at alpha=0 stays
-genuinely on-screen and un-occluded (nothing about its position or
-window state changes) while being invisible to look at, so audio keeps
-playing and the DOM stays fully readable the whole time. See
-_hide_browser_window's own docstring for the full history. One
+but STARTS MINIMIZED via an active Win32 call right after launch
+(Ed's later choice, 2026-09-07, once the MUSIC panel was live: he wants
+Chloe's own player to feel like where the music plays from, not a
+browser window popping up on his desktop). Minimizing is what
+reliably hides the window (confirmed live); what used to break
+playback wasn't the minimize itself, it was Chromium's background-tab
+CPU throttling reacting to it -- fixed directly via three Chromium
+launch switches (--disable-backgrounding-occluded-windows,
+--disable-renderer-backgrounding, --disable-background-timer-
+throttling) rather than by trying to hide the window some other way
+Chromium wouldn't throttle (two such attempts -- off-screen
+positioning, a layered 0-alpha window -- were tried first and each
+failed differently). See _hide_browser_window's own docstring for the
+full history. One
 dedicated background thread owns the Playwright instance, browser,
 context, and the single Page for the life of the jarvis.py process;
 every public function here enqueues a command onto that thread rather
@@ -264,25 +266,23 @@ def _player_loop() -> None:
 
 def _hide_browser_window() -> None:
     """Best-effort, never raises: find the automation browser's actual
-    OS window and make it invisible via a layered window at 0 alpha,
-    WITHOUT minimizing it, moving it off-screen, or touching its z-order
-    -- see the launch_kwargs comment in _launch_page for the full
-    history of why (short version: minimizing and off-screen positioning
-    both got the window hidden but both also got playback killed by
-    Chromium's background-tab throttling after about a minute, because
-    both make Windows' DWM consider the window occluded). A layered
-    window with LWA_ALPHA=0 is invisible to Ed but still fully "on
-    screen" and un-occluded as far as DWM/Chromium can tell -- nothing
-    about window state or geometry changes, only how it's painted.
-    WS_EX_TRANSPARENT is set alongside it so the invisible window
-    doesn't sit there eating clicks meant for whatever's visually
-    underneath it. The window is found by matching _BRAVE_PROFILE_DIR in
-    a running browser process's command line -- unique to Chloe's
-    dedicated automation profile, so this can never touch a window that
-    isn't the one this module just launched. Every failure mode here
-    (psutil/pywin32 missing, no matching process yet, the Win32 calls
-    themselves erroring) just leaves the window visible -- exactly the
-    pre-fix behavior, never worse."""
+    OS window and minimize it via the real Win32 API. This exact
+    mechanism was already confirmed LIVE to reliably hide the window
+    (Ed, 2026-09-07: "progress. no browser popup." after this was first
+    tried). What killed playback afterward wasn't the minimize itself --
+    it was Chromium's background-tab throttling reacting to the window
+    being minimized/occluded. Fixed at the actual source this time (see
+    the anti-throttling launch args in _launch_page) instead of trying
+    yet another way to hide the window without Chromium ever noticing --
+    two of those (off-screen position, a layered 0-alpha window) were
+    each tried and each still let playback die or didn't stay hidden.
+    The window is found by matching _BRAVE_PROFILE_DIR in a running
+    browser process's command line -- unique to Chloe's dedicated
+    automation profile, so this can never touch a window that isn't the
+    one this module just launched. Every failure mode here (psutil/
+    pywin32 missing, no matching process yet, the enumeration itself
+    erroring) just leaves the window visible -- exactly the pre-fix
+    behavior, never worse."""
     try:
         import psutil
         import win32con
@@ -310,35 +310,30 @@ def _hide_browser_window() -> None:
 
     if not pids:
         print("[youtube_player] couldn't find the automation browser's "
-              "own process to hide its window (it will stay visible)",
-              flush=True)
+              "own process to minimize its window (it will stay "
+              "visible)", flush=True)
         return
 
-    def _make_invisible_if_ours(hwnd, _):
+    def _minimize_if_ours(hwnd, _):
         if not win32gui.IsWindowVisible(hwnd):
             return True
         try:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
         except Exception:
             return True
-        if pid not in pids:
-            return True
-        try:
-            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-            win32gui.SetWindowLong(
-                hwnd, win32con.GWL_EXSTYLE,
-                ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT)
-            win32gui.SetLayeredWindowAttributes(hwnd, 0, 0, win32con.LWA_ALPHA)
-        except Exception:
-            pass
+        if pid in pids:
+            try:
+                win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+            except Exception:
+                pass
         return True
 
     try:
-        win32gui.EnumWindows(_make_invisible_if_ours, None)
+        win32gui.EnumWindows(_minimize_if_ours, None)
     except Exception as e:
-        print(f"[youtube_player] hiding the automation browser window "
-              f"failed (non-fatal, window may still be visible): {e}",
-              flush=True)
+        print(f"[youtube_player] minimizing the automation browser "
+              f"window failed (non-fatal, window may still be visible): "
+              f"{e}", flush=True)
 
 
 def _launch_page(pw):
@@ -350,7 +345,8 @@ def _launch_page(pw):
     if brave_path:
         print(f"[youtube_player] launching Brave ({brave_path}) with the "
               f"dedicated Chloe profile at {_BRAVE_PROFILE_DIR} "
-              f"(non-headless, positioned off-screen)...", flush=True)
+              f"(non-headless, will be minimized post-launch)...",
+              flush=True)
     else:
         print("[youtube_player] Brave not found at any known install path "
               "(set CHLOE_BRAVE_PATH to override) -- falling back to "
@@ -364,22 +360,18 @@ def _launch_page(pw):
         # mechanism) -- see module docstring fix #1.
         "ignore_default_args": ["--disable-component-update",
                                  "--disable-background-networking"],
-        # No special window-state/position args (Ed, 2026-09-07,
-        # third revision -- see _hide_browser_window below for why).
-        # Two earlier approaches were tried and both still let playback
-        # die after about a minute: --start-minimized (not honored at
-        # all -- window opened fully visible/focused), then an active
-        # Win32 SW_MINIMIZE, then positioning the window off-screen at
-        # -32000,-32000. The off-screen approach was live-confirmed
-        # (2026-09-07) to NOT fix the ~60s playback death either --
-        # Windows' DWM occlusion detection (which Chromium's background-
-        # tab throttling reads) most likely marks a window entirely
-        # outside every monitor's bounds as occluded, same as a
-        # minimized one. This window is now launched at its normal
-        # default position/size -- genuinely on-screen, genuinely
-        # overlapping a real monitor, so DWM has no reason to call it
-        # occluded -- and made invisible a different way, via a layered
-        # window with 0 alpha, right after launch (_hide_browser_window).
+        # Minimized via _hide_browser_window (confirmed live to
+        # actually hide the window -- two other hiding tricks tried
+        # after it, off-screen position and a layered 0-alpha window,
+        # each failed differently). What kills playback in a minimized/
+        # occluded Chromium window is background-tab throttling, so
+        # fix THAT directly instead of trying to avoid ever triggering
+        # it: these three switches are Chromium's own documented escape
+        # hatch for exactly this (kiosk/automation/streaming setups that
+        # need a backgrounded tab to keep running at full rate).
+        "args": ["--disable-backgrounding-occluded-windows",
+                 "--disable-renderer-backgrounding",
+                 "--disable-background-timer-throttling"],
     }
     if brave_path:
         launch_kwargs["executable_path"] = brave_path
