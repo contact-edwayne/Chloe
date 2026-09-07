@@ -5773,16 +5773,15 @@ window.setState('idle');
   <!-- Arcade overlay — arcade.html (the hub: chess/Pokemon/retro emulator
        launcher) served by brain_http on :6790. -->
   <style>
-    #emu-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.94); display: none; }
-    #emu-overlay.on { display: block; }
-    #emu-topbar { position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 61;
+    #emu-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(6,7,11,0.94); display: none; flex-direction: column; }
+    #emu-overlay.on { display: flex; }
+    #emu-topbar { flex: none; height: 26px; z-index: 61;
       display: flex; align-items: center; justify-content: flex-end; padding: 0 8px;
       background: #000; border-bottom: 1px solid var(--border); }
-    #emu-close { position: static;
-      background: transparent; border: 1px solid var(--border2); color: var(--cyan);
+    #emu-close { background: transparent; border: 1px solid var(--border2); color: var(--cyan);
       font: inherit; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; cursor: pointer; }
     #emu-close:hover { background: rgba(0,247,255,0.08); border-color: var(--cyan); }
-    #emu-overlay iframe { position: absolute; left: 0; right: 0; bottom: 0; top: 26px; width: auto; height: auto; border: 0; background: transparent; }
+    #emu-overlay iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: transparent; }
   </style>
   <div id="emu-overlay">
     <div id="emu-topbar"><button id="emu-close" onclick="toggleEmulator(false)">CLOSE [Esc]</button></div>
