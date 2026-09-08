@@ -12773,6 +12773,59 @@ async def _arcade_watch_loop():
     await _ws_broadcast({"type": "game_watch_state", "on": False})
 
 
+def _arcade_kb_domain_rank(r: dict) -> int:
+    """Sort key so wiki/guide-flavored domains are tried first when
+    auto-fetching -- 0 for a recognisable wiki/guide host, 1 for anything
+    else (still tried, just after)."""
+    d = (r.get("domain") or "").lower()
+    return 0 if any(k in d for k in
+                     ("wiki", "ign.com", "gamefaqs", "strategywiki",
+                      "fandom", "gamepedia")) else 1
+
+
+async def _arcade_maybe_auto_fetch_kb(game: str):
+    """Fire-and-forget: if this game has no cached KB yet, search the web
+    for a wiki/guide and auto-ingest the top hit(s) -- Ed's 2026-09-08 ask:
+    watch-mode shouldn't need a manual /kb paste to know anything about a
+    game (trivia, secret routes, community consensus on where he's at).
+
+    Only fetches once EVER per game -- once brain/games/<slug>.kb.md exists
+    this is a no-op forever after, so re-watching the same game doesn't
+    re-search or re-spend Brave quota. /kb still layers more on top any
+    time, manually. Runs as a background task so handle_game_watch_start
+    never blocks on it; refreshes the live facts_block once it lands, same
+    as handle_game_kb_ingest already does for a manual paste.
+    """
+    try:
+        if not game or _arcade_game_kb_path(game).exists():
+            return
+        await _ws_broadcast({"type": "game_comment",
+            "text": f"gimme a sec, reading up on {game}..."})
+        results = await asyncio.to_thread(
+            web_search, f"{game} wiki walkthrough guide", count=5, fresh=True)
+        ranked = sorted(results or [], key=_arcade_kb_domain_rank)[:2]
+        ok_any = False
+        for r in ranked:
+            url = (r.get("url") or "").strip()
+            if not url:
+                continue
+            res = await asyncio.to_thread(_arcade_ingest_kb, game, url)
+            ok_any = ok_any or bool(res.get("ok"))
+        if not ranked:
+            print(f"[arcade-kb] auto-fetch: no search results for {game!r}",
+                  flush=True)
+            return
+        if ok_any and _arcade_watch.get("on") and \
+                (_arcade_watch.get("game") or "").strip() == game:
+            _arcade_watch["facts_block"] = await asyncio.to_thread(
+                _arcade_build_facts_block, game)
+            print(f"[arcade-kb] auto-fetched KB for {game!r} "
+                  f"({len(ranked)} source(s))", flush=True)
+    except Exception as e:
+        print(f"[arcade-kb] auto-fetch crashed: {type(e).__name__}: {e}",
+              flush=True)
+
+
 async def handle_game_watch_start(data, websocket):
     game = (data.get("game") or "").strip()
     _arcade_watch["game"] = game
@@ -12794,6 +12847,8 @@ async def handle_game_watch_start(data, websocket):
         except Exception:
             _arcade_watch["opener_seed"] = ""
         asyncio.create_task(_arcade_watch_loop())
+        if game:
+            asyncio.create_task(_arcade_maybe_auto_fetch_kb(game))
         print(f"[arcade-watch] ON ({_arcade_watch['game']!r}) "
               f"facts={len(_arcade_watch.get('facts_block') or '')}c "
               f"opener={'yes' if _arcade_watch.get('opener_seed') else 'no'}",
