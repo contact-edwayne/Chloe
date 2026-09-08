@@ -7711,7 +7711,7 @@ def _game_dispatch(name: str, args: dict) -> str:
 # unconditionally, whether or not the launch itself then succeeds. Any
 # name that doesn't match anything returns None here so YouTube's
 # fallback still covers genuine music/video requests exactly as before.
-_GAME_VERB_RE = re.compile(r"^\s*(?:play|launch)\s+(.+?)\s*[.!?]*\s*$", re.I)
+_GAME_VERB_RE = _re.compile(r"^\s*(?:play|launch)\s+(.+?)\s*[.!?]*\s*$", _re.I)
 
 
 def try_handle_game_command(text: str) -> str | None:
@@ -7723,7 +7723,7 @@ def try_handle_game_command(text: str) -> str | None:
     if not m:
         return None
     name = m.group(1).strip()
-    name = re.sub(r"\s+(?:game|on\s+steam)\s*$", "", name, flags=re.I).strip()
+    name = _re.sub(r"\s+(?:game|on\s+steam)\s*$", "", name, flags=_re.I).strip()
     if not name:
         return None
     result = _play_game(name)
