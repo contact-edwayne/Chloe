@@ -12900,11 +12900,25 @@ async def handle_game_watch_start(data, websocket):
 
 
 async def handle_game_watch_stop(data, websocket):
+    was_on = bool(_arcade_watch.get("on"))
     _arcade_watch["on"] = False
     game = (_arcade_watch.get("game") or "").strip()
     comments = list(_arcade_watch.get("session_comments") or [])
     started = float(_arcade_watch.get("started_at") or 0.0)
     kept = int(_arcade_watch.get("count") or 0)
+    # Reset session state SYNCHRONOUSLY, before the awaited append below --
+    # see the 2026-09-08 comment on this function for why: a duplicate stop
+    # message landing while the first one's append is still in flight must
+    # see already-cleared state and no-op, not re-read the same session.
+    _arcade_watch["session_comments"] = []
+    _arcade_watch["ed_notes"] = []
+    _arcade_watch["count"] = 0
+    _arcade_watch["facts_block"] = ""
+    _arcade_watch["opener_seed"] = ""
+    if not was_on and not comments and not kept:
+        # Nothing to flush -- either watch wasn't on, or an earlier stop in
+        # this same burst already flushed it. Duplicate/no-op stop.
+        return
     print(f"[arcade-watch] OFF ({game!r}) kept={kept} "
           f"session_msgs={len(comments)}", flush=True)
     if game and (comments or kept):
@@ -12914,10 +12928,5 @@ async def handle_game_watch_stop(data, websocket):
         except Exception as e:
             print(f"[arcade-watch] session append crashed: {e}",
                   flush=True)
-    # Reset session state so a new watch_start starts clean.
-    _arcade_watch["session_comments"] = []
-    _arcade_watch["ed_notes"] = []
-    _arcade_watch["facts_block"] = ""
-    _arcade_watch["opener_seed"] = ""
     await _ws_broadcast({"type": "game_watch_state", "on": False})
 
