@@ -342,7 +342,7 @@
           <div id="upload-track"><div id="upload-bar"></div></div>
         </div>
         <button id="btn-add-rom">+ ADD ROM</button>
-        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img,.iso,.rvz,.gcm,.ps3iso" style="display:none">
+        <input type="file" id="rom-file-input" multiple accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img,.iso,.rvz,.gcm,.ps3iso" style="display:none">
         <input type="file" id="rom-art-input" accept="image/*" style="display:none">
       </div>
     </div>
@@ -775,6 +775,67 @@
     });
   }
 
+  function uploadRomBatch(fileList) {
+    // Handles both the file picker and drag-drop -- a single file behaves
+    // exactly like uploadRom always did; 2+ files go to the batch endpoint,
+    // which auto-packs a .cue + its .bin tracks into one .chd server-side
+    // (via chdman) so a whole multi-track PS1 disc can just be selected/
+    // dropped together instead of needing manual conversion first.
+    if (state.uploading || !fileList || !fileList.length) return;
+    var files = Array.prototype.slice.call(fileList);
+    for (var i = 0; i < files.length; i++) {
+      if (!UP_ACCEPT_RE.test(files[i].name)) {
+        alert('Unsupported ROM type: ' + files[i].name);
+        return;
+      }
+    }
+    if (files.length === 1) { uploadRom(files[0]); return; }
+
+    var hasCue = files.some(function(f) { return /\.cue$/i.test(f.name); });
+    state.uploading = { name: files.length + ' files' };
+    $('upload-progress').classList.add('on');
+    $('upload-name').textContent = hasCue
+      ? 'packing ' + files.length + ' tracks into one .chd (can take a minute)...'
+      : 'uploading ' + files.length + ' files...';
+    $('upload-pct').textContent = hasCue ? '' : '0%';
+    $('upload-bar').style.width = '0%';
+
+    var fd = new FormData();
+    files.forEach(function(f, i) { fd.append('file' + i, f, f.name); });
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', rel('api/roms/upload_batch'));
+    xhr.upload.onprogress = function(e) {
+      // Once the raw bytes land, chdman's own pack time isn't reflected
+      // here (no server progress channel), so the bar only moves for the
+      // (usually fast) upload leg and just sits at 100% while it converts.
+      if (!e.lengthComputable) return;
+      var pct = Math.round(e.loaded / e.total * 100);
+      $('upload-pct').textContent = pct + '%';
+      $('upload-bar').style.width = pct + '%';
+    };
+    xhr.onloadend = function() {
+      state.uploading = null;
+      $('upload-progress').classList.remove('on');
+      if (xhr.status >= 200 && xhr.status < 300) {
+        var newSystem = null;
+        try { newSystem = (JSON.parse(xhr.responseText) || {}).system || null; } catch (e) {}
+        refreshRoms().then(function() {
+          if (newSystem && state.filter !== 'ALL' && state.filter !== newSystem) state.filter = 'ALL';
+          renderLibrary();
+        });
+      } else {
+        alert('ROM upload failed (' + xhr.status + '): ' + (xhr.responseText || 'unknown error'));
+      }
+    };
+    xhr.onerror = function() {
+      state.uploading = null;
+      $('upload-progress').classList.remove('on');
+      alert('ROM upload failed: network error');
+    };
+    xhr.send(fd);
+  }
+
   function uploadRom(file) {
     if (state.uploading || !file) return;
     if (!UP_ACCEPT_RE.test(file.name)) {
@@ -820,9 +881,9 @@
 
   $('btn-add-rom').onclick = function() { $('rom-file-input').click(); };
   $('rom-file-input').onchange = function(e) {
-    var f = e.target.files && e.target.files[0];
+    var files = e.target.files;
     e.target.value = '';
-    if (f) uploadRom(f);
+    uploadRomBatch(files);
   };
   $('rom-art-input').onchange = function(e) {
     var f = e.target.files && e.target.files[0];
@@ -838,8 +899,7 @@
   romGrid.addEventListener('drop', function(e) {
     e.preventDefault();
     romGrid.classList.remove('dragover');
-    var f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) uploadRom(f);
+    uploadRomBatch(e.dataTransfer.files);
   });
 
   // ---- playing (retro emulator) ------------------------------------------

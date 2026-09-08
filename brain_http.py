@@ -296,6 +296,46 @@ def _rom_system_for(p: Path):
     return system
 
 
+# 2026-09-08: bundled at tools/chdman.exe (MAME's CHD tool, pulled from
+# the official mame0289 Windows release) so multi-track PS1 .cue+.bin
+# uploads can be packed into one .chd automatically -- see
+# _post_roms_upload_batch. Override with CHLOE_CHDMAN_PATH if moved.
+def _chdman_path() -> Path:
+    default = str(HERE / "tools" / "chdman.exe")
+    return Path(os.environ.get("CHLOE_CHDMAN_PATH", default))
+
+
+_CUE_FILE_RE = re.compile(r'(?im)^\s*FILE\s+"([^"]+)"')
+
+
+def _cue_referenced_files(cue_text: str) -> list:
+    """Ordered list of filenames a .cue sheet's FILE lines reference."""
+    return _CUE_FILE_RE.findall(cue_text)
+
+
+def _convert_cue_to_chd(cue_path: Path, dest_chd: Path) -> dict:
+    """Run `chdman createcd` to pack a staged .cue (with its track files
+    sitting alongside it) into a single .chd. {ok, error?} -- error
+    includes chdman's own stderr tail so a bad dump is diagnosable."""
+    exe = _chdman_path()
+    if not exe.exists():
+        return {"ok": False, "error": f"chdman.exe not found at {exe} "
+                                       "(set CHLOE_CHDMAN_PATH)"}
+    try:
+        import subprocess
+        proc = subprocess.run(
+            [str(exe), "createcd", "-i", str(cue_path), "-o", str(dest_chd), "-f"],
+            capture_output=True, text=True, timeout=600)
+        if proc.returncode != 0 or not dest_chd.exists():
+            tail = (proc.stderr or proc.stdout or "").strip()[-800:]
+            return {"ok": False, "error": f"chdman failed: {tail or 'unknown error'}"}
+        return {"ok": True}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "chdman timed out (600s)"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 def _roms_dir() -> Path:
     return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
 
@@ -1184,6 +1224,36 @@ class _GraphHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)})
 
+    def _save_rom_bytes(self, name: str, data: bytes) -> dict:
+        """Write one ROM's bytes into CHLOE_ROMS_DIR (de-duping the
+        filename if needed) and tag its system via _rom_system_for --
+        the same size-aware disambiguation (GC/PS2 .iso, PS1/Genesis
+        .bin) the library directory scan uses, so an upload never lands
+        tagged differently than a rescan would call it. Shared by the
+        single-file upload below and the batch upload's per-file
+        fallback (no .cue present)."""
+        name = os.path.basename((name or "").strip().replace("\\", "/"))
+        if not name:
+            return {"ok": False, "error": "missing filename"}
+        ext = Path(name).suffix.lower()
+        if ext not in _ROM_SYSTEMS:
+            return {"ok": False, "error": f"unsupported ROM extension: {ext or '(none)'}"}
+        d = _roms_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        dest = d / name
+        if dest.exists():
+            stem, suf = dest.stem, dest.suffix
+            n = 2
+            while dest.exists():
+                dest = d / f"{stem} ({n}){suf}"
+                n += 1
+        dest.write_bytes(data)
+        system = _rom_system_for(dest)
+        print(f"[roms] uploaded {dest.name} ({len(data)} bytes, system={system})",
+              flush=True)
+        return {"ok": True, "name": dest.name, "file": dest.name,
+                "system": system, "size": len(data)}
+
     def _post_roms_upload(self):
         """Save an uploaded ROM into CHLOE_ROMS_DIR. Body is the raw file
         bytes; filename comes from the X-Rom-Filename header (percent-
@@ -1198,34 +1268,102 @@ class _GraphHandler(BaseHTTPRequestHandler):
                 name = unquote(raw_name)
             except Exception:
                 name = raw_name
-            name = os.path.basename((name or "").strip().replace("\\", "/"))
-            if not name:
-                self._json(400, {"error": "missing X-Rom-Filename header"})
-                return
-            ext = Path(name).suffix.lower()
-            system = _ROM_SYSTEMS.get(ext)
-            if not system:
-                self._json(400, {"error": f"unsupported ROM extension: {ext or '(none)'}"})
-                return
-            d = _roms_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            dest = d / name
-            if dest.exists():
-                stem, suf = dest.stem, dest.suffix
-                n = 2
-                while dest.exists():
-                    dest = d / f"{stem} ({n}){suf}"
-                    n += 1
             data = self.rfile.read(length)
-            if ext == ".iso":
-                sniffed = _sniff_iso_system(data[:32])
-                if sniffed:
-                    system = sniffed
-            dest.write_bytes(data)
-            print(f"[roms] uploaded {dest.name} ({len(data)} bytes, system={system})",
-                  flush=True)
-            self._json(200, {"ok": True, "name": dest.name, "file": dest.name,
-                              "system": system, "size": len(data)})
+            res = self._save_rom_bytes(name, data)
+            self._json(200 if res.get("ok") else 400, res)
+        except Exception as e:
+            self._json(500, {"error": f"{type(e).__name__}: {e}"})
+
+    def _post_roms_upload_batch(self):
+        """Multi-file ROM upload (multipart/form-data, fields file0..fileN
+        -- see arcade.html's uploadRomBatch). A .cue among the files means
+        this is a multi-track PS1 disc: stage all the files together and
+        run chdman to pack them into one .chd in CHLOE_ROMS_DIR, since the
+        rest of this codebase (the emulator panel, _rom_system_for, the
+        native launchers) only ever knows how to play ONE file per game.
+        No .cue in the batch just saves each file individually (same as
+        the single-file endpoint, looped) -- e.g. multi-selecting several
+        unrelated single-file ROMs at once.
+
+        2026-09-08: added after Ed hit this directly -- dragging a whole
+        Twisted Metal .cue+.bin(x12) set in only kept the first file the
+        browser handed over (rom-file-input/the drop handler both only
+        ever read files[0]), silently dropping the rest. That's fixed on
+        the client side too (arcade.html now sends the whole selection
+        here instead)."""
+        import shutil
+        import subprocess
+        import tempfile
+        try:
+            content_type = self.headers.get("Content-Type", "")
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length else b""
+            if "multipart/form-data" not in content_type:
+                self._json(400, {"error": "expected multipart/form-data"})
+                return
+            parts = _parse_multipart(body, content_type)
+            files = []  # [(filename, content)], in file0..fileN order
+            for key in sorted(k for k in parts if k.startswith("file")):
+                p = parts[key]
+                fn = os.path.basename((p.get("filename") or "").strip().replace("\\", "/"))
+                content = p.get("content") or b""
+                if fn and content:
+                    files.append((fn, content))
+            if not files:
+                self._json(400, {"error": "no files in upload"})
+                return
+            if len(files) == 1:
+                res = self._save_rom_bytes(*files[0])
+                self._json(200 if res.get("ok") else 400, res)
+                return
+
+            cue_entries = [(fn, data) for fn, data in files if fn.lower().endswith(".cue")]
+            if not cue_entries:
+                # No .cue -- nothing to merge, just save each file on its own.
+                results = [self._save_rom_bytes(fn, data) for fn, data in files]
+                ok = all(r.get("ok") for r in results)
+                self._json(200, {"ok": ok, "results": results})
+                return
+            if len(cue_entries) > 1:
+                self._json(400, {"error": "more than one .cue in this upload -- "
+                                           "add one disc's files at a time"})
+                return
+            cue_name, cue_data = cue_entries[0]
+            referenced = _cue_referenced_files(cue_data.decode("utf-8", errors="replace"))
+            by_name = {fn for fn, _ in files}
+            missing = [r for r in referenced if r not in by_name]
+            if missing:
+                self._json(400, {"error": f"{cue_name} references file(s) not "
+                                           f"included in this upload: {', '.join(missing)}"})
+                return
+
+            stage = Path(tempfile.mkdtemp(prefix="chloe_chd_"))
+            try:
+                for fn, data in files:
+                    (stage / fn).write_bytes(data)
+                dest_name = Path(cue_name).stem + ".chd"
+                d = _roms_dir()
+                d.mkdir(parents=True, exist_ok=True)
+                dest = d / dest_name
+                if dest.exists():
+                    stem, suf = dest.stem, dest.suffix
+                    n = 2
+                    while dest.exists():
+                        dest = d / f"{stem} ({n}){suf}"
+                        n += 1
+                print(f"[roms] converting {cue_name} ({len(referenced)} track(s)) "
+                      f"-> {dest.name}...", flush=True)
+                conv = _convert_cue_to_chd(stage / cue_name, dest)
+                if not conv.get("ok"):
+                    self._json(500, conv)
+                    return
+                size = dest.stat().st_size
+                print(f"[roms] converted -> {dest.name} ({size} bytes)", flush=True)
+                self._json(200, {"ok": True, "name": dest.name, "file": dest.name,
+                                  "system": "psx", "size": size,
+                                  "converted": True, "tracks": len(referenced)})
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
         except Exception as e:
             self._json(500, {"error": f"{type(e).__name__}: {e}"})
 
@@ -1270,6 +1408,9 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/roms/upload":
             self._post_roms_upload()
+            return
+        if path == "/api/roms/upload_batch":
+            self._post_roms_upload_batch()
             return
         if path.startswith("/api/roms/art/"):
             self._post_rom_art_upload(path[len("/api/roms/art/"):])
