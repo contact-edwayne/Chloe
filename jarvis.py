@@ -11563,11 +11563,14 @@ def _dolphin_is_running() -> bool:
 
 def _dolphin_launch(file: str = "") -> dict:
     """Launch Dolphin.exe straight into `file` (a filename inside
-    CHLOE_ROMS_DIR) -- batch mode (process exits when emulation stops),
-    forced fullscreen and no confirm-on-stop dialog via -C config overrides
-    (Dolphin has no dedicated --fullscreen flag). Flags per Dolphin's own
-    Readme.md CLI section: -b/--batch, -e/--exec=<file>,
-    -C/--config=<System.Section.Key=Value>."""
+    CHLOE_ROMS_DIR) -- batch mode (process exits when emulation stops) and
+    no confirm-on-stop dialog via a -C config override. Deliberately does
+    NOT force fullscreen (Dolphin.Display.Fullscreen=True): that puts
+    Windows into exclusive fullscreen, which blocked minimizing the window
+    entirely (Ed hit this 2026-09-08). Opens as a normal window instead --
+    Dolphin's own fullscreen hotkey/menu still works if he wants it, but it
+    stays minimizable. Flags per Dolphin's own Readme.md CLI section:
+    -b/--batch, -e/--exec=<file>, -C/--config=<System.Section.Key=Value>."""
     global _dolphin_proc, _dolphin_file
     with _dolphin_lock:
         if _dolphin_is_running():
@@ -11585,7 +11588,6 @@ def _dolphin_launch(file: str = "") -> dict:
         try:
             _dolphin_proc = _sp_dolphin.Popen(
                 [str(exe), "-b",
-                 "-C", "Dolphin.Display.Fullscreen=True",
                  "-C", "Dolphin.Interface.ConfirmStop=False",
                  "-e", str(rom)],
                 cwd=str(exe.parent))
