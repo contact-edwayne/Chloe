@@ -43,6 +43,9 @@ _REPO_BY_SYSTEM = {
     "n64":    "Nintendo_-_Nintendo_64",
     "psx":    "Sony_-_PlayStation",
     "ps2":    "Sony_-_PlayStation_2",
+    "gc":     "Nintendo_-_GameCube",
+    # No "ps3" here -- libretro-thumbnails doesn't cover PS3, so RPCS3
+    # games only ever get art through the manual "+ ADD ART" upload.
 }
 _BRANCHES = ("master", "main")  # try in order; repos vary
 _INDEX_TTL_S = 30 * 24 * 3600    # re-check a system's title list every 30 days
