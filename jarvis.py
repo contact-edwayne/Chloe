@@ -4050,6 +4050,34 @@ async def handle_ptt_stop(data, websocket):
     await _ws_send(websocket, {"type": "ptt_stopping"})
 
 
+# ─── LISTENING MUTE (2026-09-08) ────────────────────────────────────────────
+# HUD/mobile toggle so Ed can cut Chloe off from wake-word listening on
+# demand -- "she jumps into listening when not prompted and hears music or
+# me talking and responds to it." Bypasses the LLM entirely, same shape as
+# ptt_start/ptt_stop above. The actual gate lives in _wake_detect_phase:
+# while _listening_muted is set, that loop keeps draining mic audio (so the
+# input stream doesn't back up) but never runs the wake-word predictor, so
+# nothing she hears while muted can trigger a response. Covers both stray
+# wake-word false-positives and the post-reply follow-up window, since
+# follow-up only ever starts after a real wake-word fire.
+async def handle_listening_mute_set(data, websocket):
+    if data.get("action") == "toggle":
+        muted = not _listening_muted.is_set()
+    else:
+        muted = bool(data.get("muted"))
+    if muted:
+        _listening_muted.set()
+    else:
+        _listening_muted.clear()
+    print(f"[chloe] listening {'MUTED' if muted else 'unmuted'} via WS", flush=True)
+    await _ws_broadcast({"type": "listening_mute_state", "muted": muted})
+
+
+async def handle_listening_mute_get(data, websocket):
+    await _ws_send(websocket, {"type": "listening_mute_state",
+                               "muted": _listening_muted.is_set()})
+
+
 # ─── ALWAYS-LISTEN ECHO-LOOP BACKSTOP ───────────────────────────────────────
 # Server-side guard so her own TTS can't self-trigger a new turn if a buggy or
 # rogue client bypasses its client-side mute window. While she's speaking a reply
@@ -4161,6 +4189,8 @@ async def _dispatch(data, websocket):
     elif t == "volume":    await handle_volume(data, websocket)
     elif t == "ptt_start": await handle_ptt_start(data, websocket)
     elif t == "ptt_stop":  await handle_ptt_stop(data, websocket)
+    elif t == "listening_mute_set": await handle_listening_mute_set(data, websocket)
+    elif t == "listening_mute_get": await handle_listening_mute_get(data, websocket)
     elif t == "ptt_audio": await handle_ptt_audio(data, websocket)
     elif t == "spotify_control":         await handle_spotify_control(data, websocket)
     elif t == "youtube_control":         await handle_youtube_control(data, websocket)
@@ -5621,6 +5651,7 @@ def _play_boot_chime():
 # into PTT mode and back. Voice thread polls _ptt_mode between audio reads.
 _ptt_mode        = threading.Event()  # set = PTT recording active
 _ptt_stop_signal = threading.Event()  # set = stop the PTT recording now
+_listening_muted = threading.Event()  # set = wake-word detection paused (HUD/mobile toggle)
 
 
 def _ptt_record_phase(sd, device):
@@ -6043,6 +6074,12 @@ def _wake_detect_phase(sd, device, wake):
             except Exception as e:
                 print(f"[voice] read error in wake phase: {e}")
                 return  # let outer loop reopen
+
+            if _listening_muted.is_set():
+                # Muted -- keep draining the input stream (so it doesn't
+                # back up once unmuted) but skip wake-word detection
+                # entirely. No resample/gain/predict work wasted either.
+                continue
 
             np_chunk = np.frombuffer(audio_data, dtype=np.int16)
             if needs_resample:

@@ -70,6 +70,7 @@ async def handler(websocket):
                             pass
                         continue
                 if data.get("type") in ("chat", "volume", "ptt_start", "ptt_stop", "ptt_audio",
+                                        "listening_mute_set", "listening_mute_get",
                                         "spotify_control", "youtube_control",
                                         "wallet_balance", "wallet_create_invoice",
                                         "wallet_send", "wallet_history",

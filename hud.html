@@ -195,6 +195,27 @@
   .balance-pill.refreshing { opacity: 0.55; }
   .balance-pill .lbl { opacity: 0.65; margin-right: 6px; }
   .balance-pill.error { color: #ff3355; border-color: #ff335555; }
+  .mute-pill {
+    background: rgba(0, 255, 136, 0.08);
+    border: 1px solid rgba(0, 255, 136, 0.4);
+    color: var(--green);
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    font-weight: 700;
+    font-family: 'Share Tech Mono', monospace;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    user-select: none;
+  }
+  .mute-pill:active { transform: scale(0.96); }
+  .mute-pill.muted {
+    background: rgba(255, 51, 85, 0.14);
+    border-color: rgba(255, 51, 85, 0.55);
+    color: #ff3355;
+    text-shadow: 0 0 6px rgba(255, 51, 85, 0.4);
+  }
 
   /* MUSIC OVERLAY -- Spotify player (Ed, 2026-09-06; converted from an
      always-visible docked bottom bar into a toggleable overlay/section
@@ -1894,6 +1915,9 @@
       <button class="brain-btn" id="emu-btn" onclick="toggleEmulator()" title="Arcade -- chess, Pokemon, retro emulator">ARCADE</button>
       <button class="brain-btn" id="music-btn" onclick="toggleMusic()" title="YouTube player">MUSIC</button>
       <span class="sys-tag">ONLINE</span>
+      <span id="mute-pill" class="mute-pill" title="Mute/unmute wake-word listening" onclick="toggleListeningMute()">
+        <span id="mute-label">🎙 LISTENING</span>
+      </span>
       <span id="balance-pill" class="balance-pill" title="Bitcoin Lightning balance">
         <span class="lbl">₿</span><span id="balance-value">—</span> sat
       </span>
@@ -2601,6 +2625,20 @@
   }
   let currentReplyEl = null;       // bubble being filled by streaming deltas
   let currentReplyText = '';
+  let listeningMuted = false;
+  function updateMutePill(muted) {
+    listeningMuted = muted;
+    const pill = document.getElementById('mute-pill');
+    const label = document.getElementById('mute-label');
+    if (!pill || !label) return;
+    pill.classList.toggle('muted', muted);
+    label.textContent = muted ? '🔇 MUTED' : '🎙 LISTENING';
+  }
+  function toggleListeningMute() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'listening_mute_set', action: 'toggle' }));
+    }
+  }
   let busy = false;
 
   // Browser TTS removed: chat replies now use the backend's ElevenLabs voice
@@ -2619,6 +2657,10 @@
       wsReady = true;
       console.log('[hud] connected to Chloe backend');
       splash.onConnect();
+      // Ask the backend for the current listening-mute state so the
+      // pill reflects reality immediately (it may have been toggled from
+      // the phone while this HUD was disconnected).
+      ws.send(JSON.stringify({ type: 'listening_mute_get' }));
       // Kick off balance polling — fetch immediately, then every 30s.
       requestWalletBalance();
       if (!_balancePollTimer) {
@@ -2665,6 +2707,10 @@
   }
 
   function handleStructured(data) {
+    if (data.type === 'listening_mute_state') {
+      updateMutePill(!!data.muted);
+      return;
+    }
     if (data.type === 'tts_amp') {
       // Real audio amplitude streamed from the backend during local
       // (PC-speaker) TTS playback. The orb reads these (window globals) to

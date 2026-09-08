@@ -1023,6 +1023,9 @@
   .orb-menu-btn:active { background: rgba(0, 247, 255, 0.16); }
   .orb-menu-btn.wallet { color: var(--amber); border-color: rgba(255, 170, 0, 0.4); }
   .orb-menu-btn.wallet:active { background: rgba(255, 170, 0, 0.1); }
+  .orb-menu-btn.mute { color: #ff3355; border-color: rgba(255, 51, 85, 0.4); }
+  .orb-menu-btn.mute:active { background: rgba(255, 51, 85, 0.1); }
+  .orb-menu-btn.mute.is-muted { background: rgba(255, 51, 85, 0.18); }
 </style>
 </head>
 <body>
@@ -1265,6 +1268,7 @@
     <div class="modal-title">MENU</div>
     <button class="orb-menu-btn" id="orb-menu-chats">⟲ RECENT CHATS</button>
     <button class="orb-menu-btn wallet" id="orb-menu-wallet">₿ WALLET</button>
+    <button class="orb-menu-btn mute" id="orb-menu-mute">🎙 MUTE LISTENING</button>
     <div class="modal-buttons">
       <button class="modal-btn" id="orb-menu-close">CLOSE</button>
     </div>
@@ -1504,6 +1508,7 @@ function connectWS() {
     wsReady = true;
     setConn('up');
     console.log('[chloe] connected to', WS_URL);
+    wsSendObj({ type: 'listening_mute_get' });
   };
   ws.onclose = () => {
     wsReady = false;
@@ -1536,7 +1541,10 @@ function scheduleReconnect() {
 }
 
 function handleStructured(data) {
-  if (data.type === 'tool_start') {
+  if (data.type === 'listening_mute_state') {
+    listeningMuted = !!data.muted;
+    updateMuteMenuBtn();
+  } else if (data.type === 'tool_start') {
     if (!currentReplyEl) currentReplyEl = appendMsg('chloe', '');
     currentReplyEl.querySelector('.msg-bubble').textContent = '🔎 ' + (data.text || 'Searching…');
   } else if (data.type === 'start') {
@@ -2567,6 +2575,14 @@ const sendStatusEl    = document.getElementById('send-status');
 
 let lastInvoice = '';
 
+let listeningMuted = false;
+function updateMuteMenuBtn() {
+  const btn = document.getElementById('orb-menu-mute');
+  if (!btn) return;
+  btn.textContent = listeningMuted ? '🔇 UNMUTE LISTENING' : '🎙 MUTE LISTENING';
+  btn.classList.toggle('is-muted', listeningMuted);
+}
+
 function wsSendObj(obj) {
   // Wallet reads/sends need the shared token -- see WALLET_WS_TOKEN above.
   if (obj && typeof obj.type === 'string' && obj.type.indexOf('wallet_') === 0) {
@@ -3343,6 +3359,10 @@ const _orbFrameEl = document.querySelector('.orb-frame');
 if (_orbFrameEl) _orbFrameEl.addEventListener('click', openOrbMenu);
 document.getElementById('orb-menu-chats').addEventListener('click', () => { closeOrbMenu(); openSessions(); });
 document.getElementById('orb-menu-wallet').addEventListener('click', () => { closeOrbMenu(); openWallet(); });
+document.getElementById('orb-menu-mute').addEventListener('click', () => {
+  wsSendObj({ type: 'listening_mute_set', action: 'toggle' });
+  closeOrbMenu();
+});
 document.getElementById('orb-menu-close').addEventListener('click', closeOrbMenu);
 orbMenu.addEventListener('click', (e) => { if (e.target === orbMenu) closeOrbMenu(); });
 document.getElementById('sessions-close-btn').addEventListener('click', closeSessions);
