@@ -2585,6 +2585,9 @@
 
   let ws = null;
   let wsReady = false;
+  // Shared secret required on wallet_* WS messages -- see hud_server.py /
+  // .env's CHLOE_WALLET_WS_TOKEN (2026-09-08 security fix). Keep in sync.
+  const WALLET_WS_TOKEN = 'dJklZ9J2RP5S2oNL0uaUyqVO7nRgJa3KsYNDYpwy3jo';
   let chatHistory = [];           // [{role:'user'|'assistant', content:'...'}]
   // Cap chat history so long sessions don't bloat the request payload past
   // Groq's per-model size limit. Compound-mini (the search model) has only
@@ -3668,7 +3671,7 @@
     const pill = document.getElementById('balance-pill');
     if (pill) pill.classList.add('refreshing');
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'wallet_balance' }));
+      ws.send(JSON.stringify({ type: 'wallet_balance', token: WALLET_WS_TOKEN }));
     } else if (pill) {
       // WS not open — clear the pulse anyway so it doesn't get stuck.
       setTimeout(() => pill.classList.remove('refreshing'), 200);

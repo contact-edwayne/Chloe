@@ -1426,6 +1426,9 @@ const pttHint     = $('ptt-hint');
 // ─────────────────────────────────────────────────────────────────────────────
 let ws = null;
 let wsReady = false;
+// Shared secret required on wallet_* WS messages -- see hud_server.py /
+// .env's CHLOE_WALLET_WS_TOKEN (2026-09-08 security fix). Keep in sync.
+const WALLET_WS_TOKEN = 'dJklZ9J2RP5S2oNL0uaUyqVO7nRgJa3KsYNDYpwy3jo';
 let chatHistory = [];          // [{role, content}]
 const HISTORY_MAX = 16;
 let currentReplyEl = null;
@@ -2565,6 +2568,10 @@ const sendStatusEl    = document.getElementById('send-status');
 let lastInvoice = '';
 
 function wsSendObj(obj) {
+  // Wallet reads/sends need the shared token -- see WALLET_WS_TOKEN above.
+  if (obj && typeof obj.type === 'string' && obj.type.indexOf('wallet_') === 0) {
+    obj = Object.assign({ token: WALLET_WS_TOKEN }, obj);
+  }
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
     return true;

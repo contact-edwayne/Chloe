@@ -39,6 +39,16 @@ DEFAULT_DAILY_CAP_SAT = 10_000  # ~a few US dollars at typical BTC prices
 MIN_PIN_LEN = 4
 MAX_PIN_LEN = 32
 
+# PIN lockout (2026-09-08, security audit finding): authorize_send() used to
+# call verify_pin() with no limit on failed attempts. A 4-char PIN is only
+# 10,000 numeric combinations, and the wallet's read endpoints (until the
+# same audit's WS-token fix) were reachable by anyone on the network --
+# nothing stopped a scripted brute force. Daily spend cap already bounds
+# the damage per day, but the PIN itself was still guessable. Lock out
+# after MAX_FAILED_ATTEMPTS wrong PINs within LOCKOUT_WINDOW_SEC.
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_WINDOW_SEC = 15 * 60  # 15 minutes
+
 
 def daily_cap_sat() -> int:
     raw = os.environ.get("CHLOE_WALLET_DAILY_CAP_SAT", "")
@@ -123,7 +133,68 @@ def _conn():
         )
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_spends_day ON spends(day)")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pin_failures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pin_failures_ts ON pin_failures(ts)")
     return c
+
+
+# ─── PIN attempt lockout ────────────────────────────────────────────────────
+def _record_pin_failure() -> None:
+    c = _conn()
+    try:
+        c.execute("INSERT INTO pin_failures (ts) VALUES (?)",
+                   (int(_dt.datetime.now().timestamp()),))
+        c.commit()
+    finally:
+        c.close()
+
+
+def _clear_pin_failures() -> None:
+    """Called after a correct PIN -- a legitimate unlock resets the count
+    rather than making the owner wait out the window too."""
+    c = _conn()
+    try:
+        c.execute("DELETE FROM pin_failures")
+        c.commit()
+    finally:
+        c.close()
+
+
+def _recent_pin_failures() -> int:
+    cutoff = int(_dt.datetime.now().timestamp()) - LOCKOUT_WINDOW_SEC
+    c = _conn()
+    try:
+        row = c.execute(
+            "SELECT COUNT(*) FROM pin_failures WHERE ts >= ?", (cutoff,)
+        ).fetchone()
+        return int(row[0] or 0)
+    finally:
+        c.close()
+
+
+def lockout_remaining_sec() -> int:
+    """0 if not locked out, else seconds until the oldest attempt in the
+    current window ages out."""
+    if _recent_pin_failures() < MAX_FAILED_ATTEMPTS:
+        return 0
+    cutoff = int(_dt.datetime.now().timestamp()) - LOCKOUT_WINDOW_SEC
+    c = _conn()
+    try:
+        row = c.execute(
+            "SELECT MIN(ts) FROM pin_failures WHERE ts >= ?", (cutoff,)
+        ).fetchone()
+        oldest = int(row[0] or 0)
+        if not oldest:
+            return 0
+        remaining = LOCKOUT_WINDOW_SEC - (int(_dt.datetime.now().timestamp()) - oldest)
+        return max(remaining, 0)
+    finally:
+        c.close()
 
 
 def _today_key() -> str:
@@ -189,9 +260,19 @@ def authorize_send(amount_sat: int, pin: str) -> tuple[bool, str]:
             f"Remaining today: {remaining} sat."
         )
 
+    remaining_lockout = lockout_remaining_sec()
+    if remaining_lockout > 0:
+        mins = max(remaining_lockout // 60, 1)
+        return False, (
+            f"Wallet locked after {MAX_FAILED_ATTEMPTS} wrong PIN attempts. "
+            f"Try again in about {mins} minute(s)."
+        )
+
     if not verify_pin(pin or ""):
+        _record_pin_failure()
         return False, "Incorrect PIN."
 
+    _clear_pin_failures()
     return True, "ok"
 
 
@@ -226,6 +307,11 @@ def _cli(argv: list[str]) -> int:
         print(f"PIN set     : {PIN_FILE.exists()}")
         print(f"Daily cap   : {daily_cap_sat()} sat")
         print(f"Spent today : {daily_spent_sat()} sat")
+        remaining_lockout = lockout_remaining_sec()
+        if remaining_lockout > 0:
+            print(f"Locked out  : yes, ~{max(remaining_lockout // 60, 1)} min remaining")
+        else:
+            print(f"Locked out  : no")
         return 0
     print(f"Unknown command: {cmd}")
     return 2

@@ -20,6 +20,22 @@ _replay_messages: list[str] = []
 WS_HOST = os.environ.get("CHLOE_WS_HOST", "0.0.0.0")
 WS_PORT = int(os.environ.get("CHLOE_WS_PORT", "6789"))
 
+# Shared secret gating wallet_* messages specifically (2026-09-08, security
+# audit finding). The WS itself stays unauthenticated for chat/lights/etc --
+# narrowing this to just the wallet message types keeps the blast radius of
+# the fix small (only hud.html/chloe-mobile.html needed updating, every
+# other panel is untouched) while closing the actual leak: wallet_balance/
+# wallet_history/wallet_create_invoice had ZERO auth before this, readable
+# by anyone who could reach port 6789 (not just Tailscale -- 0.0.0.0 binds
+# every interface). wallet_send already required a PIN; it now also
+# requires this token, same as the read-only calls.
+WALLET_WS_TOKEN = os.environ.get("CHLOE_WALLET_WS_TOKEN", "").strip()
+_WALLET_MSG_TYPES = ("wallet_balance", "wallet_create_invoice",
+                     "wallet_send", "wallet_history")
+if not WALLET_WS_TOKEN:
+    print("[hud_server] WARNING: CHLOE_WALLET_WS_TOKEN not set -- wallet_* "
+          "WS messages are UNAUTHENTICATED. Set it in .env.", flush=True)
+
 async def handler(websocket):
     global jarvis_handler
     hud_clients.add(websocket)
@@ -39,6 +55,20 @@ async def handler(websocket):
         async for message in websocket:
             try:
                 data = json.loads(message)
+                _mtype = data.get("type")
+                if _mtype in _WALLET_MSG_TYPES and WALLET_WS_TOKEN:
+                    if data.get("token") != WALLET_WS_TOKEN:
+                        print(f"[hud_server] rejected {_mtype!r} -- bad/missing "
+                              f"wallet WS token", flush=True)
+                        try:
+                            await websocket.send(json.dumps({
+                                "type": f"{_mtype}_result",
+                                "ok": False,
+                                "error": "unauthorized",
+                            }))
+                        except Exception:
+                            pass
+                        continue
                 if data.get("type") in ("chat", "volume", "ptt_start", "ptt_stop", "ptt_audio",
                                         "spotify_control", "youtube_control",
                                         "wallet_balance", "wallet_create_invoice",
