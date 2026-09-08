@@ -121,7 +121,19 @@ def _ollama_vision_available() -> bool:
 
 def _describe_screen_ollama(image_bytes: bytes, prompt: str) -> dict:
     """Try local Ollama vision. {'ok': True, 'text', 'model'} on success,
-    {'ok': False} on any failure — caller falls back to Groq."""
+    {'ok': False} on any failure — caller falls back to Groq.
+
+    2026-09-08: was hard-timing-out at 60s on EVERY arcade watch-mode call
+    (confirmed in logs/backend.log — 100% failure rate while a game is
+    running, almost certainly GPU contention between the local vision
+    model and the emulator itself). That meant every watch comment paid a
+    full 60s dead wait before even starting the real (fast) Groq call.
+    Trimmed the timeout to 15s (still enough for a legitimate idle-GPU
+    local call, e.g. plain /see) and num_predict down from 900 to 120 —
+    this is meant to produce ONE short sentence, not up to 900 tokens of
+    rambling, which was also inflating latency on the rare local calls
+    that *did* complete. See describe_screen's `try_local` param for the
+    watch-loop's own fix: it skips this path entirely during gameplay."""
     try:
         import requests
         b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -132,9 +144,9 @@ def _describe_screen_ollama(image_bytes: bytes, prompt: str) -> dict:
                 "messages": [{"role": "user", "content": prompt, "images": [b64]}],
                 "stream": False,
                 "keep_alive": OLLAMA_KEEP_ALIVE,
-                "options": {"temperature": 0.4, "num_predict": 900},
+                "options": {"temperature": 0.4, "num_predict": 120},
             },
-            timeout=60,
+            timeout=15,
         )
         if r.status_code != 200:
             print(f"[vision] Ollama HTTP {r.status_code}: {r.text[:200]}", flush=True)
@@ -319,11 +331,15 @@ def _upscale_for_vision(png_bytes: bytes, target: int = 480, max_factor: int = 4
         return png_bytes
 
 
-def describe_screen(image_bytes: bytes, prompt: str = "") -> dict:
-    """Try local Ollama vision first (no Groq quota spent — this is the
-    quota-sensitive arcade watch-loop's vision call, not just the on-demand
-    /see command). Groq Llama 4 Scout is the fallback when the local vision
-    model isn't pulled or the daemon errors.
+def describe_screen(image_bytes: bytes, prompt: str = "", try_local: bool = True) -> dict:
+    """Try local Ollama vision first (no Groq quota spent), then fall back to
+    Groq Llama 4 Scout. Groq is also used directly when `try_local=False`.
+
+    2026-09-08: the arcade watch loop now passes try_local=False. Local
+    vision was timing out 100% of the time while a game is actually
+    running (GPU contention with the emulator) — every watch comment was
+    paying a dead ~60s wait before it ever reached Groq. The plain /see
+    command (not gaming, GPU idle) still gets local-first as before.
 
     Returns {'ok': bool, 'text': str, 'model': str, 'error': str?}.
     """
@@ -336,7 +352,7 @@ def describe_screen(image_bytes: bytes, prompt: str = "") -> dict:
         user_prompt = DEFAULT_PROMPT
     image_bytes = _upscale_for_vision(image_bytes)
 
-    if _ollama_vision_available():
+    if try_local and _ollama_vision_available():
         local = _describe_screen_ollama(image_bytes, user_prompt)
         if local.get("ok"):
             return local

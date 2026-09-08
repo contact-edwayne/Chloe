@@ -12380,7 +12380,10 @@ def _arcade_comment_once(game: str, recent_str: str,
             f"\n\n{game_hint}"
             + ed_inj + facts_inj + recent_block + comments_block + linger_block
         )
-        res = screen_vision.describe_screen(png, prompt=prompt)
+        # try_local=False: local Ollama vision has a 100% timeout rate while
+        # a game is actually running (GPU contention) -- see
+        # screen_vision.describe_screen's docstring. Go straight to Groq.
+        res = screen_vision.describe_screen(png, prompt=prompt, try_local=False)
         h = _arcade_png_hash(png)
         if not res.get("ok"):
             return "", h
