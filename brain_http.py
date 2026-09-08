@@ -237,6 +237,9 @@ _ROM_SYSTEMS = {
     # GameCube -- .rvz is Dolphin's own compressed dump format (what's
     # actually in Games/ROMs/GameCube); .gcm is a raw GC disc dump.
     ".rvz": "gc", ".gcm": "gc",
+    # PS3 -- ".ps3iso" disambiguates a PS3 disc dump from PS1/PS2's own
+    # .iso/.cue (a convention several emulation frontends already use).
+    ".ps3iso": "ps3",
 }
 
 
@@ -632,6 +635,16 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._file(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/rpcs3_panel.html":
+            # Native PS3 launcher panel -- RPCS3 runs as its own OS window,
+            # same story as dolphin_panel.html / pcsx2_panel.html below.
+            page = HERE / "rpcs3_panel.html"
+            if not page.exists():
+                self._text(404, "rpcs3_panel.html not found next to brain_http.py")
+                return
+            self._file(200, page, "text/html; charset=utf-8")
+            return
+
         if path == "/dolphin_panel.html":
             # Native GameCube launcher panel -- Dolphin runs as its own OS
             # window, same story as pcsx2_panel.html below.
@@ -677,6 +690,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
 
         if path == "/api/dolphin/status":
             self._get_dolphin_status()
+            return
+
+        if path == "/api/rpcs3/status":
+            self._get_rpcs3_status()
             return
 
         if path == "/api/roms":
@@ -974,6 +991,37 @@ class _GraphHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)})
 
+    def _get_rpcs3_status(self):
+        try:
+            import jarvis  # type: ignore
+            self._json(200, jarvis._rpcs3_status())
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_rpcs3_launch(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            data = self.rfile.read(length) if length > 0 else b""
+            file = ""
+            if data:
+                try:
+                    file = (json.loads(data.decode("utf-8")) or {}).get("file", "")
+                except Exception:
+                    file = ""
+            import jarvis  # type: ignore
+            res = jarvis._rpcs3_launch(file)
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_rpcs3_stop(self):
+        try:
+            import jarvis  # type: ignore
+            res = jarvis._rpcs3_stop()
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
     def _post_gen1recomp_launch(self):
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -1104,6 +1152,12 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/dolphin/stop":
             self._post_dolphin_stop()
+            return
+        if path == "/api/rpcs3/launch":
+            self._post_rpcs3_launch()
+            return
+        if path == "/api/rpcs3/stop":
+            self._post_rpcs3_stop()
             return
         self._text(404, f"POST not supported on: {path}")
 

@@ -11618,6 +11618,91 @@ def _dolphin_stop() -> dict:
     return {"ok": True, "running": False}
 
 
+# ─── rpcs3: native PS3 emulation ────────────────────────────────────────────
+# Same story as pcsx2/dolphin above -- no browser/WASM PS3 core exists, so
+# this launches real rpcs3.exe as its own process/window and just tracks it.
+# ROMs are whatever's tagged "ps3" in _ROM_SYSTEMS (brain_http.py) -- files
+# named *.ps3iso (the emulation-frontend convention for a PS3 disc dump,
+# to disambiguate from PS1/PS2's own .iso/.cue). RPCS3 needs PS3 firmware
+# already installed (one-time, done from its own GUI) -- that's on Ed, not
+# something this launcher can do for him.
+_rpcs3_proc = None   # subprocess.Popen | None
+_rpcs3_file = ""     # last-launched ROM filename (relative to CHLOE_ROMS_DIR)
+_rpcs3_lock = threading.Lock()
+
+
+def _rpcs3_roms_dir() -> Path:
+    return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
+
+
+def _rpcs3_exe_path() -> Path:
+    default = r"C:\Users\eleew\Downloads\rpcs3-v0.0.42-19958-54014a7d_win64_msvc\rpcs3.exe"
+    return Path(os.environ.get("CHLOE_RPCS3_PATH", default))
+
+
+def _rpcs3_is_running() -> bool:
+    global _rpcs3_proc
+    if _rpcs3_proc is None:
+        return False
+    if _rpcs3_proc.poll() is not None:
+        _rpcs3_proc = None
+        return False
+    return True
+
+
+def _rpcs3_launch(file: str = "") -> dict:
+    """Launch rpcs3.exe straight into `file` (a filename inside
+    CHLOE_ROMS_DIR) -- --no-gui (process exits when emulation stops) plus
+    --fullscreen (only honored together with --no-gui). Flags per RPCS3's
+    own CLI parser (rpcs3.cpp): --no-gui, --fullscreen, and a positional
+    path argument for the disc/SELF to boot."""
+    global _rpcs3_proc, _rpcs3_file
+    with _rpcs3_lock:
+        if _rpcs3_is_running():
+            return {"ok": False, "error": "already running", "pid": _rpcs3_proc.pid}
+        exe = _rpcs3_exe_path()
+        if not exe.exists():
+            return {"ok": False,
+                     "error": f"rpcs3.exe not found at {exe} (set CHLOE_RPCS3_PATH)"}
+        name = os.path.basename((file or "").strip().replace("\\", "/"))
+        if not name:
+            return {"ok": False, "error": "no game file given"}
+        rom = _rpcs3_roms_dir() / name
+        if not rom.exists():
+            return {"ok": False, "error": f"game not found: {rom}"}
+        try:
+            _rpcs3_proc = _sp_dolphin.Popen(
+                [str(exe), "--no-gui", "--fullscreen", str(rom)],
+                cwd=str(exe.parent))
+            _rpcs3_file = name
+            print(f"[rpcs3] launched pid={_rpcs3_proc.pid} file={name}", flush=True)
+            return {"ok": True, "pid": _rpcs3_proc.pid, "file": name}
+        except Exception as e:
+            _rpcs3_proc = None
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _rpcs3_status() -> dict:
+    running = _rpcs3_is_running()
+    return {"ok": True, "running": running,
+            "pid": (_rpcs3_proc.pid if running else None),
+            "file": _rpcs3_file if running else ""}
+
+
+def _rpcs3_stop() -> dict:
+    """Best-effort terminate -- RPCS3 handles its own save data, this is
+    just a convenience kill switch, not a clean-shutdown request."""
+    global _rpcs3_proc
+    if not _rpcs3_is_running():
+        return {"ok": True, "running": False}
+    try:
+        _rpcs3_proc.terminate()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    _rpcs3_proc = None
+    return {"ok": True, "running": False}
+
+
 def _arcade_set_frame(png: bytes) -> int:
     """Store the latest in-game frame. Returns bytes stored."""
     if not png:
