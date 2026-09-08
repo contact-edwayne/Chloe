@@ -954,6 +954,55 @@
   $('tile-poke').onclick = function() { setView('pokemon'); };
   $('tile-steam').onclick = function() { setView('steam'); };
 
+  // ---- realtime bridge (voice-triggered ROM loads) ----------------------
+  // play_game (jarvis.py) can only *start a process* for PS2/GameCube/PS3/
+  // Steam -- NES/GB/GBA/SNES/Genesis/N64/PS1 run entirely inside this page
+  // via EmulatorJS, so there's no process to launch. Instead jarvis.py
+  // pushes an "arcade_load_game" message over the same WS hud.html/
+  // chloe-mobile.html already use, and this page jumps straight to the
+  // Playing view when it arrives. A "client_hello" on connect lets
+  // hud_server track whether an Arcade panel is actually open anywhere, so
+  // play_game can tell Ed honestly if there's nowhere to push the load to.
+  var ARCADE_WS_URL = (function() {
+    var u = new URLSearchParams(location.search).get('ws');
+    if (u) return u;
+    if (location.protocol === 'https:') return 'wss://' + location.host + '/chloe-ws';
+    return 'ws://' + (location.hostname || 'localhost') + ':6789';
+  })();
+  var arcadeWs = null;
+  var arcadeWsReconnectTimer = null;
+  function scheduleArcadeWsReconnect() {
+    if (arcadeWsReconnectTimer) return;
+    arcadeWsReconnectTimer = setTimeout(function() {
+      arcadeWsReconnectTimer = null;
+      connectArcadeWs();
+    }, 1500);
+  }
+  function connectArcadeWs() {
+    try {
+      arcadeWs = new WebSocket(ARCADE_WS_URL);
+    } catch (e) {
+      scheduleArcadeWsReconnect();
+      return;
+    }
+    arcadeWs.onopen = function() {
+      try { arcadeWs.send(JSON.stringify({ type: 'client_hello', client: 'arcade' })); }
+      catch (e) {}
+    };
+    arcadeWs.onmessage = function(ev) {
+      var data = null;
+      try { data = JSON.parse(ev.data); } catch (e) { return; }
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'arcade_load_game') {
+        state.loaded = { file: data.file, system: data.system, name: data.name || data.file };
+        setView('playing');
+      }
+    };
+    arcadeWs.onclose = scheduleArcadeWsReconnect;
+    arcadeWs.onerror = function() { try { arcadeWs.close(); } catch (e) {} };
+  }
+  connectArcadeWs();
+
   // ---- init -------------------------------------------------------------
   paint();
   renderDrawer();

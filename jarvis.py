@@ -652,11 +652,11 @@ def _build_turn_preamble(model: str | None = None, *, voice: bool) -> str:
             f"always call the tool. If a tool reports 'not configured', tell Ed "
             f"plainly that his Steam API key/SteamID aren't set up yet.\n"
             f"- You can launch games by voice with `play_game` — covers Steam, "
-            f"PS2 (PCSX2), GameCube (Dolphin), PS3 (RPCS3), and Pokemon Gen 1 "
-            f"(gen1recomp). It does NOT cover NES/Game Boy/GBA/SNES/Genesis/N64/"
-            f"PS1 — those only run in the browser Arcade panel, so tell Ed to "
-            f"launch those from there instead. Never invent a launch result — "
-            f"always call the tool.\n\n"
+            f"PS2 (PCSX2), GameCube (Dolphin), PS3 (RPCS3), Pokemon Gen 1 "
+            f"(gen1recomp), and NES/Game Boy/GBA/SNES/Genesis/N64/PS1 (loads "
+            f"in the Arcade panel — needs it already open on a screen; if the "
+            f"tool reports it isn't open, tell Ed to open it first). Never "
+            f"invent a launch result — always call the tool.\n\n"
             f"STYLE:\n"
             f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
             f"- Keep replies short, friendly, and conversational — usually one or two "
@@ -6873,20 +6873,24 @@ STEAM_TOOL_NAMES = set(STEAM_TOOL_SCHEMAS.keys())
 # _rpcs3_launch below), and gen1recomp for Pokemon Red/Blue/Yellow.
 # Replaces the old steam_launch tool above -- folding Steam launch in here
 # too avoids the model having two overlapping "launch X" tools to choose
-# between. Deliberately does NOT cover the browser-only EmulatorJS systems
-# (NES/GB/GBA/SNES/Genesis/N64/PS1) -- there's no process to launch for
-# those, they only run inside the Arcade panel's own page.
+# between. The browser-only EmulatorJS systems (NES/GB/GBA/SNES/Genesis/
+# N64/PS1) have no process to launch -- for those this pushes an
+# "arcade_load_game" WS message (hud_server.py) to any open Arcade panel
+# tab instead, which jumps to the Playing view and loads the ROM there.
+# Honest either way: if no Arcade panel is open (hud_server.
+# arcade_client_count() == 0) there's nowhere to push the load to, so
+# that's reported as a real failure rather than a silent no-op.
 PLAY_GAME_SCHEMA = {
     "type": "function",
     "function": {
         "name": "play_game",
         "description": (
             "Launch a game by name on Ed's PC. Covers Steam, PS2 "
-            "(PCSX2), GameCube (Dolphin), PS3 (RPCS3), and Pokemon Red/"
-            "Blue/Yellow (gen1recomp). Use for 'play X', 'launch X', "
-            "'start X', 'open X'. Does NOT cover NES, Game Boy, GBA, "
-            "SNES, Genesis, N64, or PS1 -- those run in the browser "
-            "Arcade panel only, with no voice launch path."
+            "(PCSX2), GameCube (Dolphin), PS3 (RPCS3), Pokemon Red/Blue/"
+            "Yellow (gen1recomp), and NES/Game Boy/GBA/SNES/Genesis/N64/"
+            "PS1 (loads in the Arcade panel -- requires the Arcade panel "
+            "to already be open on a screen somewhere). Use for 'play "
+            "X', 'launch X', 'start X', 'open X'."
         ),
         "parameters": {
             "type": "object",
@@ -7549,11 +7553,10 @@ def _resolve_rom_candidate(name: str, candidates: list) -> Path | None:
 
 def _play_game(name: str) -> dict:
     """Voice-unified 'play X': Steam first, then a CHLOE_ROMS_DIR scan
-    for PS2/GameCube/PS3, then Pokemon Gen 1. Browser-only EmulatorJS
-    systems (NES/GB/GBA/SNES/Genesis/N64/PS1) have no voice-reachable
-    launch path -- reported honestly (pointing at the Arcade panel)
-    rather than silently failing or guessing. Returns {ok, system, ...}
-    or {ok: False, error, ...}."""
+    for PS2/GameCube/PS3, then browser-only EmulatorJS systems (NES/GB/
+    GBA/SNES/Genesis/N64/PS1 -- pushed to an open Arcade panel tab over
+    WS rather than launched as a process), then Pokemon Gen 1. Returns
+    {ok, system, ...} or {ok: False, error, ...}."""
     name = (name or "").strip()
     if not name:
         return {"ok": False, "error": "no game name given"}
@@ -7596,11 +7599,22 @@ def _play_game(name: str) -> dict:
                 if bo_hit:
                     sysname = bh._rom_system_for(bo_hit)
                     label = _ROM_BROWSER_ONLY_SYSTEMS.get(sysname, sysname)
+                    if hud_server.arcade_client_count() > 0:
+                        hud_server.broadcast_sync(json.dumps({
+                            "type": "arcade_load_game",
+                            "file": bo_hit.name,
+                            "system": sysname,
+                            "name": bo_hit.stem,
+                        }))
+                        return {"ok": True, "system": sysname,
+                                "browser_only": True, "file": bo_hit.name,
+                                "name": bo_hit.stem}
                     return {"ok": False,
                             "error": (f"'{bo_hit.stem}' is a {label} game -- "
-                                      f"those only run in the browser Arcade "
-                                      f"panel, there's no voice launch for "
-                                      f"that system yet."),
+                                      f"the Arcade panel isn't open on any "
+                                      f"screen right now, so there's nowhere "
+                                      f"to load it. Open the Arcade panel "
+                                      f"first."),
                             "browser_only": True, "system": sysname}
         except Exception as e:
             print(f"[chloe] play_game ROM scan failed: {type(e).__name__}: {e}",

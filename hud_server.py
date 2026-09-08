@@ -4,6 +4,14 @@ import os
 import websockets
 
 hud_clients = set()
+# Subset of hud_clients known to be an open arcade.html tab (registered via
+# a "client_hello" message on connect -- see handler() below). Lets
+# jarvis.py's play_game tool tell whether pushing an "arcade_load_game"
+# message (for the browser-only EmulatorJS systems: NES/GB/GBA/SNES/
+# Genesis/N64/PS1) has anywhere to land, instead of guessing from the
+# generic hud_clients count (which also includes hud.html/chloe-mobile.html
+# tabs that wouldn't act on it).
+arcade_clients = set()
 jarvis_handler = None
 server_loop = None
 
@@ -69,6 +77,13 @@ async def handler(websocket):
                         except Exception:
                             pass
                         continue
+                if data.get("type") == "client_hello":
+                    if data.get("client") == "arcade":
+                        arcade_clients.add(websocket)
+                        print(f"[hud_server] arcade client registered. Total arcade: {len(arcade_clients)}",
+                              flush=True)
+                    continue
+
                 if data.get("type") in ("chat", "volume", "ptt_start", "ptt_stop", "ptt_audio",
                                         "listening_mute_set", "listening_mute_get",
                                         "spotify_control", "youtube_control",
@@ -117,6 +132,7 @@ async def handler(websocket):
         pass
     finally:
         hud_clients.discard(websocket)
+        arcade_clients.discard(websocket)
         print(f"Client disconnected. Total: {len(hud_clients)}")
 
 async def broadcast(message):
@@ -166,6 +182,13 @@ def broadcast_sync(message):
 def set_jarvis_handler(fn):
     global jarvis_handler
     jarvis_handler = fn
+
+
+def arcade_client_count() -> int:
+    """How many open arcade.html tabs are currently connected -- lets
+    play_game's browser-only-system branch (jarvis.py) tell Ed honestly
+    whether an arcade_load_game push has anywhere to land."""
+    return len(arcade_clients)
 
 
 def cache_for_replay(message):
