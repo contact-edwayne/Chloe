@@ -234,6 +234,9 @@ _ROM_SYSTEMS = {
     # PS2 discs are DVDs -- one big single-file image is the norm, unlike
     # PS1's multi-track CD (.cue+.bin) convention, so .iso is unambiguous.
     ".iso": "ps2",
+    # GameCube -- .rvz is Dolphin's own compressed dump format (what's
+    # actually in Games/ROMs/GameCube); .gcm is a raw GC disc dump.
+    ".rvz": "gc", ".gcm": "gc",
 }
 
 
@@ -629,6 +632,16 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._file(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/dolphin_panel.html":
+            # Native GameCube launcher panel -- Dolphin runs as its own OS
+            # window, same story as pcsx2_panel.html below.
+            page = HERE / "dolphin_panel.html"
+            if not page.exists():
+                self._text(404, "dolphin_panel.html not found next to brain_http.py")
+                return
+            self._file(200, page, "text/html; charset=utf-8")
+            return
+
         if path == "/pcsx2_panel.html":
             # Native PS2 launcher panel -- PCSX2 runs as its own OS window
             # (see arcade.html's mountPlaying(), which points the "playing"
@@ -660,6 +673,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
 
         if path == "/api/pcsx2/status":
             self._get_pcsx2_status()
+            return
+
+        if path == "/api/dolphin/status":
+            self._get_dolphin_status()
             return
 
         if path == "/api/roms":
@@ -926,6 +943,37 @@ class _GraphHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)})
 
+    def _get_dolphin_status(self):
+        try:
+            import jarvis  # type: ignore
+            self._json(200, jarvis._dolphin_status())
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_dolphin_launch(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            data = self.rfile.read(length) if length > 0 else b""
+            file = ""
+            if data:
+                try:
+                    file = (json.loads(data.decode("utf-8")) or {}).get("file", "")
+                except Exception:
+                    file = ""
+            import jarvis  # type: ignore
+            res = jarvis._dolphin_launch(file)
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_dolphin_stop(self):
+        try:
+            import jarvis  # type: ignore
+            res = jarvis._dolphin_stop()
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
     def _post_gen1recomp_launch(self):
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -1050,6 +1098,12 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/pcsx2/stop":
             self._post_pcsx2_stop()
+            return
+        if path == "/api/dolphin/launch":
+            self._post_dolphin_launch()
+            return
+        if path == "/api/dolphin/stop":
+            self._post_dolphin_stop()
             return
         self._text(404, f"POST not supported on: {path}")
 

@@ -11527,6 +11527,97 @@ def _pcsx2_stop() -> dict:
     return {"ok": True, "running": False}
 
 
+# ─── dolphin: native GameCube (and Wii) emulation ───────────────────────────
+# Same story as pcsx2 above -- no browser/WASM GameCube core exists, so this
+# launches real Dolphin.exe as its own process/window and just tracks it.
+# ROMs are whatever's tagged "gc" in _ROM_SYSTEMS (brain_http.py) -- .rvz
+# (Dolphin's own compressed format) and raw .gcm dumps.
+import subprocess as _sp_dolphin
+
+_dolphin_proc = None   # subprocess.Popen | None
+_dolphin_file = ""     # last-launched ROM filename (relative to CHLOE_ROMS_DIR)
+_dolphin_lock = threading.Lock()
+
+
+def _dolphin_roms_dir() -> Path:
+    return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
+
+
+def _dolphin_exe_path() -> Path:
+    # No confirmed default -- Dolphin is commonly run portable (extracted
+    # anywhere, no fixed install dir). Set CHLOE_DOLPHIN_PATH once Ed says
+    # where his copy lives; this guess is just a common install location.
+    default = r"C:\Program Files\Dolphin-x64\Dolphin.exe"
+    return Path(os.environ.get("CHLOE_DOLPHIN_PATH", default))
+
+
+def _dolphin_is_running() -> bool:
+    global _dolphin_proc
+    if _dolphin_proc is None:
+        return False
+    if _dolphin_proc.poll() is not None:
+        _dolphin_proc = None
+        return False
+    return True
+
+
+def _dolphin_launch(file: str = "") -> dict:
+    """Launch Dolphin.exe straight into `file` (a filename inside
+    CHLOE_ROMS_DIR) -- batch mode (process exits when emulation stops),
+    forced fullscreen and no confirm-on-stop dialog via -C config overrides
+    (Dolphin has no dedicated --fullscreen flag). Flags per Dolphin's own
+    Readme.md CLI section: -b/--batch, -e/--exec=<file>,
+    -C/--config=<System.Section.Key=Value>."""
+    global _dolphin_proc, _dolphin_file
+    with _dolphin_lock:
+        if _dolphin_is_running():
+            return {"ok": False, "error": "already running", "pid": _dolphin_proc.pid}
+        exe = _dolphin_exe_path()
+        if not exe.exists():
+            return {"ok": False,
+                     "error": f"Dolphin.exe not found at {exe} (set CHLOE_DOLPHIN_PATH)"}
+        name = os.path.basename((file or "").strip().replace("\\", "/"))
+        if not name:
+            return {"ok": False, "error": "no game file given"}
+        rom = _dolphin_roms_dir() / name
+        if not rom.exists():
+            return {"ok": False, "error": f"game not found: {rom}"}
+        try:
+            _dolphin_proc = _sp_dolphin.Popen(
+                [str(exe), "-b",
+                 "-C", "Dolphin.Display.Fullscreen=True",
+                 "-C", "Dolphin.Interface.ConfirmStop=False",
+                 "-e", str(rom)],
+                cwd=str(exe.parent))
+            _dolphin_file = name
+            print(f"[dolphin] launched pid={_dolphin_proc.pid} file={name}", flush=True)
+            return {"ok": True, "pid": _dolphin_proc.pid, "file": name}
+        except Exception as e:
+            _dolphin_proc = None
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _dolphin_status() -> dict:
+    running = _dolphin_is_running()
+    return {"ok": True, "running": running,
+            "pid": (_dolphin_proc.pid if running else None),
+            "file": _dolphin_file if running else ""}
+
+
+def _dolphin_stop() -> dict:
+    """Best-effort terminate -- Dolphin handles its own save states, this is
+    just a convenience kill switch, not a clean-shutdown request."""
+    global _dolphin_proc
+    if not _dolphin_is_running():
+        return {"ok": True, "running": False}
+    try:
+        _dolphin_proc.terminate()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    _dolphin_proc = None
+    return {"ok": True, "running": False}
+
+
 def _arcade_set_frame(png: bytes) -> int:
     """Store the latest in-game frame. Returns bytes stored."""
     if not png:
