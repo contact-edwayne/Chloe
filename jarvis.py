@@ -7621,10 +7621,17 @@ def _play_game(name: str) -> dict:
         try:
             roms_dir = bh._roms_dir()
             if roms_dir.exists():
-                # Native ps2/gc/ps3 launchers: recurse, since Ed's real
-                # layout nests each game one (sometimes two) folders deep
-                # under CHLOE_ROMS_DIR/<System>/...
-                native_files = [p for p in roms_dir.rglob("*") if p.is_file()]
+                # Native ps2/gc/ps3 launchers: recurse CHLOE_ROMS_DIR (some
+                # games there are nested a folder deep too, e.g. the
+                # HeartGold/Red wrapper folders) PLUS CHLOE_ROMS_DIR_EXTRA
+                # if set -- see the long comment above _native_rom_extra_dir.
+                native_roots = [roms_dir]
+                extra_root = _native_rom_extra_dir()
+                if extra_root:
+                    native_roots.append(extra_root)
+                native_files = []
+                for root in native_roots:
+                    native_files.extend(p for p in root.rglob("*") if p.is_file())
                 launchable = {}
                 for p in native_files:
                     sysname = bh._rom_system_for(p)
@@ -7635,8 +7642,7 @@ def _play_game(name: str) -> dict:
                     sysname = launchable[candidate]
                     launcher = {"ps2": _pcsx2_launch, "gc": _dolphin_launch,
                                 "ps3": _rpcs3_launch}[sysname]
-                    rel = candidate.relative_to(roms_dir).as_posix()
-                    r = launcher(rel)
+                    r = launcher(str(candidate))
                     r["system"] = sysname
                     return r
                 # Browser-only (Arcade panel / EmulatorJS): brain_http.py's
@@ -11930,6 +11936,34 @@ _pcsx2_file = ""     # last-launched ROM filename (relative to CHLOE_ROMS_DIR)
 _pcsx2_lock = threading.Lock()
 
 
+# 2026-09-08: Ed's CHLOE_ROMS_DIR (C:\Chloe\roms) is his real, flat,
+# actively-used library -- it's what the Arcade panel's browser-only
+# systems serve from (brain_http.py's _serve_rom/_list_roms are flat-
+# filename-only), so it must never be repointed or merged away from.
+# First attempt at fixing "play Viewtiful Joe" today pointed
+# CHLOE_ROMS_DIR itself at Ed's much bigger Downloads\Games\ROMs
+# collection instead, which broke the entire Arcade library (Ed: "roms
+# are missing"). CHLOE_ROMS_DIR_EXTRA is the correct fix: an OPTIONAL
+# second root the NATIVE ps2/gc/ps3 scan and launchers also accept
+# files from (Downloads\Games\ROMs has GameCube/PS3 games CHLOE_ROMS_DIR
+# doesn't), entirely separate from the browser-only flat scan, which
+# still only ever reads CHLOE_ROMS_DIR exactly as before.
+def _native_rom_extra_dir():
+    raw = os.environ.get("CHLOE_ROMS_DIR_EXTRA", "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    return p if p.exists() else None
+
+
+def _native_path_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _pcsx2_roms_dir() -> Path:
     # Mirrors brain_http.py's _roms_dir() -- duplicated rather than imported
     # so this module doesn't need to import brain_http (same pattern as the
@@ -11971,14 +12005,17 @@ def _pcsx2_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"pcsx2-qt.exe not found at {exe} (set CHLOE_PCSX2_PATH)"}
-        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        rel = (file or "").strip().replace("\\", "/")
         if not rel:
             return {"ok": False, "error": "no game file given"}
         base = _pcsx2_roms_dir().resolve()
-        iso = (base / rel).resolve()
-        try:
-            iso.relative_to(base)
-        except ValueError:
+        cand = Path(rel)
+        iso = cand.resolve() if cand.is_absolute() else (base / rel.lstrip("/")).resolve()
+        roots = [base]
+        extra_root = _native_rom_extra_dir()
+        if extra_root:
+            roots.append(extra_root.resolve())
+        if not any(_native_path_under(iso, r) for r in roots):
             return {"ok": False, "error": "invalid game path"}
         name = rel
         if not iso.exists():
@@ -12068,14 +12105,17 @@ def _dolphin_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"Dolphin.exe not found at {exe} (set CHLOE_DOLPHIN_PATH)"}
-        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        rel = (file or "").strip().replace("\\", "/")
         if not rel:
             return {"ok": False, "error": "no game file given"}
         base = _dolphin_roms_dir().resolve()
-        rom = (base / rel).resolve()
-        try:
-            rom.relative_to(base)
-        except ValueError:
+        cand = Path(rel)
+        rom = cand.resolve() if cand.is_absolute() else (base / rel.lstrip("/")).resolve()
+        roots = [base]
+        extra_root = _native_rom_extra_dir()
+        if extra_root:
+            roots.append(extra_root.resolve())
+        if not any(_native_path_under(rom, r) for r in roots):
             return {"ok": False, "error": "invalid game path"}
         name = rel
         if not rom.exists():
@@ -12161,14 +12201,17 @@ def _rpcs3_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"rpcs3.exe not found at {exe} (set CHLOE_RPCS3_PATH)"}
-        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        rel = (file or "").strip().replace("\\", "/")
         if not rel:
             return {"ok": False, "error": "no game file given"}
         base = _rpcs3_roms_dir().resolve()
-        rom = (base / rel).resolve()
-        try:
-            rom.relative_to(base)
-        except ValueError:
+        cand = Path(rel)
+        rom = cand.resolve() if cand.is_absolute() else (base / rel.lstrip("/")).resolve()
+        roots = [base]
+        extra_root = _native_rom_extra_dir()
+        if extra_root:
+            roots.append(extra_root.resolve())
+        if not any(_native_path_under(rom, r) for r in roots):
             return {"ok": False, "error": "invalid game path"}
         name = rel
         if not rom.exists():
