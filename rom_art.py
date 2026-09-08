@@ -122,6 +122,30 @@ def _best_match(query: str, titles: list):
     return best
 
 
+def save_custom_art(system: str, rom_filename: str, data: bytes) -> Path:
+    """Save a user-uploaded cover image for a ROM (manual fallback when the
+    automatic libretro-thumbnails lookup in get_art_path() came up empty).
+    Normalizes whatever format the browser sent (png/jpg/webp/...) to PNG
+    and drops it in the exact cache slot get_art_path() checks first, so it
+    takes over immediately -- and clears any stale ".nomatch" miss marker
+    so a future automatic lookup doesn't fight with it. Raises on a
+    genuinely unreadable image; the caller (brain_http.py) turns that into
+    a 500 rather than silently pretending it worked."""
+    import io
+    from PIL import Image
+    img = Image.open(io.BytesIO(data))
+    img = img.convert("RGBA") if img.mode in ("P", "LA", "RGBA") else img.convert("RGB")
+    stem = Path(rom_filename).stem
+    d = _art_dir() / system
+    d.mkdir(parents=True, exist_ok=True)
+    dest = d / (stem + ".png")
+    img.save(dest, "PNG")
+    miss_marker = d / (stem + ".nomatch")
+    if miss_marker.exists():
+        miss_marker.unlink()
+    return dest
+
+
 def get_art_path(system: str, rom_filename: str):
     """Local PNG path for this ROM's box art, fetching + caching on first
     request. None (never an exception) if there's no repo for this system,

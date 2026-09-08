@@ -117,7 +117,10 @@
   .rom-card { position: relative; background: #0a0b10; border: 1px solid var(--line); cursor: pointer; display: flex; flex-direction: column; min-height: 132px; overflow: hidden; }
   .rom-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
   .rom-card.loaded { border-color: var(--acc); }
-  .rom-cover { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; border-bottom: 1px solid var(--line); background: #04050a; }
+  .rom-cover { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; display: block; border-bottom: 1px solid var(--line); background: #04050a; }
+  .rom-cover-add { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; border: none; border-bottom: 1px solid var(--line); background: #0e1018; color: #6d8492; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .18em; cursor: pointer; }
+  .rom-cover-add:hover { color: var(--acc); background: #12151f; }
+  .rom-cover-add:disabled { cursor: default; opacity: .6; }
   .rom-card-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; }
   .rom-card-top { display: flex; align-items: center; justify-content: space-between; }
   .rom-tag { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .2em; color: #04050a; background: var(--acc); padding: 4px 8px; }
@@ -276,6 +279,7 @@
         </div>
         <button id="btn-add-rom">+ ADD ROM</button>
         <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img,.iso" style="display:none">
+        <input type="file" id="rom-art-input" accept="image/*" style="display:none">
       </div>
     </div>
     <div id="rom-grid"></div>
@@ -463,17 +467,61 @@
       var isLoaded = state.loaded && state.loaded.file === r.file;
       var card = document.createElement('div');
       card.className = 'rom-card' + (isLoaded ? ' loaded' : '');
-      card.innerHTML =
-        '<img class="rom-cover" loading="lazy" src="' + rel('api/roms/art/' + encodeURIComponent(r.file)) + '" onerror="this.remove()">' +
-        '<div class="rom-card-body">' +
+
+      var cover = document.createElement('img');
+      cover.className = 'rom-cover';
+      cover.loading = 'lazy';
+      cover.src = rel('api/roms/art/' + encodeURIComponent(r.file)) + (r._artV ? ('?v=' + r._artV) : '');
+      cover.onerror = function() { showArtUpload(r, cover); };
+      card.appendChild(cover);
+
+      var body = document.createElement('div');
+      body.className = 'rom-card-body';
+      body.innerHTML =
         '<div class="rom-card-top"><span class="rom-tag">' + (TAGS[r.system] || r.system || '?') + '</span>' +
         '<span class="rom-size">' + (typeof r.size === 'number' ? fmtSize(r.size) : (r.size || '')) + '</span></div>' +
         '<div class="rom-name"></div>' +
-        '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>' +
-        '</div>';
-      card.querySelector('.rom-name').textContent = r.name || r.file;
+        '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>';
+      body.querySelector('.rom-name').textContent = r.name || r.file;
+      card.appendChild(body);
+
       card.onclick = function() { state.loaded = r; setView('playing'); };
       grid.appendChild(card);
+    });
+  }
+
+  // ---- manual box-art upload (fallback when auto-lookup finds nothing) --
+  var pendingArtTarget = null; // { r, slotEl }
+
+  function showArtUpload(r, coverEl) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rom-cover-add';
+    btn.textContent = '+ ADD ART';
+    btn.onclick = function(e) {
+      e.stopPropagation();
+      pendingArtTarget = { r: r, slotEl: btn };
+      $('rom-art-input').click();
+    };
+    if (coverEl.parentNode) coverEl.parentNode.replaceChild(btn, coverEl);
+  }
+
+  function uploadArt(r, slotEl, file) {
+    slotEl.textContent = 'UPLOADING…';
+    slotEl.disabled = true;
+    fetch(rel('api/roms/art/' + encodeURIComponent(r.file)), {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error('upload failed: ' + resp.status);
+      return resp.json();
+    }).then(function() {
+      r._artV = (r._artV || 0) + 1;
+      renderLibrary();
+    }).catch(function() {
+      slotEl.textContent = 'UPLOAD FAILED — TAP TO RETRY';
+      slotEl.disabled = false;
     });
   }
 
@@ -525,6 +573,14 @@
     var f = e.target.files && e.target.files[0];
     e.target.value = '';
     if (f) uploadRom(f);
+  };
+  $('rom-art-input').onchange = function(e) {
+    var f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (f && pendingArtTarget) {
+      var t = pendingArtTarget; pendingArtTarget = null;
+      uploadArt(t.r, t.slotEl, f);
+    }
   };
   var romGrid = $('rom-grid');
   romGrid.addEventListener('dragover', function(e) { e.preventDefault(); romGrid.classList.add('dragover'); });

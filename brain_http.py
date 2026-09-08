@@ -770,6 +770,38 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         self._file(200, art, "image/png")
 
+    def _post_rom_art_upload(self, name: str):
+        """Save a user-supplied cover image for a ROM -- the manual fallback
+        offered on the Arcade tile when the automatic libretro-thumbnails
+        lookup didn't find a confident match. Body is the raw image bytes
+        in whatever format the browser sent; rom_art.save_custom_art
+        normalizes it to PNG and it's served back immediately by
+        _get_rom_art above (same cache slot)."""
+        try:
+            name = unquote(name or "")
+            if not name or "/" in name or "\\" in name or ".." in name:
+                self._json(400, {"error": "invalid rom name"})
+                return
+            p = _roms_dir() / name
+            if not p.exists() or not p.is_file():
+                self._text(404, "rom not found")
+                return
+            system = _ROM_SYSTEMS.get(p.suffix.lower())
+            if not system:
+                self._json(400, {"error": "unrecognized rom system"})
+                return
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            # 8 MB cap -- generous for cover art, well under a phone photo.
+            if length <= 0 or length > 8 * 1024 * 1024:
+                self._json(400, {"error": "bad content length"})
+                return
+            data = self.rfile.read(length)
+            import rom_art
+            rom_art.save_custom_art(system, name, data)
+            self._json(200, {"ok": True})
+        except Exception as e:
+            self._json(500, {"error": f"{type(e).__name__}: {e}"})
+
     def _get_savestate(self, game: str):
         """Serve a saved state for `game` (one slot per game). 404 if none."""
         p = _savestates_dir() / (_savestate_slug(game) + ".state")
@@ -1000,6 +1032,9 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/roms/upload":
             self._post_roms_upload()
+            return
+        if path.startswith("/api/roms/art/"):
+            self._post_rom_art_upload(path[len("/api/roms/art/"):])
             return
         if path == "/api/arcade_frame":
             self._post_arcade_frame()
