@@ -645,7 +645,13 @@ def _build_turn_preamble(model: str | None = None, *, voice: bool) -> str:
             f"turn — never invent or reuse a previous PIN. If he hasn't given "
             f"one, ask for it BEFORE calling the tool. The system enforces a "
             f"daily spend cap server-side; if a send is refused, relay the "
-            f"reason and stop.\n\n"
+            f"reason and stop.\n"
+            f"- You have Steam integration. Tools: `steam_library` (owned games / "
+            f"playtime), `steam_launch` (launch a game by name), `steam_friends` "
+            f"(who's online / what they're playing). Never invent playtime "
+            f"numbers, a game title, or friend status — always call the tool. "
+            f"If a tool reports 'not configured', tell Ed plainly that his "
+            f"Steam API key/SteamID aren't set up yet.\n\n"
             f"STYLE:\n"
             f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
             f"- Keep replies short, friendly, and conversational — usually one or two "
@@ -2077,6 +2083,17 @@ _EXTRA_TOOL_KEYWORDS = (
     "how much bitcoin", "how many sats", "how many satoshis",
     "bitcoin balance", "lightning balance", "wallet history",
     "payment history", "sat balance",
+    # Steam (2026-09-08, added alongside the steam_* tools -- same bug
+    # class as wallet/email above: a plain streaming reply would
+    # fabricate playtime numbers or claim a game launched with no tool
+    # call at all).
+    "steam", "my games", "my library", "how many games",
+    "how many hours have i played", "how long have i played",
+    "playtime", "launch it", "launch that", "start it up",
+    "who's online", "whos online", "who is online",
+    "what is he playing", "what is she playing", "what are they playing",
+    "is he on steam", "is she on steam", "is he online", "is she online",
+    "playing anything",
     # Notifications
     "notify me", "notify my phone", "text my phone", "push a notification",
     "send a notification", "alert my phone", "ping my phone",
@@ -6740,6 +6757,95 @@ WALLET_TOOL_SCHEMAS = {
 }
 WALLET_TOOL_NAMES = set(WALLET_TOOL_SCHEMAS.keys())
 
+
+# ─── STEAM TOOLS (2026-09-08) ────────────────────────────────────────────────
+# Three tools surfacing steam_client.py: library/playtime lookups, local
+# launch via steam://rungameid/<appid>, and friends/presence. Read-only
+# except steam_launch, which just hands the URI to the already-installed
+# Steam client (no subprocess/path management the way PCSX2/Dolphin/RPCS3
+# need). Requires CHLOE_STEAM_API_KEY + CHLOE_STEAM_ID64 in .env -- both
+# functions degrade to an honest "not configured" error if unset, same
+# pattern as _wallet_module() below.
+STEAM_LIBRARY_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "steam_library",
+        "description": (
+            "Check the user's Steam game library: how many games they "
+            "own, top-played games, recently-played games, or playtime "
+            "for one specific game. Use for 'what games do I own', 'how "
+            "many hours have I played X', 'what have I been playing "
+            "lately', 'how many games do I have'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "game_name": {
+                    "type": "string",
+                    "description": (
+                        "A specific game to look up playtime for. Omit "
+                        "for a general library summary / recently-played "
+                        "list instead."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+STEAM_LAUNCH_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "steam_launch",
+        "description": (
+            "Launch a Steam game by name on Ed's PC. Use for 'launch X', "
+            "'open X in steam', 'start playing X', 'play X'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "game_name": {
+                    "type": "string",
+                    "description": "The game to launch, as the user said it.",
+                },
+            },
+            "required": ["game_name"],
+        },
+    },
+}
+
+STEAM_FRIENDS_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "steam_friends",
+        "description": (
+            "Check which Steam friends are online and what they're "
+            "playing. Use for 'who's online on steam', 'is <name> on "
+            "steam', 'what is <name> playing', 'who's playing anything "
+            "right now'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "friend_name": {
+                    "type": "string",
+                    "description": (
+                        "A specific friend to check. Omit for the full "
+                        "online-friends list instead."
+                    ),
+                },
+            },
+        },
+    },
+}
+
+STEAM_TOOL_SCHEMAS = {
+    "steam_library": STEAM_LIBRARY_SCHEMA,
+    "steam_launch":  STEAM_LAUNCH_SCHEMA,
+    "steam_friends": STEAM_FRIENDS_SCHEMA,
+}
+STEAM_TOOL_NAMES = set(STEAM_TOOL_SCHEMAS.keys())
+
 # ─── COMPUTATION / NOTIFICATION / EMAIL TOOLS (2026-09-02) ─────────────
 # Same "give the model a real tool instead of trusting its output" pattern
 # as weather.py/stocks.py, extended to arbitrary computation, plus a push-
@@ -7101,7 +7207,8 @@ def _render_tools_for_prompt(tools: list[dict]) -> str:
 # Rendered once at import time -- the tool set is static, no need to
 # re-render every call. _ollama_chat appends this to the system message.
 _TOOL_DOCS_FOR_PROMPT = _render_tools_for_prompt(
-    [GREP_TOOL_SCHEMA, *WALLET_TOOL_SCHEMAS.values(), *EXTRA_TOOL_SCHEMAS.values()])
+    [GREP_TOOL_SCHEMA, *WALLET_TOOL_SCHEMAS.values(), *EXTRA_TOOL_SCHEMAS.values(),
+     *STEAM_TOOL_SCHEMAS.values()])
 
 
 def _wallet_module():
@@ -7125,6 +7232,20 @@ def _wallet_guard_module():
     except Exception as e:
         print(f"[chloe] wallet_guard module unavailable: "
               f"{type(e).__name__}: {e}", flush=True)
+        return None
+
+
+def _steam_module():
+    """Lazy-import steam_client.py. Returns None only if the module or
+    its `requests` dependency is missing -- an unset API key/SteamID is
+    NOT an import failure, it's caught per-call inside steam_client.py
+    itself so the error message names exactly what's missing."""
+    try:
+        import steam_client  # type: ignore
+        return steam_client
+    except Exception as e:
+        print(f"[chloe] steam_client module unavailable: {type(e).__name__}: {e}",
+              flush=True)
         return None
 
 
@@ -7269,6 +7390,48 @@ def _wallet_dispatch(name: str, args: dict, *, my_turn_gen: int | None = None) -
     except Exception as e:
         traceback.print_exc()
         return f"Wallet error: {type(e).__name__}: {e}"
+
+
+def _steam_dispatch(name: str, args: dict) -> str:
+    """Route a steam_* tool call. Mirrors _wallet_dispatch's shape:
+    lazy-import, honest per-field errors, no exception ever escapes to
+    the LLM loop unhandled."""
+    if not isinstance(args, dict):
+        args = {}
+    s = _steam_module()
+    if s is None:
+        return "Steam error: the steam_client module (or its `requests` dependency) isn't available."
+    try:
+        if name == "steam_library":
+            game_name = args.get("game_name")
+            if game_name:
+                r = s.game_playtime(str(game_name))
+            else:
+                r = s.library_summary()
+            if not r.get("ok"):
+                return f"Steam error: {r.get('error', 'unknown')}"
+            return json.dumps(r)
+
+        if name == "steam_launch":
+            game_name = args.get("game_name")
+            if not game_name:
+                return "Steam error: game_name is required."
+            r = s.launch_game(str(game_name))
+            if not r.get("ok"):
+                return f"Steam launch failed: {r.get('error', 'unknown')}"
+            return json.dumps(r)
+
+        if name == "steam_friends":
+            friend_name = args.get("friend_name")
+            r = s.friends_summary(str(friend_name) if friend_name else None)
+            if not r.get("ok"):
+                return f"Steam error: {r.get('error', 'unknown')}"
+            return json.dumps(r)
+
+        return f"unknown steam tool: {name}"
+    except Exception as e:
+        traceback.print_exc()
+        return f"Steam error: {type(e).__name__}: {e}. Check CHLOE_STEAM_API_KEY / CHLOE_STEAM_ID64 in .env."
 
 
 def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "",
@@ -7749,7 +7912,7 @@ def _synthesize_tool_call_from_content(content: str):
         name = parsed.get("name")
         args = parsed.get("arguments") or parsed.get("parameters")
     # 5) Sanity: name must be a known tool, args must be present.
-    known_tools = {"grep_source"} | WALLET_TOOL_NAMES | EXTRA_TOOL_NAMES
+    known_tools = {"grep_source"} | WALLET_TOOL_NAMES | EXTRA_TOOL_NAMES | STEAM_TOOL_NAMES
     if not isinstance(name, str) or name not in known_tools:
         return None
     if args is None:
@@ -8708,6 +8871,10 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                 safe_args = {k: ("<redacted>" if k == "pin" else v)
                              for k, v in args.items()}
                 print(f"[chloe]   ollama-tool {name}({safe_args})"
+                      f" → {len(result)} chars", flush=True)
+            elif name in STEAM_TOOL_NAMES:
+                result = _steam_dispatch(name, args)
+                print(f"[chloe]   ollama-tool {name}({args})"
                       f" → {len(result)} chars", flush=True)
             elif name in EXTRA_TOOL_NAMES:
                 result = _extra_tool_dispatch(
