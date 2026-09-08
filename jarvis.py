@@ -12429,6 +12429,8 @@ def _arcade_comment_once(game: str, recent_str: str,
         res = screen_vision.describe_screen(png, prompt=prompt, try_local=False)
         h = _arcade_png_hash(png)
         if not res.get("ok"):
+            print(f"[arcade-watch] vision call failed: {res.get('error')}",
+                  flush=True)
             return "", h
         return " ".join((res.get("text") or "").split())[:240], h
     except Exception as e:
@@ -12750,6 +12752,7 @@ async def _arcade_watch_loop():
     cap_max = 60                   # per-activation comment cap
     last_hash = None
     linger = 0
+    fail_streak = 0
     last_comments: list = list(_arcade_watch.get("session_comments") or [])
     seed = _arcade_watch.get("opener_seed") or ""
     if seed and not last_comments:
@@ -12790,6 +12793,7 @@ async def _arcade_watch_loop():
             interval = int(ival_max - (ival_max - ival_min) * frac)
             interval = max(ival_min, min(ival_max, interval))
         if text:
+            fail_streak = 0
             _arcade_watch["count"] += 1
             last_comments.append(text)
             last_comments = last_comments[-6:]
@@ -12802,6 +12806,17 @@ async def _arcade_watch_loop():
                 await asyncio.to_thread(_speak, text)
             except Exception as e:
                 print(f"[arcade-watch] speak failed: {e}", flush=True)
+        elif h is not None:
+            # h is not None means capture+vision were attempted but produced
+            # nothing usable (vision call failed) -- see the log line in
+            # _arcade_comment_once for why. Surface it after a few misses in
+            # a row so a persistent failure doesn't just look like silence,
+            # then keep quiet-ish (every 10th miss) so it isn't spammy.
+            fail_streak += 1
+            if fail_streak == 3 or (fail_streak > 3 and fail_streak % 10 == 0):
+                await _ws_broadcast({"type": "game_comment",
+                    "text": "having trouble seeing the game right now -- "
+                            "still trying, bear with me."})
         # Sleep with kick support: if Ed types mid-watch, the chat handler
         # sets _arcade_kick and we wake within ~5s to react with screen context.
         try:
