@@ -7621,9 +7621,12 @@ def _play_game(name: str) -> dict:
         try:
             roms_dir = bh._roms_dir()
             if roms_dir.exists():
-                all_files = [p for p in roms_dir.iterdir() if p.is_file()]
+                # Native ps2/gc/ps3 launchers: recurse, since Ed's real
+                # layout nests each game one (sometimes two) folders deep
+                # under CHLOE_ROMS_DIR/<System>/...
+                native_files = [p for p in roms_dir.rglob("*") if p.is_file()]
                 launchable = {}
-                for p in all_files:
+                for p in native_files:
                     sysname = bh._rom_system_for(p)
                     if sysname in ("ps2", "gc", "ps3"):
                         launchable[p] = sysname
@@ -7632,9 +7635,15 @@ def _play_game(name: str) -> dict:
                     sysname = launchable[candidate]
                     launcher = {"ps2": _pcsx2_launch, "gc": _dolphin_launch,
                                 "ps3": _rpcs3_launch}[sysname]
-                    r = launcher(candidate.name)
+                    rel = candidate.relative_to(roms_dir).as_posix()
+                    r = launcher(rel)
                     r["system"] = sysname
                     return r
+                # Browser-only (Arcade panel / EmulatorJS): brain_http.py's
+                # _serve_rom still only resolves flat filenames directly
+                # under CHLOE_ROMS_DIR, so stay flat here too until that's
+                # fixed -- see the long comment above this block.
+                all_files = [p for p in roms_dir.iterdir() if p.is_file()]
                 bo_files = [p for p in all_files
                             if bh._rom_system_for(p) in _ROM_BROWSER_ONLY_SYSTEMS]
                 bo_hit = _resolve_rom_candidate(name, bo_files)
@@ -11962,10 +11971,16 @@ def _pcsx2_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"pcsx2-qt.exe not found at {exe} (set CHLOE_PCSX2_PATH)"}
-        name = os.path.basename((file or "").strip().replace("\\", "/"))
-        if not name:
+        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        if not rel:
             return {"ok": False, "error": "no game file given"}
-        iso = _pcsx2_roms_dir() / name
+        base = _pcsx2_roms_dir().resolve()
+        iso = (base / rel).resolve()
+        try:
+            iso.relative_to(base)
+        except ValueError:
+            return {"ok": False, "error": "invalid game path"}
+        name = rel
         if not iso.exists():
             return {"ok": False, "error": f"game not found: {iso}"}
         try:
@@ -12053,10 +12068,16 @@ def _dolphin_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"Dolphin.exe not found at {exe} (set CHLOE_DOLPHIN_PATH)"}
-        name = os.path.basename((file or "").strip().replace("\\", "/"))
-        if not name:
+        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        if not rel:
             return {"ok": False, "error": "no game file given"}
-        rom = _dolphin_roms_dir() / name
+        base = _dolphin_roms_dir().resolve()
+        rom = (base / rel).resolve()
+        try:
+            rom.relative_to(base)
+        except ValueError:
+            return {"ok": False, "error": "invalid game path"}
+        name = rel
         if not rom.exists():
             return {"ok": False, "error": f"game not found: {rom}"}
         try:
@@ -12140,10 +12161,16 @@ def _rpcs3_launch(file: str = "") -> dict:
         if not exe.exists():
             return {"ok": False,
                      "error": f"rpcs3.exe not found at {exe} (set CHLOE_RPCS3_PATH)"}
-        name = os.path.basename((file or "").strip().replace("\\", "/"))
-        if not name:
+        rel = (file or "").strip().replace("\\", "/").lstrip("/")
+        if not rel:
             return {"ok": False, "error": "no game file given"}
-        rom = _rpcs3_roms_dir() / name
+        base = _rpcs3_roms_dir().resolve()
+        rom = (base / rel).resolve()
+        try:
+            rom.relative_to(base)
+        except ValueError:
+            return {"ok": False, "error": "invalid game path"}
+        name = rel
         if not rom.exists():
             return {"ok": False, "error": f"game not found: {rom}"}
         try:
