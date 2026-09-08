@@ -11433,6 +11433,100 @@ def _gen1recomp_stop() -> dict:
     return {"ok": True, "running": False}
 
 
+# ─── pcsx2: native PS2 emulation (real PCSX2.exe, not a browser core) ──────
+# PS2 has no browser/WASM emulator core (EmulatorJS doesn't support PS2 at
+# all), so -- like gen1recomp above -- this launches a real, separate
+# PCSX2 process and just tracks/controls it; the game runs in its own OS
+# window. Unlike gen1recomp there's no fixed set of games: any ISO in
+# CHLOE_ROMS_DIR tagged "ps2" (see _ROM_SYSTEMS in brain_http.py) can be
+# launched by filename from the Arcade ROM library.
+import subprocess as _sp_pcsx2
+
+_pcsx2_proc = None   # subprocess.Popen | None
+_pcsx2_file = ""     # last-launched ROM filename (relative to CHLOE_ROMS_DIR)
+_pcsx2_lock = threading.Lock()
+
+
+def _pcsx2_roms_dir() -> Path:
+    # Mirrors brain_http.py's _roms_dir() -- duplicated rather than imported
+    # so this module doesn't need to import brain_http (same pattern as the
+    # gen1recomp block above, which also stays self-contained).
+    return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
+
+
+def _pcsx2_exe_path() -> Path:
+    # No "next to jarvis.py" default like gen1recomp has -- PCSX2 is Ed's
+    # own separate install. Override with CHLOE_PCSX2_PATH if it ever moves;
+    # this is where his copy lives today.
+    default = r"C:\Users\eleew\Downloads\pcsx2-v2.8.2-windows-x64-Qt\pcsx2-qt.exe"
+    return Path(os.environ.get("CHLOE_PCSX2_PATH", default))
+
+
+def _pcsx2_is_running() -> bool:
+    global _pcsx2_proc
+    if _pcsx2_proc is None:
+        return False
+    if _pcsx2_proc.poll() is not None:
+        _pcsx2_proc = None
+        return False
+    return True
+
+
+def _pcsx2_launch(file: str = "") -> dict:
+    """Launch pcsx2-qt.exe straight into `file` (a filename inside
+    CHLOE_ROMS_DIR) -- fullscreen, batch mode (process exits when the game/
+    emulation is closed). Refuses if a game is already running (closing
+    PCSX2 ends the process, so a second launch would just be a second,
+    conflicting instance). Flags per PCSX2's own CLI docs
+    (pcsx2.net/docs/advanced/cli/): -fullscreen, -batch, and `--` before the
+    path so filenames with spaces/leading dashes are never misparsed."""
+    global _pcsx2_proc, _pcsx2_file
+    with _pcsx2_lock:
+        if _pcsx2_is_running():
+            return {"ok": False, "error": "already running", "pid": _pcsx2_proc.pid}
+        exe = _pcsx2_exe_path()
+        if not exe.exists():
+            return {"ok": False,
+                     "error": f"pcsx2-qt.exe not found at {exe} (set CHLOE_PCSX2_PATH)"}
+        name = os.path.basename((file or "").strip().replace("\\", "/"))
+        if not name:
+            return {"ok": False, "error": "no game file given"}
+        iso = _pcsx2_roms_dir() / name
+        if not iso.exists():
+            return {"ok": False, "error": f"game not found: {iso}"}
+        try:
+            _pcsx2_proc = _sp_pcsx2.Popen(
+                [str(exe), "-fullscreen", "-batch", "--", str(iso)],
+                cwd=str(exe.parent))
+            _pcsx2_file = name
+            print(f"[pcsx2] launched pid={_pcsx2_proc.pid} file={name}", flush=True)
+            return {"ok": True, "pid": _pcsx2_proc.pid, "file": name}
+        except Exception as e:
+            _pcsx2_proc = None
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _pcsx2_status() -> dict:
+    running = _pcsx2_is_running()
+    return {"ok": True, "running": running,
+            "pid": (_pcsx2_proc.pid if running else None),
+            "file": _pcsx2_file if running else ""}
+
+
+def _pcsx2_stop() -> dict:
+    """Best-effort terminate -- PCSX2 handles its own memcard saves, this is
+    just a convenience kill switch, not a clean-shutdown request."""
+    global _pcsx2_proc
+    if not _pcsx2_is_running():
+        return {"ok": True, "running": False}
+    try:
+        _pcsx2_proc.terminate()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    _pcsx2_proc = None
+    return {"ok": True, "running": False}
+
+
 def _arcade_set_frame(png: bytes) -> int:
     """Store the latest in-game frame. Returns bytes stored."""
     if not png:

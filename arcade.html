@@ -114,9 +114,11 @@
   #btn-add-rom { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .22em; padding: 11px 18px; cursor: pointer; color: #04050a; background: var(--acc); border: none; box-shadow: 0 0 20px var(--glow); }
   #rom-grid { flex: 1; overflow: auto; min-height: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(232px,1fr)); gap: 14px; align-content: start; padding-bottom: 6px; }
   #rom-grid.dragover { outline: 1px dashed var(--acc); outline-offset: -6px; }
-  .rom-card { position: relative; background: #0a0b10; border: 1px solid var(--line); padding: 18px; cursor: pointer; display: flex; flex-direction: column; gap: 16px; min-height: 132px; overflow: hidden; }
+  .rom-card { position: relative; background: #0a0b10; border: 1px solid var(--line); cursor: pointer; display: flex; flex-direction: column; min-height: 132px; overflow: hidden; }
   .rom-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
   .rom-card.loaded { border-color: var(--acc); }
+  .rom-cover { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; border-bottom: 1px solid var(--line); background: #04050a; }
+  .rom-card-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; }
   .rom-card-top { display: flex; align-items: center; justify-content: space-between; }
   .rom-tag { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .2em; color: #04050a; background: var(--acc); padding: 4px 8px; }
   .rom-size { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6d8492; }
@@ -273,7 +275,7 @@
           <div id="upload-track"><div id="upload-bar"></div></div>
         </div>
         <button id="btn-add-rom">+ ADD ROM</button>
-        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img" style="display:none">
+        <input type="file" id="rom-file-input" accept=".nes,.fds,.gb,.gbc,.sgb,.gba,.sfc,.smc,.md,.gen,.smd,.bin,.n64,.z64,.v64,.cue,.chd,.pbp,.img,.iso" style="display:none">
       </div>
     </div>
     <div id="rom-grid"></div>
@@ -341,19 +343,19 @@
   'use strict';
 
   // ---- constants -----------------------------------------------------
-  var SYSTEMS = ['NES','GB / GBC','GBA','SNES','MEGA DRIVE','N64','PS1'];
+  var SYSTEMS = ['NES','GB / GBC','GBA','SNES','MEGA DRIVE','N64','PS1','PS2'];
   var FILTERS = [
     { label: 'ALL', key: 'ALL' }, { label: 'NES', key: 'nes' }, { label: 'GB/GBC', key: 'gb' },
     { label: 'GBA', key: 'gba' }, { label: 'SNES', key: 'snes' }, { label: 'MEGA DRIVE', key: 'segaMD' },
-    { label: 'N64', key: 'n64' }, { label: 'PS1', key: 'psx' }
+    { label: 'N64', key: 'n64' }, { label: 'PS1', key: 'psx' }, { label: 'PS2', key: 'ps2' }
   ];
-  var TAGS = { nes: 'NES', gb: 'GB', gba: 'GBA', snes: 'SNES', segaMD: 'MD', n64: 'N64', psx: 'PS1' };
+  var TAGS = { nes: 'NES', gb: 'GB', gba: 'GBA', snes: 'SNES', segaMD: 'MD', n64: 'N64', psx: 'PS1', ps2: 'PS2' };
   var SCHEMES = [
     { key: 'SPECTRE', label: 'SPECTRE', acc: '#00e5ff', acc2: '#b06cff', ink: '#ff6ec7', line: '#00e5ff33', glow: '#00e5ff44' },
     { key: 'EMBER',   label: 'EMBER',   acc: '#ffab2e', acc2: '#ff5a3c', ink: '#ffd479', line: '#ffab2e33', glow: '#ffab2e44' },
     { key: 'VERDANT', label: 'VERDANT', acc: '#5cf08a', acc2: '#c2ff3d', ink: '#a8ffcf', line: '#5cf08a33', glow: '#5cf08a44' }
   ];
-  var UP_ACCEPT_RE = /\.(nes|fds|gb|gbc|sgb|gba|sfc|smc|md|gen|smd|bin|n64|z64|v64|cue|chd|pbp|img)$/i;
+  var UP_ACCEPT_RE = /\.(nes|fds|gb|gbc|sgb|gba|sfc|smc|md|gen|smd|bin|n64|z64|v64|cue|chd|pbp|img|iso)$/i;
   var LS_PREFIX = 'chloe_arcade_';
 
   function rel(path) { return new URL(path, document.baseURI).href; }
@@ -462,10 +464,13 @@
       var card = document.createElement('div');
       card.className = 'rom-card' + (isLoaded ? ' loaded' : '');
       card.innerHTML =
+        '<img class="rom-cover" loading="lazy" src="' + rel('api/roms/art/' + encodeURIComponent(r.file)) + '" onerror="this.remove()">' +
+        '<div class="rom-card-body">' +
         '<div class="rom-card-top"><span class="rom-tag">' + (TAGS[r.system] || r.system || '?') + '</span>' +
         '<span class="rom-size">' + (typeof r.size === 'number' ? fmtSize(r.size) : (r.size || '')) + '</span></div>' +
         '<div class="rom-name"></div>' +
-        '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>';
+        '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>' +
+        '</div>';
       card.querySelector('.rom-name').textContent = r.name || r.file;
       card.onclick = function() { state.loaded = r; setView('playing'); };
       grid.appendChild(card);
@@ -537,8 +542,13 @@
     if (!r) { setView('emulator'); return; }
     $('playing-tag').textContent = TAGS[r.system] || r.system || '?';
     $('playing-name').textContent = r.name || r.file;
-    var url = rel('emulator.html') + '?g=' + encodeURIComponent(r.file) +
-      '&sys=' + encodeURIComponent(r.system) + '&name=' + encodeURIComponent((r.name || r.file));
+    // PS2 has no browser/WASM core -- it launches real PCSX2 as its own OS
+    // window via pcsx2_panel.html, not the EmulatorJS-backed emulator.html
+    // every other system uses.
+    var url = r.system === 'ps2'
+      ? rel('pcsx2_panel.html') + '?g=' + encodeURIComponent(r.file) + '&name=' + encodeURIComponent((r.name || r.file))
+      : rel('emulator.html') + '?g=' + encodeURIComponent(r.file) +
+        '&sys=' + encodeURIComponent(r.system) + '&name=' + encodeURIComponent((r.name || r.file));
     var vp = $('playing-viewport');
     var f = vp.querySelector('iframe');
     if (f) f.remove();

@@ -231,6 +231,9 @@ _ROM_SYSTEMS = {
     # .chd/.pbp. ".bin" alone is already claimed by Genesis above, so upload
     # PS1 games as the .cue (with its .bin file(s) alongside it) or as .chd/.pbp.
     ".cue": "psx", ".chd": "psx", ".pbp": "psx", ".img": "psx",
+    # PS2 discs are DVDs -- one big single-file image is the norm, unlike
+    # PS1's multi-track CD (.cue+.bin) convention, so .iso is unambiguous.
+    ".iso": "ps2",
 }
 
 
@@ -626,6 +629,18 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._file(200, page, "text/html; charset=utf-8")
             return
 
+        if path == "/pcsx2_panel.html":
+            # Native PS2 launcher panel -- PCSX2 runs as its own OS window
+            # (see arcade.html's mountPlaying(), which points the "playing"
+            # iframe here instead of emulator.html when a ROM's system is
+            # "ps2"). Query string carries which game: ?g=<file>&name=<name>.
+            page = HERE / "pcsx2_panel.html"
+            if not page.exists():
+                self._text(404, "pcsx2_panel.html not found next to brain_http.py")
+                return
+            self._file(200, page, "text/html; charset=utf-8")
+            return
+
         if path == "/gen1recomp.html":
             # Native Pokemon Gen-1 recompilation launcher panel — replaces the
             # browser ROM emulator on desktop (see hud.html's ARCADE button).
@@ -643,8 +658,16 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._get_gen1recomp_status()
             return
 
+        if path == "/api/pcsx2/status":
+            self._get_pcsx2_status()
+            return
+
         if path == "/api/roms":
             self._list_roms()
+            return
+
+        if path.startswith("/api/roms/art/"):
+            self._get_rom_art(path[len("/api/roms/art/"):])
             return
 
         if path.startswith("/roms/"):
@@ -718,6 +741,34 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._text(404, "rom not found")
             return
         self._file(200, p, "application/octet-stream")
+
+    def _get_rom_art(self, name: str):
+        """Serve best-effort box art for a ROM (see rom_art.py). 404 with no
+        body content worth showing the user just means 'no art' -- the
+        library grid's <img> just hides itself on a failed load, so this
+        never breaks the page, it only ever adds a picture when one is
+        confidently found."""
+        name = unquote(name or "")
+        if not name or "/" in name or "\\" in name or ".." in name:
+            self._json(400, {"error": "invalid rom name"})
+            return
+        p = _roms_dir() / name
+        if not p.exists() or not p.is_file():
+            self._text(404, "rom not found")
+            return
+        system = _ROM_SYSTEMS.get(p.suffix.lower())
+        if not system:
+            self._text(404, "no art")
+            return
+        try:
+            import rom_art
+            art = rom_art.get_art_path(system, name)
+        except Exception:
+            art = None
+        if not art or not art.exists():
+            self._text(404, "no art")
+            return
+        self._file(200, art, "image/png")
 
     def _get_savestate(self, game: str):
         """Serve a saved state for `game` (one slot per game). 404 if none."""
@@ -809,6 +860,37 @@ class _GraphHandler(BaseHTTPRequestHandler):
         try:
             import jarvis  # type: ignore
             self._json(200, jarvis._gen1recomp_status())
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _get_pcsx2_status(self):
+        try:
+            import jarvis  # type: ignore
+            self._json(200, jarvis._pcsx2_status())
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_pcsx2_launch(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            data = self.rfile.read(length) if length > 0 else b""
+            file = ""
+            if data:
+                try:
+                    file = (json.loads(data.decode("utf-8")) or {}).get("file", "")
+                except Exception:
+                    file = ""
+            import jarvis  # type: ignore
+            res = jarvis._pcsx2_launch(file)
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_pcsx2_stop(self):
+        try:
+            import jarvis  # type: ignore
+            res = jarvis._pcsx2_stop()
+            self._json(200 if res.get("ok") else 500, res)
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)})
 
@@ -927,6 +1009,12 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/gen1recomp/stop":
             self._post_gen1recomp_stop()
+            return
+        if path == "/api/pcsx2/launch":
+            self._post_pcsx2_launch()
+            return
+        if path == "/api/pcsx2/stop":
+            self._post_pcsx2_stop()
             return
         self._text(404, f"POST not supported on: {path}")
 
