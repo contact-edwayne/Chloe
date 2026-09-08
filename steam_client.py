@@ -222,6 +222,76 @@ def launch_appid(appid: int) -> dict:
     return {"ok": True, "appid": appid}
 
 
+# ─── Profile + achievements (arcade panel) ────────────────────────────────────
+_profile_cache: dict[str, Any] = {"ts": 0.0, "data": None}
+_PROFILE_CACHE_TTL = 3600  # 1h
+
+
+def get_profile() -> dict:
+    """Own profile summary (avatar, name, Steam level) for the arcade
+    panel's header card."""
+    now = time.time()
+    if _profile_cache["data"] and (now - _profile_cache["ts"]) < _PROFILE_CACHE_TTL:
+        return _profile_cache["data"]
+    r = requests.get(f"{API_BASE}/ISteamUser/GetPlayerSummaries/v2/", params={
+        "key": _api_key(), "steamids": _steam_id(),
+    }, timeout=_TIMEOUT)
+    r.raise_for_status()
+    players = r.json().get("response", {}).get("players", []) or []
+    if not players:
+        raise RuntimeError("Steam returned no profile for this SteamID64.")
+    p = players[0]
+    level = None
+    try:
+        r2 = requests.get(f"{API_BASE}/IPlayerService/GetSteamLevel/v1/", params={
+            "key": _api_key(), "steamid": _steam_id(),
+        }, timeout=_TIMEOUT)
+        r2.raise_for_status()
+        level = r2.json().get("response", {}).get("player_level")
+    except Exception:
+        pass  # level is a nice-to-have; a profile without it still renders
+    data = {
+        "name": p.get("personaname"),
+        "avatar": p.get("avatarfull") or p.get("avatarmedium") or p.get("avatar"),
+        "profile_url": p.get("profileurl"),
+        "level": level,
+        "status": _PERSONASTATE.get(p.get("personastate", 0), "Unknown"),
+    }
+    _profile_cache["data"] = data
+    _profile_cache["ts"] = now
+    return data
+
+
+_achv_cache: dict[int, dict[str, Any]] = {}
+_ACHV_CACHE_TTL = 3600  # 1h
+
+
+def get_achievements(appid: int) -> dict | None:
+    """Achieved/total counts for one game, for the library grid's progress
+    bar. Not every game exposes achievements, and Game Details privacy can
+    hide them -- both cases return None rather than raising, so one
+    unsupported title doesn't break the whole grid."""
+    now = time.time()
+    cached = _achv_cache.get(appid)
+    if cached and (now - cached["ts"]) < _ACHV_CACHE_TTL:
+        return cached["data"]
+    data = None
+    try:
+        r = requests.get(f"{API_BASE}/ISteamUserStats/GetPlayerAchievements/v1/", params={
+            "key": _api_key(), "steamid": _steam_id(), "appid": appid,
+        }, timeout=_TIMEOUT)
+        if r.status_code == 200:
+            body = r.json().get("playerstats", {})
+            achievements = body.get("achievements", []) or [] if body.get("success") else []
+            if achievements:
+                achieved = sum(1 for a in achievements if a.get("achieved"))
+                data = {"achieved": achieved, "total": len(achievements)}
+    except Exception:
+        data = None
+    _achv_cache[appid] = {"ts": now, "data": data}
+    return data
+
+
 # ─── Friends / presence ─────────────────────────────────────────────────────
 def get_friends() -> list[dict]:
     """Friend list merged with live status + currently-playing.

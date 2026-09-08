@@ -176,6 +176,17 @@
   #steam-stats b { font-weight: inherit; color: var(--acc); }
   #steam-search { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .1em; background: #0d0f16; border: 1px solid var(--line); color: #d8e6ef; padding: 10px 14px; width: 220px; }
   #steam-search:focus { outline: none; border-color: var(--acc); }
+  #steam-profile { display: flex; align-items: center; gap: 16px; flex: none; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  #steam-profile-avatar { width: 56px; height: 56px; border-radius: 6px; border: 1px solid var(--line); background: #0d0f16; object-fit: cover; flex: none; }
+  #steam-profile-info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  #steam-profile-name { font-family: 'Inter', sans-serif; font-size: 15px; color: #eafcff; }
+  #steam-profile-meta { display: flex; align-items: center; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .16em; color: #6d8492; }
+  #steam-profile-level { color: #04050a; background: var(--acc); padding: 3px 7px; }
+  #steam-profile-status { color: var(--ink); }
+  .steam-achv { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+  .steam-achv-track { flex: 1; height: 4px; background: #151822; min-width: 0; }
+  .steam-achv-fill { height: 4px; background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+  .steam-achv-text { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .1em; color: #6d8492; flex: none; }
   #steam-grid { flex: 1; overflow: auto; min-height: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 14px; align-content: start; padding-bottom: 6px; }
   .steam-card { position: relative; background: #0a0b10; border: 1px solid var(--line); cursor: default; display: flex; flex-direction: column; overflow: hidden; }
   .steam-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
@@ -377,6 +388,13 @@
   <!-- STEAM -->
   <div id="view-steam" class="view" hidden>
     <div id="steam-main">
+      <div id="steam-profile" hidden>
+        <img id="steam-profile-avatar" src="" alt="">
+        <div id="steam-profile-info">
+          <div id="steam-profile-name"></div>
+          <div id="steam-profile-meta"><span id="steam-profile-level"></span><span id="steam-profile-status"></span></div>
+        </div>
+      </div>
       <div id="steam-toolbar">
         <div id="steam-stats"><span>GAMES <b id="steam-stat-count">0</b></span><span>TOTAL HOURS <b id="steam-stat-hours">0</b></span></div>
         <input type="text" id="steam-search" placeholder="SEARCH LIBRARY...">
@@ -481,6 +499,24 @@
       .then(function(){ renderSteamFriends(); });
   }
 
+  function refreshSteamProfile() {
+    return fetch(rel('api/steam/profile'), { cache: 'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ renderSteamProfile((j && j.ok && j.profile) || null); })
+      .catch(function(){ /* leave the header hidden if this fails */ });
+  }
+
+  function renderSteamProfile(p) {
+    var el = $('steam-profile');
+    if (!p) { el.hidden = true; return; }
+    el.hidden = false;
+    $('steam-profile-avatar').src = p.avatar || '';
+    $('steam-profile-name').textContent = p.name || 'Steam Profile';
+    $('steam-profile-level').textContent = (p.level != null) ? ('LEVEL ' + p.level) : '';
+    $('steam-profile-level').style.display = (p.level != null) ? '' : 'none';
+    $('steam-profile-status').textContent = p.status || '';
+  }
+
   function renderSteamStats() {
     var count = steamState.games.length;
     var mins = steamState.games.reduce(function(sum, g){ return sum + (g.playtime_forever_min || 0); }, 0);
@@ -521,11 +557,22 @@
 
       var body = document.createElement('div');
       body.className = 'steam-card-body';
+      var achv = g.achievements;
+      var achvHtml = achv ? (
+        '<div class="steam-achv"><div class="steam-achv-track"><div class="steam-achv-fill" style="width:' +
+        Math.round(100 * achv.achieved / Math.max(1, achv.total)) + '%"></div></div>' +
+        '<div class="steam-achv-text">' + achv.achieved + '/' + achv.total + '</div></div>'
+      ) : '';
       body.innerHTML =
         '<div class="steam-name"></div>' +
-        '<div class="steam-hours">' + (Math.round((g.playtime_forever_min || 0) / 6) / 10) + ' HRS</div>';
+        '<div class="steam-hours">' + (Math.round((g.playtime_forever_min || 0) / 6) / 10) + ' HRS</div>' +
+        achvHtml;
       body.querySelector('.steam-name').textContent = g.name || ('App ' + g.appid);
       card.appendChild(body);
+
+      // Whole card launches, same click model as the ROM library cards --
+      // the LAUNCH button is a visible affordance, not the only hit target.
+      card.onclick = function() { launchSteamGame(g, launchBtn); };
 
       grid.appendChild(card);
     });
@@ -898,7 +945,7 @@
     if (v === 'emulator') refreshRoms();
     if (v === 'playing') mountPlaying();
     if (v === 'chess') mountChess();
-    if (v === 'steam') { refreshSteamLibrary(); refreshSteamFriends(); }
+    if (v === 'steam') { refreshSteamLibrary(); refreshSteamFriends(); refreshSteamProfile(); }
   }
 
   $('crumb-back').onclick = function() { setView('home'); };
@@ -913,6 +960,7 @@
   refreshRoms();
   renderPoke();
   refreshSteamLibrary();
+  refreshSteamProfile();
   setView('home');
 })();
 </script>

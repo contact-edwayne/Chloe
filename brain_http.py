@@ -733,6 +733,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._get_rpcs3_status()
             return
 
+        if path == "/api/steam/profile":
+            self._get_steam_profile()
+            return
+
         if path == "/api/steam/library":
             self._get_steam_library()
             return
@@ -788,12 +792,25 @@ class _GraphHandler(BaseHTTPRequestHandler):
         }.get(ext, "application/octet-stream")
         self._file(200, img_path, mime)
 
+    def _get_steam_profile(self):
+        """Own Steam profile (avatar, name, level) for the arcade panel's
+        header card."""
+        try:
+            import steam_client  # type: ignore
+            self._json(200, {"ok": True, "profile": steam_client.get_profile()})
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
     def _get_steam_library(self):
         """Owned Steam games for the arcade panel's grid. Box-art URLs are
         built from the appid against Steam's own CDN (no local art-lookup
         needed the way ROM box art is -- Steam already has this covered).
+        Each game also carries its achievement progress (achieved/total,
+        or null if the title has none / privacy hides them) -- cached
+        per-appid in steam_client so repeat loads don't re-walk the whole
+        library against Steam's API every time.
         JSON: {ok, games:[{appid,name,playtime_forever_min,
-        playtime_2weeks_min,header}]}."""
+        playtime_2weeks_min,header,achievements}]}."""
         try:
             import steam_client  # type: ignore
             games = steam_client.get_owned_games()
@@ -806,6 +823,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
                     "playtime_forever_min": int(g.get("playtime_forever", 0) or 0),
                     "playtime_2weeks_min": int(g.get("playtime_2weeks", 0) or 0),
                     "header": f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/library_600x900.jpg",
+                    "achievements": steam_client.get_achievements(appid) if appid else None,
                 })
             self._json(200, {"ok": True, "games": out})
         except Exception as e:
