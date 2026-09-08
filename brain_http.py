@@ -242,6 +242,43 @@ _ROM_SYSTEMS = {
     ".ps3iso": "ps3",
 }
 
+# GameCube and Wii discs both carry a fixed 4-byte magic word at offset
+# 0x1C in their header; a real ISO9660 PS2 disc never has it there. Since
+# both GC and PS2 dumps commonly use plain ".iso", extension alone can't
+# tell them apart -- this settles it by peeking at just the header, no
+# need to read the whole (multi-GB) file. Dolphin plays both GC and Wii,
+# so either magic maps to the same "gc" bucket/launcher.
+_GC_DISC_MAGIC = b"\xc2\x33\x9f\x3d"
+_WII_DISC_MAGIC = b"\x5d\x1c\x9e\xa3"
+_DISC_MAGIC_OFFSET = 0x1c
+
+
+def _sniff_iso_system(header: bytes):
+    if len(header) < _DISC_MAGIC_OFFSET + 4:
+        return None
+    magic = header[_DISC_MAGIC_OFFSET:_DISC_MAGIC_OFFSET + 4]
+    if magic in (_GC_DISC_MAGIC, _WII_DISC_MAGIC):
+        return "gc"
+    return None
+
+
+def _rom_system_for(p: Path):
+    """Like _ROM_SYSTEMS.get(p.suffix.lower()), but for ".iso" specifically
+    also sniffs the file header to catch GameCube dumps that would
+    otherwise default to "ps2" -- see _sniff_iso_system above."""
+    ext = p.suffix.lower()
+    system = _ROM_SYSTEMS.get(ext)
+    if ext == ".iso" and system:
+        try:
+            with open(p, "rb") as f:
+                header = f.read(32)
+            sniffed = _sniff_iso_system(header)
+            if sniffed:
+                system = sniffed
+        except Exception:
+            pass
+    return system
+
 
 def _roms_dir() -> Path:
     return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
@@ -753,7 +790,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
                 for p in sorted(d.iterdir()):
                     if not p.is_file():
                         continue
-                    sysname = _ROM_SYSTEMS.get(p.suffix.lower())
+                    sysname = _rom_system_for(p)
                     if not sysname:
                         continue
                     roms.append({"name": p.name, "file": p.name,
@@ -790,7 +827,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
         if not p.exists() or not p.is_file():
             self._text(404, "rom not found")
             return
-        system = _ROM_SYSTEMS.get(p.suffix.lower())
+        system = _rom_system_for(p)
         if not system:
             self._text(404, "no art")
             return
@@ -820,7 +857,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
             if not p.exists() or not p.is_file():
                 self._text(404, "rom not found")
                 return
-            system = _ROM_SYSTEMS.get(p.suffix.lower())
+            system = _rom_system_for(p)
             if not system:
                 self._json(400, {"error": "unrecognized rom system"})
                 return
@@ -1079,6 +1116,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
                     dest = d / f"{stem} ({n}){suf}"
                     n += 1
             data = self.rfile.read(length)
+            if ext == ".iso":
+                sniffed = _sniff_iso_system(data[:32])
+                if sniffed:
+                    system = sniffed
             dest.write_bytes(data)
             print(f"[roms] uploaded {dest.name} ({len(data)} bytes, system={system})",
                   flush=True)
@@ -1171,7 +1212,41 @@ class _GraphHandler(BaseHTTPRequestHandler):
             slug = (qs.get("slug", [""])[0] or "").strip()
             self._handle_ingest_delete(slug)
             return
+        if path.startswith("/api/roms/") and not path.startswith("/api/roms/art/") \
+                and path != "/api/roms/upload":
+            self._delete_rom(path[len("/api/roms/"):])
+            return
         self._text(404, f"DELETE not supported on: {path}")
+
+    def _delete_rom(self, name: str):
+        """Delete a ROM from CHLOE_ROMS_DIR, plus its cached box art / miss
+        marker if it has any (best-effort -- a cache-cleanup failure
+        shouldn't stop the ROM itself from being deleted)."""
+        try:
+            name = unquote(name or "")
+            if not name or "/" in name or "\\" in name or ".." in name:
+                self._json(400, {"error": "invalid rom name"})
+                return
+            p = _roms_dir() / name
+            if not p.exists() or not p.is_file():
+                self._text(404, "rom not found")
+                return
+            system = _rom_system_for(p)
+            p.unlink()
+            if system:
+                try:
+                    import rom_art
+                    stem = Path(name).stem
+                    d = rom_art._art_dir() / system
+                    for suffix in (".png", ".nomatch"):
+                        f = d / (stem + suffix)
+                        if f.exists():
+                            f.unlink()
+                except Exception:
+                    pass
+            self._json(200, {"ok": True, "name": name})
+        except Exception as e:
+            self._json(500, {"error": f"{type(e).__name__}: {e}"})
 
     # ---- SSE stream ----
 

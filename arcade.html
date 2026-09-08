@@ -124,6 +124,8 @@
   .rom-card-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; }
   .rom-card-top { display: flex; align-items: center; justify-content: space-between; }
   .rom-tag { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .2em; color: #04050a; background: var(--acc); padding: 4px 8px; }
+  .rom-del { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1; color: #6d8492; background: none; border: none; cursor: pointer; padding: 4px 6px; }
+  .rom-del:hover { color: #ff5d7a; }
   .rom-size { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6d8492; }
   .rom-name { flex: 1; font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.4; color: #eafcff; }
   .rom-action { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .24em; color: var(--acc); }
@@ -480,15 +482,32 @@
       body.className = 'rom-card-body';
       body.innerHTML =
         '<div class="rom-card-top"><span class="rom-tag">' + (TAGS[r.system] || r.system || '?') + '</span>' +
-        '<span class="rom-size">' + (typeof r.size === 'number' ? fmtSize(r.size) : (r.size || '')) + '</span></div>' +
+        '<span class="rom-size">' + (typeof r.size === 'number' ? fmtSize(r.size) : (r.size || '')) + '</span>' +
+        '<button type="button" class="rom-del" title="Delete">✕</button></div>' +
         '<div class="rom-name"></div>' +
         '<div class="rom-action">' + (isLoaded ? 'LOADED' : 'LOAD ▸') + '</div>';
       body.querySelector('.rom-name').textContent = r.name || r.file;
+      body.querySelector('.rom-del').onclick = function(e) {
+        e.stopPropagation();
+        deleteRom(r);
+      };
       card.appendChild(body);
 
       card.onclick = function() { state.loaded = r; setView('playing'); };
       grid.appendChild(card);
     });
+  }
+
+  function deleteRom(r) {
+    if (!confirm('Delete ' + (r.name || r.file) + '? This removes the file from disk.')) return;
+    fetch(rel('api/roms/' + encodeURIComponent(r.file)), { method: 'DELETE' })
+      .then(function(resp) { if (!resp.ok) throw new Error('delete failed: ' + resp.status); return resp.json(); })
+      .then(function() {
+        if (state.loaded && state.loaded.file === r.file) state.loaded = null;
+        return refreshRoms();
+      })
+      .then(function() { renderLibrary(); renderHomeCounts(); })
+      .catch(function() { alert('Could not delete ' + (r.name || r.file) + '.'); });
   }
 
   // ---- manual box-art upload (fallback when auto-lookup finds nothing) --
