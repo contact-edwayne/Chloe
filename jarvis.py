@@ -647,11 +647,16 @@ def _build_turn_preamble(model: str | None = None, *, voice: bool) -> str:
             f"daily spend cap server-side; if a send is refused, relay the "
             f"reason and stop.\n"
             f"- You have Steam integration. Tools: `steam_library` (owned games / "
-            f"playtime), `steam_launch` (launch a game by name), `steam_friends` "
-            f"(who's online / what they're playing). Never invent playtime "
-            f"numbers, a game title, or friend status — always call the tool. "
-            f"If a tool reports 'not configured', tell Ed plainly that his "
-            f"Steam API key/SteamID aren't set up yet.\n\n"
+            f"playtime), `steam_friends` (who's online / what they're playing). "
+            f"Never invent playtime numbers, a game title, or friend status — "
+            f"always call the tool. If a tool reports 'not configured', tell Ed "
+            f"plainly that his Steam API key/SteamID aren't set up yet.\n"
+            f"- You can launch games by voice with `play_game` — covers Steam, "
+            f"PS2 (PCSX2), GameCube (Dolphin), PS3 (RPCS3), and Pokemon Gen 1 "
+            f"(gen1recomp). It does NOT cover NES/Game Boy/GBA/SNES/Genesis/N64/"
+            f"PS1 — those only run in the browser Arcade panel, so tell Ed to "
+            f"launch those from there instead. Never invent a launch result — "
+            f"always call the tool.\n\n"
             f"STYLE:\n"
             f"- Reply in plain spoken sentences. No bullet points, markdown, or lists.\n"
             f"- Keep replies short, friendly, and conversational — usually one or two "
@@ -6796,13 +6801,13 @@ WALLET_TOOL_NAMES = set(WALLET_TOOL_SCHEMAS.keys())
 
 
 # ─── STEAM TOOLS (2026-09-08) ────────────────────────────────────────────────
-# Three tools surfacing steam_client.py: library/playtime lookups, local
-# launch via steam://rungameid/<appid>, and friends/presence. Read-only
-# except steam_launch, which just hands the URI to the already-installed
-# Steam client (no subprocess/path management the way PCSX2/Dolphin/RPCS3
-# need). Requires CHLOE_STEAM_API_KEY + CHLOE_STEAM_ID64 in .env -- both
-# functions degrade to an honest "not configured" error if unset, same
-# pattern as _wallet_module() below.
+# Two tools surfacing steam_client.py: library/playtime lookups and
+# friends/presence. Read-only. Requires CHLOE_STEAM_API_KEY +
+# CHLOE_STEAM_ID64 in .env -- both functions degrade to an honest "not
+# configured" error if unset, same pattern as _wallet_module() below.
+# (Launching used to live here too as steam_launch -- 2026-09-08 it was
+# folded into the broader play_game tool below, which also covers the
+# native emulators.)
 STEAM_LIBRARY_SCHEMA = {
     "type": "function",
     "function": {
@@ -6826,27 +6831,6 @@ STEAM_LIBRARY_SCHEMA = {
                     ),
                 },
             },
-        },
-    },
-}
-
-STEAM_LAUNCH_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "steam_launch",
-        "description": (
-            "Launch a Steam game by name on Ed's PC. Use for 'launch X', "
-            "'open X in steam', 'start playing X', 'play X'."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "game_name": {
-                    "type": "string",
-                    "description": "The game to launch, as the user said it.",
-                },
-            },
-            "required": ["game_name"],
         },
     },
 }
@@ -6878,10 +6862,49 @@ STEAM_FRIENDS_SCHEMA = {
 
 STEAM_TOOL_SCHEMAS = {
     "steam_library": STEAM_LIBRARY_SCHEMA,
-    "steam_launch":  STEAM_LAUNCH_SCHEMA,
     "steam_friends": STEAM_FRIENDS_SCHEMA,
 }
 STEAM_TOOL_NAMES = set(STEAM_TOOL_SCHEMAS.keys())
+
+# ─── GAME TOOLS (2026-09-08) ─────────────────────────────────────────────────
+# One tool, play_game, unifying "play X" across every voice-launchable
+# system: Steam (steam_client.launch_game), native emulators PCSX2/
+# Dolphin/RPCS3 for ROMs in CHLOE_ROMS_DIR (_pcsx2_launch/_dolphin_launch/
+# _rpcs3_launch below), and gen1recomp for Pokemon Red/Blue/Yellow.
+# Replaces the old steam_launch tool above -- folding Steam launch in here
+# too avoids the model having two overlapping "launch X" tools to choose
+# between. Deliberately does NOT cover the browser-only EmulatorJS systems
+# (NES/GB/GBA/SNES/Genesis/N64/PS1) -- there's no process to launch for
+# those, they only run inside the Arcade panel's own page.
+PLAY_GAME_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "play_game",
+        "description": (
+            "Launch a game by name on Ed's PC. Covers Steam, PS2 "
+            "(PCSX2), GameCube (Dolphin), PS3 (RPCS3), and Pokemon Red/"
+            "Blue/Yellow (gen1recomp). Use for 'play X', 'launch X', "
+            "'start X', 'open X'. Does NOT cover NES, Game Boy, GBA, "
+            "SNES, Genesis, N64, or PS1 -- those run in the browser "
+            "Arcade panel only, with no voice launch path."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "game_name": {
+                    "type": "string",
+                    "description": "The game to launch, as the user said it.",
+                },
+            },
+            "required": ["game_name"],
+        },
+    },
+}
+
+GAME_TOOL_SCHEMAS = {
+    "play_game": PLAY_GAME_SCHEMA,
+}
+GAME_TOOL_NAMES = set(GAME_TOOL_SCHEMAS.keys())
 
 # ─── COMPUTATION / NOTIFICATION / EMAIL TOOLS (2026-09-02) ─────────────
 # Same "give the model a real tool instead of trusting its output" pattern
@@ -7245,7 +7268,7 @@ def _render_tools_for_prompt(tools: list[dict]) -> str:
 # re-render every call. _ollama_chat appends this to the system message.
 _TOOL_DOCS_FOR_PROMPT = _render_tools_for_prompt(
     [GREP_TOOL_SCHEMA, *WALLET_TOOL_SCHEMAS.values(), *EXTRA_TOOL_SCHEMAS.values(),
-     *STEAM_TOOL_SCHEMAS.values()])
+     *STEAM_TOOL_SCHEMAS.values(), *GAME_TOOL_SCHEMAS.values()])
 
 
 def _wallet_module():
@@ -7282,6 +7305,23 @@ def _steam_module():
         return steam_client
     except Exception as e:
         print(f"[chloe] steam_client module unavailable: {type(e).__name__}: {e}",
+              flush=True)
+        return None
+
+
+def _brain_http_module():
+    """Lazy-import brain_http.py -- used only for its ROM-library helpers
+    (_roms_dir, _rom_system_for) so play_game doesn't duplicate the
+    GC-vs-PS2 magic-byte sniffing logic. brain_http has no import-time
+    side effects (its HTTP server only starts under `if __name__ ==
+    "__main__"`), so it's safe to import lazily from here even though
+    brain_http itself lazily imports jarvis right back -- same mutual-
+    lazy-import pattern already used throughout this file."""
+    try:
+        import brain_http  # type: ignore
+        return brain_http
+    except Exception as e:
+        print(f"[chloe] brain_http module unavailable: {type(e).__name__}: {e}",
               flush=True)
         return None
 
@@ -7449,15 +7489,6 @@ def _steam_dispatch(name: str, args: dict) -> str:
                 return f"Steam error: {r.get('error', 'unknown')}"
             return json.dumps(r)
 
-        if name == "steam_launch":
-            game_name = args.get("game_name")
-            if not game_name:
-                return "Steam error: game_name is required."
-            r = s.launch_game(str(game_name))
-            if not r.get("ok"):
-                return f"Steam launch failed: {r.get('error', 'unknown')}"
-            return json.dumps(r)
-
         if name == "steam_friends":
             friend_name = args.get("friend_name")
             r = s.friends_summary(str(friend_name) if friend_name else None)
@@ -7469,6 +7500,145 @@ def _steam_dispatch(name: str, args: dict) -> str:
     except Exception as e:
         traceback.print_exc()
         return f"Steam error: {type(e).__name__}: {e}. Check CHLOE_STEAM_API_KEY / CHLOE_STEAM_ID64 in .env."
+
+
+# ─── play_game: unified voice launch across Steam + native emulators ──────
+# Steam first (biggest library, has its own resolver), then a ROM-dir scan
+# for PS2/GameCube/PS3 (the systems with a real launcher below), then
+# Pokemon Gen 1. _pcsx2_launch/_dolphin_launch/_rpcs3_launch/
+# _gen1recomp_launch are defined later in this file (native-emulator
+# section) -- referenced here only inside function bodies, which is fine
+# since those names are resolved at call time, well after module load
+# finishes.
+_ROM_BROWSER_ONLY_SYSTEMS = {
+    "nes": "NES", "gb": "Game Boy", "gba": "Game Boy Advance",
+    "snes": "SNES", "segaMD": "Genesis", "n64": "N64", "psx": "PS1",
+}
+
+
+def _resolve_rom_candidate(name: str, candidates: list) -> Path | None:
+    """Honest-miss name resolution against ROM filenames, mirroring
+    steam_client._resolve_game's ladder: exact stem match -> unambiguous
+    substring -> unambiguous token-overlap >= 0.5. Matches on the
+    filename stem (no extension) so 'play god of war' finds 'God of War
+    III.iso' without Ed needing to say the extension."""
+    needle = (name or "").strip().lower()
+    if not needle or not candidates:
+        return None
+    for p in candidates:
+        if p.stem.strip().lower() == needle:
+            return p
+    substr = [p for p in candidates if needle in p.stem.lower()]
+    if len(substr) == 1:
+        return substr[0]
+    needle_tokens = set(needle.split())
+    best, best_score, tie = None, 0.0, False
+    for p in candidates:
+        ptok = set(p.stem.lower().split())
+        if not ptok:
+            continue
+        overlap = len(needle_tokens & ptok) / max(len(needle_tokens | ptok), 1)
+        if overlap > best_score:
+            best, best_score, tie = p, overlap, False
+        elif overlap == best_score and overlap > 0 and p is not best:
+            tie = True
+    if best and best_score >= 0.5 and not tie:
+        return best
+    return None
+
+
+def _play_game(name: str) -> dict:
+    """Voice-unified 'play X': Steam first, then a CHLOE_ROMS_DIR scan
+    for PS2/GameCube/PS3, then Pokemon Gen 1. Browser-only EmulatorJS
+    systems (NES/GB/GBA/SNES/Genesis/N64/PS1) have no voice-reachable
+    launch path -- reported honestly (pointing at the Arcade panel)
+    rather than silently failing or guessing. Returns {ok, system, ...}
+    or {ok: False, error, ...}."""
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "error": "no game name given"}
+
+    s = _steam_module()
+    if s is not None:
+        try:
+            games = s.get_owned_games()
+            if s._resolve_game(name, games):
+                r = s.launch_game(name)
+                if r.get("ok"):
+                    r["system"] = "steam"
+                return r
+        except Exception as e:
+            print(f"[chloe] play_game steam lookup failed: {type(e).__name__}: {e}",
+                  flush=True)
+
+    bh = _brain_http_module()
+    if bh is not None:
+        try:
+            roms_dir = bh._roms_dir()
+            if roms_dir.exists():
+                all_files = [p for p in roms_dir.iterdir() if p.is_file()]
+                launchable = {}
+                for p in all_files:
+                    sysname = bh._rom_system_for(p)
+                    if sysname in ("ps2", "gc", "ps3"):
+                        launchable[p] = sysname
+                candidate = _resolve_rom_candidate(name, list(launchable.keys()))
+                if candidate:
+                    sysname = launchable[candidate]
+                    launcher = {"ps2": _pcsx2_launch, "gc": _dolphin_launch,
+                                "ps3": _rpcs3_launch}[sysname]
+                    r = launcher(candidate.name)
+                    r["system"] = sysname
+                    return r
+                bo_files = [p for p in all_files
+                            if bh._rom_system_for(p) in _ROM_BROWSER_ONLY_SYSTEMS]
+                bo_hit = _resolve_rom_candidate(name, bo_files)
+                if bo_hit:
+                    sysname = bh._rom_system_for(bo_hit)
+                    label = _ROM_BROWSER_ONLY_SYSTEMS.get(sysname, sysname)
+                    return {"ok": False,
+                            "error": (f"'{bo_hit.stem}' is a {label} game -- "
+                                      f"those only run in the browser Arcade "
+                                      f"panel, there's no voice launch for "
+                                      f"that system yet."),
+                            "browser_only": True, "system": sysname}
+        except Exception as e:
+            print(f"[chloe] play_game ROM scan failed: {type(e).__name__}: {e}",
+                  flush=True)
+
+    lname = name.lower()
+    if "pokemon" in lname or "pok\u00e9mon" in lname:
+        version = "red"
+        for v in ("red", "blue", "yellow"):
+            if v in lname:
+                version = v
+                break
+        r = _gen1recomp_launch(version)
+        if r.get("ok"):
+            r["system"] = "gen1recomp"
+        return r
+
+    return {"ok": False,
+            "error": f"couldn't find '{name}' in Steam, the ROM library, or Pokemon Gen 1."}
+
+
+def _game_dispatch(name: str, args: dict) -> str:
+    """Route the play_game tool call. Mirrors _steam_dispatch's shape."""
+    if not isinstance(args, dict):
+        args = {}
+    try:
+        if name == "play_game":
+            game_name = args.get("game_name")
+            if not game_name:
+                return "Play error: game_name is required."
+            r = _play_game(str(game_name))
+            if not r.get("ok"):
+                return f"Couldn't launch it: {r.get('error', 'unknown')}"
+            return json.dumps(r)
+        return f"unknown game tool: {name}"
+    except Exception as e:
+        traceback.print_exc()
+        return f"Play error: {type(e).__name__}: {e}"
 
 
 def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "",
@@ -7949,7 +8119,7 @@ def _synthesize_tool_call_from_content(content: str):
         name = parsed.get("name")
         args = parsed.get("arguments") or parsed.get("parameters")
     # 5) Sanity: name must be a known tool, args must be present.
-    known_tools = {"grep_source"} | WALLET_TOOL_NAMES | EXTRA_TOOL_NAMES | STEAM_TOOL_NAMES
+    known_tools = {"grep_source"} | WALLET_TOOL_NAMES | EXTRA_TOOL_NAMES | STEAM_TOOL_NAMES | GAME_TOOL_NAMES
     if not isinstance(name, str) or name not in known_tools:
         return None
     if args is None:
@@ -8911,6 +9081,10 @@ def _ollama_chat(messages: list, max_tokens: int = 400, *,
                       f" → {len(result)} chars", flush=True)
             elif name in STEAM_TOOL_NAMES:
                 result = _steam_dispatch(name, args)
+                print(f"[chloe]   ollama-tool {name}({args})"
+                      f" → {len(result)} chars", flush=True)
+            elif name in GAME_TOOL_NAMES:
+                result = _game_dispatch(name, args)
                 print(f"[chloe]   ollama-tool {name}({args})"
                       f" → {len(result)} chars", flush=True)
             elif name in EXTRA_TOOL_NAMES:
