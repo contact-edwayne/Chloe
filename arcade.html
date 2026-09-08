@@ -117,10 +117,13 @@
   .rom-card { position: relative; background: #0a0b10; border: 1px solid var(--line); cursor: pointer; display: flex; flex-direction: column; min-height: 132px; overflow: hidden; }
   .rom-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
   .rom-card.loaded { border-color: var(--acc); }
-  .rom-cover { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; display: block; border-bottom: 1px solid var(--line); background: #04050a; }
-  .rom-cover-add { width: 100%; aspect-ratio: 1 / 1; display: flex; align-items: center; justify-content: center; border: none; border-bottom: 1px solid var(--line); background: #0e1018; color: #6d8492; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .18em; cursor: pointer; }
-  .rom-cover-add:hover { color: var(--acc); background: #12151f; }
-  .rom-cover-add:disabled { cursor: default; opacity: .6; }
+  .rom-cover-wrap { position: relative; aspect-ratio: 1 / 1; border-bottom: 1px solid var(--line); background: #04050a; }
+  .rom-cover-wrap.no-art { background: #0e1018; display: flex; align-items: center; justify-content: center; }
+  .rom-cover-wrap.no-art::after { content: 'NO ART'; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .18em; color: #6d8492; }
+  .rom-cover { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .rom-cover-edit { position: absolute; top: 6px; right: 6px; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .12em; color: #eafcff; background: rgba(4,5,10,.78); border: 1px solid var(--line); padding: 4px 8px; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .rom-card:hover .rom-cover-edit, .rom-cover-wrap.no-art .rom-cover-edit { opacity: 1; }
+  .rom-cover-edit:disabled { cursor: default; opacity: 1 !important; }
   .rom-card-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; }
   .rom-card-top { display: flex; align-items: center; justify-content: space-between; }
   .rom-tag { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .2em; color: #04050a; background: var(--acc); padding: 4px 8px; }
@@ -471,12 +474,29 @@
       var card = document.createElement('div');
       card.className = 'rom-card' + (isLoaded ? ' loaded' : '');
 
+      var coverWrap = document.createElement('div');
+      coverWrap.className = 'rom-cover-wrap';
+
       var cover = document.createElement('img');
       cover.className = 'rom-cover';
       cover.loading = 'lazy';
       cover.src = rel('api/roms/art/' + encodeURIComponent(r.file)) + (r._artV ? ('?v=' + r._artV) : '');
-      cover.onerror = function() { showArtUpload(r, cover); };
-      card.appendChild(cover);
+      cover.onerror = function() { cover.remove(); coverWrap.classList.add('no-art'); };
+      coverWrap.appendChild(cover);
+
+      var artBtn = document.createElement('button');
+      artBtn.type = 'button';
+      artBtn.className = 'rom-cover-edit';
+      artBtn.textContent = '✎ ART';
+      artBtn.title = 'Change box art';
+      artBtn.onclick = function(e) {
+        e.stopPropagation();
+        pendingArtTarget = { r: r, slotEl: artBtn };
+        $('rom-art-input').click();
+      };
+      coverWrap.appendChild(artBtn);
+
+      card.appendChild(coverWrap);
 
       var body = document.createElement('div');
       body.className = 'rom-card-body';
@@ -510,21 +530,8 @@
       .catch(function() { alert('Could not delete ' + (r.name || r.file) + '.'); });
   }
 
-  // ---- manual box-art upload (fallback when auto-lookup finds nothing) --
+  // ---- manual box-art upload (also used to replace existing art) --------
   var pendingArtTarget = null; // { r, slotEl }
-
-  function showArtUpload(r, coverEl) {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'rom-cover-add';
-    btn.textContent = '+ ADD ART';
-    btn.onclick = function(e) {
-      e.stopPropagation();
-      pendingArtTarget = { r: r, slotEl: btn };
-      $('rom-art-input').click();
-    };
-    if (coverEl.parentNode) coverEl.parentNode.replaceChild(btn, coverEl);
-  }
 
   function uploadArt(r, slotEl, file) {
     slotEl.textContent = 'UPLOADING…';
