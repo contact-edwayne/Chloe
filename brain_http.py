@@ -733,6 +733,14 @@ class _GraphHandler(BaseHTTPRequestHandler):
             self._get_rpcs3_status()
             return
 
+        if path == "/api/steam/library":
+            self._get_steam_library()
+            return
+
+        if path == "/api/steam/friends":
+            self._get_steam_friends()
+            return
+
         if path == "/api/roms":
             self._list_roms()
             return
@@ -779,6 +787,65 @@ class _GraphHandler(BaseHTTPRequestHandler):
             "webp": "image/webp", "gif": "image/gif", "bmp": "image/bmp",
         }.get(ext, "application/octet-stream")
         self._file(200, img_path, mime)
+
+    def _get_steam_library(self):
+        """Owned Steam games for the arcade panel's grid. Box-art URLs are
+        built from the appid against Steam's own CDN (no local art-lookup
+        needed the way ROM box art is -- Steam already has this covered).
+        JSON: {ok, games:[{appid,name,playtime_forever_min,
+        playtime_2weeks_min,header}]}."""
+        try:
+            import steam_client  # type: ignore
+            games = steam_client.get_owned_games()
+            out = []
+            for g in games:
+                appid = g.get("appid")
+                out.append({
+                    "appid": appid,
+                    "name": g.get("name"),
+                    "playtime_forever_min": int(g.get("playtime_forever", 0) or 0),
+                    "playtime_2weeks_min": int(g.get("playtime_2weeks", 0) or 0),
+                    "header": f"https://cdn.akamai.steamstatic.com/steam/apps/{appid}/library_600x900.jpg",
+                })
+            self._json(200, {"ok": True, "games": out})
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _get_steam_friends(self):
+        """Online-only friends for the arcade panel's sidebar. friends_summary()
+        returns every friend (online + offline); the panel only wants who's
+        currently on, so filter here rather than pushing that logic into the
+        frontend."""
+        try:
+            import steam_client  # type: ignore
+            res = steam_client.friends_summary()
+            if not res.get("ok"):
+                self._json(200, res)
+                return
+            online = [f for f in res.get("friends", []) if f.get("status") != "Offline"]
+            self._json(200, {"ok": True, "online": online, "online_count": len(online),
+                              "total_friends": res.get("total_friends", len(res.get("friends", [])))})
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
+
+    def _post_steam_launch(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            data = self.rfile.read(length) if length > 0 else b""
+            appid = None
+            if data:
+                try:
+                    appid = (json.loads(data.decode("utf-8")) or {}).get("appid")
+                except Exception:
+                    appid = None
+            if appid is None:
+                self._json(400, {"ok": False, "error": "appid is required"})
+                return
+            import steam_client  # type: ignore
+            res = steam_client.launch_appid(int(appid))
+            self._json(200 if res.get("ok") else 500, res)
+        except Exception as e:
+            self._json(500, {"ok": False, "error": str(e)})
 
     def _list_roms(self):
         """List ROM files in CHLOE_ROMS_DIR with the system inferred from the
@@ -1182,6 +1249,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
         if path == "/api/gen1recomp/stop":
             self._post_gen1recomp_stop()
             return
+        if path == "/api/steam/launch":
+            self._post_steam_launch()
+            return
+
         if path == "/api/pcsx2/launch":
             self._post_pcsx2_launch()
             return

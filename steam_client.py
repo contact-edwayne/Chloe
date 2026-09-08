@@ -201,6 +201,27 @@ def launch_game(name: str) -> dict:
     return {"ok": True, "name": g.get("name"), "appid": appid}
 
 
+# ─── Arcade panel support (2026-09-08) ──────────────────────────────────────
+def launch_appid(appid: int) -> dict:
+    """Launch by an already-known appid -- for callers (the arcade panel)
+    that already resolved the game and have the exact id, so this skips
+    _resolve_game's name-matching ladder entirely. launch_game() above
+    (name-based, for voice) delegates the actual launch mechanics to a
+    near-identical block; kept separate rather than sharing code because
+    the two have different error-shape needs (this one has no "no match"
+    case to report)."""
+    uri = f"steam://rungameid/{appid}"
+    try:
+        if os.name == "nt":
+            os.startfile(uri)  # type: ignore[attr-defined]
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", uri])
+    except Exception as e:
+        return {"ok": False, "error": f"Failed to launch Steam: {type(e).__name__}: {e}"}
+    return {"ok": True, "appid": appid}
+
+
 # ─── Friends / presence ─────────────────────────────────────────────────────
 def get_friends() -> list[dict]:
     """Friend list merged with live status + currently-playing.
@@ -236,6 +257,7 @@ def get_friends() -> list[dict]:
                 "status":   _PERSONASTATE.get(p.get("personastate", 0), "Unknown"),
                 "playing":  p.get("gameextrainfo"),
                 "steamid":  p.get("steamid"),
+                "avatar":   p.get("avatarmedium") or p.get("avatar"),
             })
     return out
 

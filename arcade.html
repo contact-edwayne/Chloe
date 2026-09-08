@@ -79,7 +79,7 @@
   #retro-systems { display: flex; flex-wrap: wrap; gap: 8px; }
   #retro-systems span { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .18em; color: #a4bccb; border: 1px solid var(--line); padding: 6px 11px; }
 
-  #home-right { display: grid; grid-template-rows: 1fr 1fr; gap: 18px; min-height: 0; }
+  #home-right { display: grid; grid-template-rows: 1fr 1fr 1fr; gap: 18px; min-height: 0; }
   .tile-small { padding: 28px; display: flex; flex-direction: column; justify-content: flex-end; }
   .tile-small .kicker { position: relative; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .3em; color: var(--acc); }
   .tile-small .name { position: relative; font-family: 'JetBrains Mono', monospace; font-size: 28px; font-weight: 700; letter-spacing: .1em; color: #eafcff; margin-top: 8px; }
@@ -93,6 +93,10 @@
   #tile-poke .haze2 { position: absolute; right: 65px; top: 50%; margin-top: -17px; width: 34px; height: 34px; border-radius: 50%; background: radial-gradient(circle, var(--acc2), transparent 68%); animation: haze 4.2s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
   #poke-status-pill { position: absolute; left: 28px; top: 28px; display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
   #poke-status-dot { width: 6px; height: 6px; border-radius: 50%; background: #6d8492; box-shadow: 0 0 10px currentColor; animation: blink 1.6s ease-in-out infinite; animation-play-state: paused; }
+  #tile-steam .ring { position: absolute; right: 24px; top: 50%; margin-top: -48px; width: 96px; height: 96px; border-radius: 50%; border: 1px solid var(--acc); box-shadow: 0 0 34px var(--glow); pointer-events: none; }
+  #tile-steam .ring2 { position: absolute; right: 46px; top: 50%; margin-top: -26px; width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--acc2); animation: spin 12s linear infinite; animation-play-state: var(--play); pointer-events: none; }
+  #tile-steam .dot { position: absolute; right: 66px; top: 50%; margin-top: -6px; width: 12px; height: 12px; border-radius: 50%; background: var(--acc); box-shadow: 0 0 18px var(--acc); animation: haze 3.8s ease-in-out infinite; animation-play-state: var(--play); pointer-events: none; }
+  #steam-count-pill { position: absolute; left: 28px; top: 28px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
 
   #hub-telemetry { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 18px 30px; border-top: 1px solid var(--line); background: #0a0b10; flex: none; }
   #chloe-line { font-family: 'Cormorant Garamond', serif; font-style: italic; font-size: 19px; color: var(--ink); }
@@ -163,6 +167,37 @@
   #btn-poke-launch { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .2em; padding: 13px 26px; cursor: pointer; color: #04050a; background: var(--acc); border: none; box-shadow: 0 0 22px var(--glow); }
   #btn-poke-stop { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .2em; padding: 13px 26px; cursor: pointer; color: var(--ink); background: transparent; border: 1px solid var(--line); }
   #btn-poke-launch:disabled, #btn-poke-stop:disabled { opacity: .4; cursor: default; }
+
+  /* steam library view */
+  #view-steam { display: flex; flex-direction: row; gap: 18px; padding: 8px 30px 26px; min-height: 0; }
+  #steam-main { flex: 1; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  #steam-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex: none; }
+  #steam-stats { display: flex; gap: 22px; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #6d8492; }
+  #steam-stats b { font-weight: inherit; color: var(--acc); }
+  #steam-search { font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .1em; background: #0d0f16; border: 1px solid var(--line); color: #d8e6ef; padding: 10px 14px; width: 220px; }
+  #steam-search:focus { outline: none; border-color: var(--acc); }
+  #steam-grid { flex: 1; overflow: auto; min-height: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 14px; align-content: start; padding-bottom: 6px; }
+  .steam-card { position: relative; background: #0a0b10; border: 1px solid var(--line); cursor: default; display: flex; flex-direction: column; overflow: hidden; }
+  .steam-card:hover { border-color: var(--acc); box-shadow: 0 0 30px var(--glow); }
+  .steam-cover-wrap { position: relative; aspect-ratio: 600 / 900; background: #04050a; }
+  .steam-cover-wrap.no-art { display: flex; align-items: center; justify-content: center; }
+  .steam-cover-wrap.no-art::after { content: 'NO ART'; font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .18em; color: #6d8492; }
+  .steam-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .steam-launch-btn { position: absolute; inset: auto 0 0 0; padding: 10px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .2em; color: #04050a; background: var(--acc); border: none; cursor: pointer; opacity: 0; transform: translateY(100%); transition: opacity .15s, transform .15s; }
+  .steam-card:hover .steam-launch-btn { opacity: 1; transform: none; }
+  .steam-launch-btn:disabled { cursor: default; opacity: .6 !important; transform: none !important; }
+  .steam-card-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; }
+  .steam-name { font-family: 'Inter', sans-serif; font-size: 12px; line-height: 1.35; color: #eafcff; }
+  .steam-hours { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .1em; color: var(--ink); }
+  #steam-empty { display: none; align-items: center; justify-content: center; height: 100%; font-family: 'Inter', sans-serif; font-size: 13px; color: #6d8492; text-align: center; padding: 30px; }
+  #steam-friends { flex: none; width: 240px; display: flex; flex-direction: column; gap: 14px; border-left: 1px solid var(--line); padding-left: 18px; overflow: auto; }
+  #steam-friends-label { font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: .28em; color: var(--acc); flex: none; }
+  .steam-friend-row { display: flex; align-items: center; gap: 10px; }
+  .steam-friend-avatar { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); flex: none; background: #0d0f16; object-fit: cover; }
+  .steam-friend-info { min-width: 0; }
+  .steam-friend-name { font-family: 'Inter', sans-serif; font-size: 12px; color: #eafcff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .steam-friend-status { font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: .1em; color: var(--acc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .steam-friends-empty { font-family: 'Inter', sans-serif; font-size: 12px; color: #6d8492; }
 
   /* customize drawer */
   #drawer { position: absolute; left: 0; right: 0; bottom: 0; background: #0a0b10; border-top: 1px solid var(--acc); box-shadow: 0 -30px 60px #000000cc; animation: sheetIn .26s cubic-bezier(.2,.8,.2,1); padding: 26px 30px 30px; z-index: 5; display: flex; flex-direction: column; gap: 22px; }
@@ -260,6 +295,19 @@
           <div class="kicker">NATIVE WINDOW</div>
           <div class="name">POKÉMON</div>
         </div>
+
+        <div id="tile-steam" class="tile tile-small">
+          <div class="tile-border-light">
+            <div class="square" style="width:200%;height:0;padding-bottom:200%">
+              <div class="arc" style="animation-duration:7s"></div>
+            </div>
+            <div class="cover"></div>
+          </div>
+          <div class="ring"></div><div class="ring2"></div><div class="dot"></div>
+          <div id="steam-count-pill"><span id="steam-count-pill-text">0 GAMES</span></div>
+          <div class="kicker">PC LIBRARY</div>
+          <div class="name">STEAM</div>
+        </div>
       </div>
     </div>
 
@@ -323,6 +371,22 @@
         <button id="btn-poke-launch">LAUNCH</button>
         <button id="btn-poke-stop">STOP</button>
       </div>
+    </div>
+  </div>
+
+  <!-- STEAM -->
+  <div id="view-steam" class="view" hidden>
+    <div id="steam-main">
+      <div id="steam-toolbar">
+        <div id="steam-stats"><span>GAMES <b id="steam-stat-count">0</b></span><span>TOTAL HOURS <b id="steam-stat-hours">0</b></span></div>
+        <input type="text" id="steam-search" placeholder="SEARCH LIBRARY...">
+      </div>
+      <div id="steam-grid"></div>
+      <div id="steam-empty">No games match, or your Steam library hasn't loaded yet.</div>
+    </div>
+    <div id="steam-friends">
+      <div id="steam-friends-label">FRIENDS ONLINE</div>
+      <div id="steam-friends-list"></div>
     </div>
   </div>
 
@@ -391,6 +455,118 @@
 
   var $ = function(id) { return document.getElementById(id); };
   var root = $('hub');
+
+  // ---- steam library / friends -----------------------------------------
+  var steamState = { games: [], friends: [], search: '' };
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function refreshSteamLibrary() {
+    return fetch(rel('api/steam/library'), { cache: 'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ steamState.games = (j && j.ok && j.games) || []; })
+      .catch(function(){ /* keep whatever we had */ })
+      .then(function(){ renderSteamStats(); renderSteamGrid(); });
+  }
+
+  function refreshSteamFriends() {
+    return fetch(rel('api/steam/friends'), { cache: 'no-store' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ steamState.friends = (j && j.ok && j.online) || []; })
+      .catch(function(){ /* keep whatever we had */ })
+      .then(function(){ renderSteamFriends(); });
+  }
+
+  function renderSteamStats() {
+    var count = steamState.games.length;
+    var mins = steamState.games.reduce(function(sum, g){ return sum + (g.playtime_forever_min || 0); }, 0);
+    $('steam-stat-count').textContent = count;
+    $('steam-stat-hours').textContent = Math.round(mins / 60);
+    $('steam-count-pill-text').textContent = count + ' GAMES';
+  }
+
+  function renderSteamGrid() {
+    var q = steamState.search.trim().toLowerCase();
+    var list = steamState.games.filter(function(g) {
+      return !q || (g.name || '').toLowerCase().indexOf(q) !== -1;
+    }).slice().sort(function(a, b) {
+      return (b.playtime_forever_min || 0) - (a.playtime_forever_min || 0);
+    });
+    var grid = $('steam-grid'); grid.innerHTML = '';
+    $('steam-empty').style.display = list.length ? 'none' : 'flex';
+    list.forEach(function(g) {
+      var card = document.createElement('div');
+      card.className = 'steam-card';
+
+      var coverWrap = document.createElement('div');
+      coverWrap.className = 'steam-cover-wrap';
+      var cover = document.createElement('img');
+      cover.className = 'steam-cover';
+      cover.loading = 'lazy';
+      cover.src = g.header || '';
+      cover.onerror = function() { cover.remove(); coverWrap.classList.add('no-art'); };
+      coverWrap.appendChild(cover);
+
+      var launchBtn = document.createElement('button');
+      launchBtn.type = 'button';
+      launchBtn.className = 'steam-launch-btn';
+      launchBtn.textContent = '▶ LAUNCH';
+      launchBtn.onclick = function(e) { e.stopPropagation(); launchSteamGame(g, launchBtn); };
+      coverWrap.appendChild(launchBtn);
+      card.appendChild(coverWrap);
+
+      var body = document.createElement('div');
+      body.className = 'steam-card-body';
+      body.innerHTML =
+        '<div class="steam-name"></div>' +
+        '<div class="steam-hours">' + (Math.round((g.playtime_forever_min || 0) / 6) / 10) + ' HRS</div>';
+      body.querySelector('.steam-name').textContent = g.name || ('App ' + g.appid);
+      card.appendChild(body);
+
+      grid.appendChild(card);
+    });
+  }
+
+  function launchSteamGame(g, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'LAUNCHING…'; }
+    fetch(rel('api/steam/launch'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appid: g.appid })
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(j) {
+        if (!j || !j.ok) throw new Error((j && j.error) || 'launch failed');
+      })
+      .catch(function(e){ alert('Could not launch ' + (g.name || g.appid) + ': ' + e); })
+      .then(function() { if (btn) { btn.disabled = false; btn.textContent = '▶ LAUNCH'; } });
+  }
+
+  function renderSteamFriends() {
+    var wrap = $('steam-friends-list'); wrap.innerHTML = '';
+    if (!steamState.friends.length) {
+      wrap.innerHTML = '<div class="steam-friends-empty">No friends online right now.</div>';
+      return;
+    }
+    steamState.friends.forEach(function(f) {
+      var row = document.createElement('div');
+      row.className = 'steam-friend-row';
+      row.innerHTML =
+        '<img class="steam-friend-avatar" src="' + escapeHtml(f.avatar || '') + '">' +
+        '<div class="steam-friend-info">' +
+        '<div class="steam-friend-name"></div>' +
+        '<div class="steam-friend-status"></div></div>';
+      row.querySelector('.steam-friend-name').textContent = f.name || 'Friend';
+      row.querySelector('.steam-friend-status').textContent = f.playing ? ('Playing ' + f.playing) : (f.status || 'Online');
+      wrap.appendChild(row);
+    });
+  }
+
+  $('steam-search').oninput = function(e) { steamState.search = e.target.value; renderSteamGrid(); };
 
   // ---- theme / customize -------------------------------------------------
   function paint() {
@@ -708,8 +884,8 @@
   startPokePoll();
 
   // ---- view switching -------------------------------------------------
-  var VIEWS = ['home', 'emulator', 'playing', 'chess', 'pokemon'];
-  var TITLES = { home: 'ARCADE', chess: 'CHESS', pokemon: 'POKÉMON', emulator: 'RETRO EMULATOR', playing: 'RETRO EMULATOR' };
+  var VIEWS = ['home', 'emulator', 'playing', 'chess', 'pokemon', 'steam'];
+  var TITLES = { home: 'ARCADE', chess: 'CHESS', pokemon: 'POKÉMON', emulator: 'RETRO EMULATOR', playing: 'RETRO EMULATOR', steam: 'STEAM LIBRARY' };
 
   function setView(v) {
     var leaving = state.view;
@@ -722,18 +898,21 @@
     if (v === 'emulator') refreshRoms();
     if (v === 'playing') mountPlaying();
     if (v === 'chess') mountChess();
+    if (v === 'steam') { refreshSteamLibrary(); refreshSteamFriends(); }
   }
 
   $('crumb-back').onclick = function() { setView('home'); };
   $('tile-retro').onclick = function() { setView('emulator'); };
   $('tile-chess').onclick = function() { setView('chess'); };
   $('tile-poke').onclick = function() { setView('pokemon'); };
+  $('tile-steam').onclick = function() { setView('steam'); };
 
   // ---- init -------------------------------------------------------------
   paint();
   renderDrawer();
   refreshRoms();
   renderPoke();
+  refreshSteamLibrary();
   setView('home');
 })();
 </script>
