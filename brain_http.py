@@ -262,10 +262,20 @@ def _sniff_iso_system(header: bytes):
     return None
 
 
+# Real Genesis/MegaDrive cartridge dumps never exceed this (largest
+# licensed carts top out around 4MB); a PS1 CD track is always well above
+# it, so a plain ".bin" over this size is a PS1 disc, not a Genesis ROM.
+_BIN_PSX_MIN_BYTES = 16 * 1024 * 1024  # 16MB
+
+
 def _rom_system_for(p: Path):
-    """Like _ROM_SYSTEMS.get(p.suffix.lower()), but for ".iso" specifically
-    also sniffs the file header to catch GameCube dumps that would
-    otherwise default to "ps2" -- see _sniff_iso_system above."""
+    """Like _ROM_SYSTEMS.get(p.suffix.lower()), but with two extension-alone-
+    can't-tell-them-apart special cases:
+      - ".iso" also sniffs the file header to catch GameCube dumps that
+        would otherwise default to "ps2" -- see _sniff_iso_system above.
+      - ".bin" is claimed by Genesis/MegaDrive by default, but a PS1 disc
+        is sometimes shipped as a bare .bin with no .cue -- disambiguate
+        by size (see _BIN_PSX_MIN_BYTES above)."""
     ext = p.suffix.lower()
     system = _ROM_SYSTEMS.get(ext)
     if ext == ".iso" and system:
@@ -275,6 +285,12 @@ def _rom_system_for(p: Path):
             sniffed = _sniff_iso_system(header)
             if sniffed:
                 system = sniffed
+        except Exception:
+            pass
+    elif ext == ".bin" and system:
+        try:
+            if p.stat().st_size >= _BIN_PSX_MIN_BYTES:
+                system = "psx"
         except Exception:
             pass
     return system
