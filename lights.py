@@ -751,38 +751,53 @@ def delete_preset(name: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 def _format_result(result: dict, intent: dict) -> str:
-    """Voice-friendly one-line summary of a set_state result."""
-    if not result.get("ok"):
+    """Voice-friendly one-line summary of a set_state result.
+
+    "all lights on/off" targets every configured bulb, and it's normal
+    for one to be unplugged/offline — set_state's overall `ok` is an
+    all-or-nothing AND across every bulb, so without this split a single
+    offline lamp would report the whole command as failed even though
+    the other five actually turned on. Report success for whichever
+    bulbs it reached, and only fall through to a hard failure message
+    when NONE of them could be reached."""
+    results = result.get("results", [])
+    ok_names = [r["bulb_name"] for r in results if r.get("ok")]
+    offline_names = [r["bulb_name"] for r in results if not r.get("ok")]
+
+    if not ok_names:
         err = result.get("error")
         if err:
             return f"Lights: {err}."
-        offline = [r["bulb_name"] for r in result.get("results", []) if not r.get("ok")]
-        if offline:
-            return f"Couldn't reach: {', '.join(offline)}."
+        if offline_names:
+            return f"Couldn't reach: {', '.join(offline_names)}."
         return "Lights command failed."
 
     # Use the resolved bulb names rather than the raw target text — feels more
     # natural ("Bedroom off" instead of "Bed off" when user said "turn off bed").
-    names = [r["bulb_name"] for r in result.get("results", []) if r.get("ok")]
-    if len(names) == 1:
-        label = names[0].title()
+    if len(ok_names) == 1:
+        label = ok_names[0].title()
     else:
         label = "Lights"
 
     if intent.get("on") is False:
-        return f"{label} off."
+        reply = f"{label} off."
+    else:
+        parts: list[str] = []
+        if intent.get("color"):
+            parts.append(intent["color"])
+        elif intent.get("ct"):
+            parts.append(str(intent["ct"]))
+        if intent.get("brightness") is not None:
+            parts.append(f"at {intent['brightness']} percent")
 
-    parts: list[str] = []
-    if intent.get("color"):
-        parts.append(intent["color"])
-    elif intent.get("ct"):
-        parts.append(str(intent["ct"]))
-    if intent.get("brightness") is not None:
-        parts.append(f"at {intent['brightness']} percent")
+        if not parts:
+            reply = f"{label} on." if intent.get("on") is True else f"{label} set."
+        else:
+            reply = f"{label} {' '.join(parts)}."
 
-    if not parts:
-        return f"{label} on." if intent.get("on") is True else f"{label} set."
-    return f"{label} {' '.join(parts)}."
+    if offline_names:
+        reply += f" ({', '.join(offline_names)} unreachable.)"
+    return reply
 
 
 def _format_status() -> str:
