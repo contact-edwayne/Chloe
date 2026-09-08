@@ -2867,6 +2867,26 @@ async def _handle_chat_inner(data, websocket):
                     hud_server.broadcast_sync("idle")
             return
 
+        # Games: "play/launch <game>" -- checked BEFORE youtube, since its
+        # own catch-all ("play <anything>" -> live YouTube search) would
+        # otherwise swallow every real game title first. See the long
+        # comment above try_handle_game_command's definition.
+        game_reply = await asyncio.to_thread(try_handle_game_command, _last_user_l)
+        if game_reply is not None:
+            _push_history("user", _last_user_l, modality="chat")
+            _push_history("assistant", game_reply, modality="chat")
+            await _ws_send(websocket, {"type": "start"})
+            await _ws_send(websocket, {"type": "delta", "text": game_reply})
+            await _ws_send(websocket, {"type": "done"})
+            if not data.get("no_tts"):
+                try:
+                    await _reply_audio_or_speak(game_reply, data, label="chat-game")
+                except Exception as e:
+                    print(f"[chloe] chat TTS error on game reply: {e}")
+                finally:
+                    hud_server.broadcast_sync("idle")
+            return
+
         # YouTube: "play <playlist>" / "play my <playlist> playlist"
         youtube_reply = await asyncio.to_thread(try_handle_youtube_command, _last_user_l)
         if youtube_reply is not None:
@@ -5752,6 +5772,18 @@ def _ptt_record_phase(sd, device):
         print("[voice] PTT spotify-ack complete", flush=True)
         return
 
+    # Games: "play/launch <game>" -- checked BEFORE youtube, see the long
+    # comment above try_handle_game_command's definition.
+    game_reply = try_handle_game_command(transcript)
+    if game_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", game_reply, modality="voice")
+        _broadcast_exchange(transcript, game_reply)
+        _speak(game_reply)
+        hud_server.broadcast_sync("idle")
+        print("[voice] PTT game-ack complete", flush=True)
+        return
+
     # YouTube: "play <playlist>" / "put on my <playlist> playlist"
     youtube_reply = try_handle_youtube_command(transcript)
     if youtube_reply is not None:
@@ -6308,6 +6340,17 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
         _push_history("assistant", spotify_reply, modality="voice")
         _broadcast_exchange(transcript, spotify_reply)
         _speak(spotify_reply)
+        hud_server.broadcast_sync("idle")
+        return True
+
+    # Games: "play/launch <game>" -- checked BEFORE youtube, see the long
+    # comment above try_handle_game_command's definition.
+    game_reply = try_handle_game_command(transcript)
+    if game_reply is not None:
+        _push_history("user", transcript, modality="voice")
+        _push_history("assistant", game_reply, modality="voice")
+        _broadcast_exchange(transcript, game_reply)
+        _speak(game_reply)
         hud_server.broadcast_sync("idle")
         return True
 
@@ -7567,8 +7610,7 @@ def _play_game(name: str) -> dict:
             games = s.get_owned_games()
             if s._resolve_game(name, games):
                 r = s.launch_game(name)
-                if r.get("ok"):
-                    r["system"] = "steam"
+                r["system"] = "steam"
                 return r
         except Exception as e:
             print(f"[chloe] play_game steam lookup failed: {type(e).__name__}: {e}",
@@ -7628,8 +7670,7 @@ def _play_game(name: str) -> dict:
                 version = v
                 break
         r = _gen1recomp_launch(version)
-        if r.get("ok"):
-            r["system"] = "gen1recomp"
+        r["system"] = "gen1recomp"
         return r
 
     return {"ok": False,
@@ -7653,6 +7694,47 @@ def _game_dispatch(name: str, args: dict) -> str:
     except Exception as e:
         traceback.print_exc()
         return f"Play error: {type(e).__name__}: {e}"
+
+
+# 2026-09-08: youtube_playlists.try_handle_youtube_command's own "play
+# <anything>" catch-all (a live YouTube search -- Ed's explicit 2026-09-01
+# design choice, see that module's docstring) runs deterministically
+# BEFORE the LLM/tool-calling loop ever sees the turn, in all three voice/
+# chat dispatch paths. Since play_game is only reachable as an LLM tool,
+# that meant "play <a real Steam/ROM/Pokemon game>" was always being
+# grabbed by YouTube first and searched/played there instead -- caught
+# live 2026-09-08 (Ed: "play Super Mario All-Stars" played a YouTube
+# video). This matcher runs ahead of the YouTube check in each of those
+# three call sites and claims the turn only when _play_game finds a REAL
+# match (Steam library, ROM library incl. browser-only systems, or
+# Pokemon Gen 1) -- signalled by the "system" key _play_game now tags
+# unconditionally, whether or not the launch itself then succeeds. Any
+# name that doesn't match anything returns None here so YouTube's
+# fallback still covers genuine music/video requests exactly as before.
+_GAME_VERB_RE = re.compile(r"^\s*(?:play|launch)\s+(.+?)\s*[.!?]*\s*$", re.I)
+
+
+def try_handle_game_command(text: str) -> str | None:
+    """Returns a voice-friendly reply if `text` names a real Steam/ROM/
+    Pokemon game, else None (unclaimed -- let YouTube's catch-all run)."""
+    if not text:
+        return None
+    m = _GAME_VERB_RE.match(text.strip())
+    if not m:
+        return None
+    name = m.group(1).strip()
+    name = re.sub(r"\s+(?:game|on\s+steam)\s*$", "", name, flags=re.I).strip()
+    if not name:
+        return None
+    result = _play_game(name)
+    if "system" not in result:
+        return None
+    if result.get("ok"):
+        shown = result.get("name") or name
+        if result.get("browser_only"):
+            return f"Loading {shown} in the Arcade panel."
+        return f"Launching {shown}."
+    return f"Couldn't launch it: {result.get('error', 'unknown error')}"
 
 
 def _extra_tool_dispatch(name: str, args: dict, *, source_text: str = "",
