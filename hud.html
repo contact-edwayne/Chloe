@@ -976,6 +976,10 @@
     gap: 8px;
     background: #000408;
   }
+  .chat-input-row.watch-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
   .chat-input {
     flex: 1;
     background: #00f7ff08;
@@ -2711,6 +2715,24 @@
   }
 
   function handleStructured(data) {
+    if (data.type === 'game_watch_state') {
+      // Commentary Chloe (arcade watch) is the only Chloe Ed should be
+      // talking to while it's on -- see the 2026-09-09 note above
+      // .chat-input-row.watch-disabled.
+      const on = !!data.on;
+      const chatInput = document.getElementById('chat-input');
+      const sendBtn = document.getElementById('send-btn');
+      const chatRow = document.getElementById('chat-input-row-el');
+      if (chatInput) {
+        chatInput.disabled = on;
+        chatInput.placeholder = on
+          ? "Chloe's watching your game — talk to her by voice"
+          : 'Speak to Chloe…';
+      }
+      if (sendBtn) sendBtn.disabled = on;
+      if (chatRow) chatRow.classList.toggle('watch-disabled', on);
+      return;
+    }
     if (data.type === 'listening_mute_state') {
       updateMutePill(!!data.muted);
       return;
