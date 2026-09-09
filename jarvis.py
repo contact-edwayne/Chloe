@@ -5308,6 +5308,65 @@ _CONTEXT_EMPTY_MARKERS = (
 )
 
 
+def _third_to_second_person(sent: str) -> str:
+    """Convert third-person CONTEXT prose ("Edward should ... his ...", or
+    the more common plain "Ed needs ... his ...") to second-person greeting
+    ("you should ... your ..."). Word boundaries keep "shedward" or
+    "Edwards" untouched (no such words exist here in practice, but be
+    defensive)."""
+    for pat, repl in (
+        (r"\bEdward(?:'s|s)?\b", "you"),
+        (r"\bEd(?:'s)?\b", "you"),
+        (r"\bhis\b", "your"), (r"\bHis\b", "Your"),
+        (r"\bhim\b", "you"),  (r"\bHim\b", "You"),
+        (r"\bhe\b", "you"),   (r"\bHe\b", "You"),
+        (r"\bhimself\b", "yourself"),
+    ):
+        sent = _re.sub(pat, repl, sent)
+    # "you should" → keep; "you has" needs fixup if the source had
+    # "he has". Common verb-form repairs after pronoun swap. Also handles
+    # coordinated verbs that share a subject: when the opener flips from
+    # "he"/"Ed" to "you", the second clause's "has" / "is" / "was"
+    # coordinates with the new "you" too. Catches "you have X, and has
+    # recently Y" → "you have X, and have recently Y" — the
+    # 2026-05-18 greeting bug.
+    for pat, repl in (
+        (r"\byou has\b", "you have"),
+        (r"\byou is\b", "you are"),
+        (r"\byou was\b", "you were"),
+        (r"\byou does\b", "you do"),
+        (r"\byou expresses\b", "you express"),
+        (r"\byou prefers\b", "you prefer"),
+        (r"\byou needs\b", "you need"),
+        (r"\byou wants\b", "you want"),
+        (r"\byou likes\b", "you like"),
+        (r"\byou tries\b", "you try"),
+        (r"\byou gets\b", "you get"),
+        (r"\byou goes\b", "you go"),
+        (r"\byou plans\b", "you plan"),
+        (r"\byou hopes\b", "you hope"),
+        (r"\byou thinks\b", "you think"),
+        (r"\byou believes\b", "you believe"),
+        (r"\byou feels\b", "you feel"),
+        (r"\byou seems\b", "you seem"),
+        (r"\byou continues\b", "you continue"),
+        (r"\byou inquires\b", "you inquire"),
+        (r"\byou asks\b", "you ask"),
+        (r"\byou wonders\b", "you wonder"),
+        (r"\byou mentions\b", "you mention"),
+        (r"\byou suggests\b", "you suggest"),
+        (r"\byou recommends\b", "you recommend"),
+        (r"\byou expects\b", "you expect"),
+        (r"\byou requires\b", "you require"),
+        (r"\band has\b", "and have"),
+        (r"\bAnd has\b", "And have"),
+        (r"\band is\b", "and are"),
+        (r"\band was\b", "and were"),
+    ):
+        sent = _re.sub(pat, repl, sent)
+    return sent
+
+
 def _latest_context_focus():
     """Return (focus_sentence, source_date) from the freshest CONTEXT file.
 
@@ -5353,47 +5412,22 @@ def _latest_context_focus():
     if focus and _is_meaningful(focus):
         sent = _re.split(r"(?<=[.!?])\s+", focus, maxsplit=1)[0].strip()
         if sent and _is_meaningful(sent):
-            # Convert third-person CONTEXT prose ("Edward should ... his ...")
-            # to second-person greeting ("you should ... your ..."). Word
-            # boundaries keep "shedward" or "Edwards" untouched (no such
-            # words exist here in practice, but be defensive).
-            for pat, repl in (
-                (r"\bEdward(?:'s|s)?\b", "you"),
-                (r"\bhis\b", "your"), (r"\bHis\b", "Your"),
-                (r"\bhim\b", "you"),  (r"\bHim\b", "You"),
-                (r"\bhe\b", "you"),   (r"\bHe\b", "You"),
-                (r"\bhimself\b", "yourself"),
-            ):
-                sent = _re.sub(pat, repl, sent)
-            # "you should" → keep; "you has" needs fixup if the source had
-            # "he has". Common verb-form repairs after pronoun swap. Also
-            # handles coordinated verbs that share a subject: when the
-            # opener flips from "he" to "you", the second clause's "has"
-            # / "is" / "was" coordinates with the new "you" too. Catches
-            # "you have X, and has recently Y" → "you have X, and have
-            # recently Y" — the 2026-05-18 greeting bug.
-            for pat, repl in (
-                (r"\byou has\b", "you have"),
-                (r"\byou is\b", "you are"),
-                (r"\byou was\b", "you were"),
-                (r"\byou does\b", "you do"),
-                (r"\byou expresses\b", "you express"),
-                (r"\byou prefers\b", "you prefer"),
-                (r"\band has\b", "and have"),
-                (r"\bAnd has\b", "And have"),
-                (r"\band is\b", "and are"),
-                (r"\band was\b", "and were"),
-            ):
-                sent = _re.sub(pat, repl, sent)
-            return sent, latest.stem.replace("CONTEXT-", "")
+            return (_third_to_second_person(sent),
+                    latest.stem.replace("CONTEXT-", ""))
 
-    # 2. Open Loops — fall back to the first concrete bullet.
+    # 2. Open Loops — fall back to the first concrete bullet. Same
+    # third-person-to-second-person conversion as the Suggested Focus path
+    # above -- this CONTEXT generator often skips "Suggested Focus" and
+    # only fills in "Open Loops", and a raw bullet like "Ed needs to
+    # update his wiki pages..." read back verbatim in the greeting
+    # (the 2026-09-09 startup-greeting bug).
     loops = _section("Open Loops")
     if loops:
         for raw in loops.splitlines():
             line = raw.strip().lstrip("-*• ").strip()
             if _is_meaningful(line):
-                return line, latest.stem.replace("CONTEXT-", "")
+                return (_third_to_second_person(line),
+                        latest.stem.replace("CONTEXT-", ""))
 
     return None, None
 
