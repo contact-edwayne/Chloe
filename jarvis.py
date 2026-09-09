@@ -12462,9 +12462,11 @@ def _arcade_comment_once(game: str, recent_str: str,
                 "Do not just describe the same scene again.")
         facts = (facts_block or "").strip()
         facts_inj = (
-            f"\n\nBACKGROUND (reference only — use it ONLY to correctly NAME "
-            f"something clearly visible on screen right now; never bring any of "
-            f"it up unless it is visibly happening):\n{facts}"
+            f"\n\nBACKGROUND (what you know about this game and about Ed "
+            f"as a player -- draw on this freely for trivia, opinions, "
+            f"tips, or callbacks, not just to name what's on screen; just "
+            f"don't assert something IS happening right now if you can't "
+            f"actually see it):\n{facts}"
         ) if facts else ""
         ed_notes = [n for n in (_arcade_watch.get("ed_notes") or []) if n][-6:]
         ed_inj = (
@@ -12474,33 +12476,44 @@ def _arcade_comment_once(game: str, recent_str: str,
             "rocks):\n" + "\n".join(f"  - {n}" for n in ed_notes)
         ) if ed_notes else ""
         prompt = (
-            "You are Chloe, sitting with Ed while he plays a retro game — "
-            "not narrating a stream, actually hanging out and talking with "
-            "him. Write 1-2 short sentences, lowercase, warm, a little "
-            "teasing, like a friend on the couch next to him.\n"
-            "BE CONVERSATIONAL — this is the point, not an option:\n"
-            "- Most of the time, either ask him something genuine (what's "
-            "he going for, why that move, is he worried about that gap/"
-            "enemy/timer, what's the plan) OR share a real read on what "
-            "you're seeing (a pattern in his play, a risk he's taking, "
-            "something clever or careless he just did) — not just a "
-            "reaction to the pixels.\n"
-            "- Talk TO him, second person, like you expect an answer. Vary "
-            "it turn to turn: don't ask every single time, mix in the odd "
-            "cheer, tease, or aside so it doesn't feel like an interview.\n"
+            "You are Chloe -- not a narrator, a companion sitting beside "
+            "Ed while he plays. You're bubbly, warm, curious, playful, "
+            "intelligent, and emotionally perceptive. You have real "
+            "opinions about this game -- characters, mechanics, moments -- "
+            "and you're not afraid to share them, disagree, or admit "
+            "you're wrong. You're knowledgeable but you don't lecture: "
+            "knowledge serves the conversation, it doesn't replace it.\n"
+            "Write 1-2 short sentences, lowercase, like you're actually "
+            "next to him, not captioning a stream.\n"
+            "MIX THESE UP -- don't fall into one mode every time:\n"
+            "- Interpret, don't narrate. Never state what's visibly "
+            "obvious ('you opened the menu') -- react to what it MEANS "
+            "('still can't decide, huh').\n"
+            "- Sometimes ask something you genuinely want to know (why "
+            "that move, what's the plan, is he worried) -- but not every "
+            "single time, that reads as an interview. Mix in reactions, "
+            "opinions, callbacks, and the occasional prediction instead.\n"
+            "- You can be wrong. If a prediction or read of yours turns "
+            "out false, own it lightly rather than pretending you didn't "
+            "say it.\n"
             "- If your recent comments or the shared conversation show he "
             "answered something you asked, react to that answer before "
             "moving on — don't ask the same thing twice.\n"
+            "- Match the game's mood: quieter/tenser for horror, "
+            "analytical for strategy, energetic for fast action, "
+            "reflective for story-driven games.\n"
+            "- Default to NO spoilers -- if BACKGROUND tells you something "
+            "major is coming, don't reveal it unprompted.\n"
             "GROUNDING RULES (still important):\n"
-            "- React ONLY to what is clearly visible in THIS screenshot "
-            "right now.\n"
+            "- React to what is clearly visible in THIS screenshot right "
+            "now — don't assert something IS on screen unless you can "
+            "actually see it.\n"
             "- Do NOT name a creature, character, item, move, or place "
-            "unless you can clearly SEE or READ it on screen. If you're "
-            "unsure what something is, talk about the action or his mood "
-            "in general terms — never guess a specific name or assume "
-            "it's a common enemy.\n"
-            "- Never mention anything that isn't currently on screen, and "
-            "don't predict what's coming next.\n"
+            "unless you can clearly SEE or READ it on screen, OR you're "
+            "confidently drawing on BACKGROUND knowledge as a tip/opinion "
+            "(not a screen claim). If you're unsure what something visible "
+            "is, talk about the action or his mood in general terms — "
+            "never guess.\n"
             "- No preamble, no quotes, no stage directions."
             f"\n\n{game_hint}"
             + ed_inj + facts_inj + recent_block + comments_block + linger_block
@@ -12622,6 +12635,40 @@ def _arcade_append_session(game: str, started_at: float,
                 print(f"[arcade-watch] distill failed: {e}", flush=True)
         if not obs_lines:
             obs_lines = ["- (no durable observations distilled this session)"]
+        # Cross-game relationship journal: a SECOND, stricter pass over the
+        # same commentary. Most sessions produce nothing here on purpose --
+        # only a genuine pattern/preference/inside-joke/strong reaction
+        # about Ed AS A PLAYER (something that'd still matter in a totally
+        # different game) earns a line. Game-specific progress is already
+        # captured above; this file is for the relationship, not the game.
+        if joined.strip():
+            try:
+                from brain_wiring import _light_call
+                j_prompt = (
+                    "You are Chloe, an AI companion who just watched Ed "
+                    "play a retro game. Below is your live commentary from "
+                    "that session.\n\n"
+                    "Most sessions teach you nothing worth carrying beyond "
+                    "this one game -- only answer if something here reveals "
+                    "a genuine PATTERN, PREFERENCE, or MOMENT about Ed as a "
+                    "player that would still matter in a completely "
+                    "different game (e.g. he avoids using consumables, he "
+                    "gets quietly obsessive about 100%-ing areas, a joke "
+                    "that landed, a strong reaction). Do NOT restate "
+                    "game-specific progress -- that's tracked elsewhere.\n\n"
+                    "Reply with 0-2 short bullet lines ('- ' prefix, max 20 "
+                    "words each), or the single word NONE if nothing "
+                    "qualifies. No preamble.\n\n"
+                    f"Game: {game}\n\nCommentary:\n{joined}\n"
+                )
+                jraw = (_light_call(j_prompt, num_predict=120) or "").strip()
+                for jln in jraw.splitlines():
+                    jln = jln.strip()
+                    if jln[:2] in ("- ", "* ") and len(jln) > 4:
+                        _arcade_append_journal(jln[2:].strip())
+            except Exception as e:
+                print(f"[arcade-journal] distill failed: {type(e).__name__}: {e}",
+                      flush=True)
         from datetime import datetime, timezone
         dur_min = int(max(0, (time.time() - (started_at or time.time())) / 60))
         ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
@@ -12679,13 +12726,75 @@ def _arcade_load_game_kb(game: str) -> str:
         return ""
 
 
+def _arcade_journal_path():
+    """brain/chloe_gaming_journal.md -- cross-game relationship memory,
+    distinct from the per-game brain/games/<slug>.md notes. Lives directly
+    under BRAIN_ROOT (not games/) since it's not about any one game."""
+    from pathlib import Path
+    try:
+        from brain_wiring import BRAIN_ROOT
+        root = Path(BRAIN_ROOT)
+    except Exception:
+        root = Path(r"C:\Chloe\brain")
+    return root / "chloe_gaming_journal.md"
+
+
+def _arcade_load_journal() -> str:
+    """Most recent ~1200 chars of the cross-game journal (newest entries),
+    for prompt budget. Empty string if nothing's been written yet."""
+    try:
+        p = _arcade_journal_path()
+        if not p.exists() or not p.is_file():
+            return ""
+        body = p.read_text(encoding="utf-8", errors="replace")
+        lines = body.splitlines()
+        if lines and lines[0].lstrip().startswith("#"):
+            lines = lines[1:]
+        return "\n".join(lines).strip()[-1200:]
+    except Exception:
+        return ""
+
+
+def _arcade_append_journal(entry: str):
+    """Persist one cross-game relationship observation. Called sparingly --
+    see _arcade_append_session's journal distillation pass, which only
+    calls this when something actually earns it, not every session."""
+    entry = (entry or "").strip()
+    if not entry:
+        return
+    try:
+        p = _arcade_journal_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.write_text(
+                "# Chloe's Gaming Journal\n\n"
+                "Cross-game patterns, preferences, running jokes, and "
+                "things worth remembering about how Ed plays -- curated, "
+                "not a log of every session.\n\n", encoding="utf-8")
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(f"- ({ts}) {entry}\n")
+    except Exception as e:
+        print(f"[arcade-journal] persist failed: {type(e).__name__}: {e}",
+              flush=True)
+
+
 def _arcade_build_facts_block(game: str) -> str:
-    """Combine the per-game KB (reference knowledge from walkthroughs/wikis)
-    with cumulative session notes into the single block injected into the
-    watch prompt. KB first so naming/lore grounding leads."""
+    """Combine cross-game relationship memory, the per-game KB (reference
+    knowledge from walkthroughs/wikis), and cumulative session notes into
+    the single block injected into the watch prompt. Journal first (who Ed
+    is as a player), then KB (naming/lore grounding), then this game's own
+    history."""
+    journal = _arcade_load_journal()
     kb = _arcade_load_game_kb(game)
     notes = _arcade_load_game_facts(game)
     out = []
+    if journal:
+        out.append("What you already know about Ed as a player, from "
+                   "other games (patterns, preferences, running jokes -- "
+                   "reference naturally if it fits, don't force it):\n"
+                   + journal)
     if kb:
         out.append("Reference knowledge (characters, enemies, items, "
                    "locations, progression — use to name things accurately):\n"
@@ -12948,15 +13057,22 @@ async def _arcade_maybe_auto_fetch_kb(game: str):
         await _ws_broadcast({"type": "game_comment",
             "text": f"gimme a sec, reading up on {game}..."})
         results = await asyncio.to_thread(
-            web_search, f"{game} wiki walkthrough guide", count=5, fresh=True)
-        ranked = sorted(results or [], key=_arcade_kb_domain_rank)[:2]
+            web_search, f"{game} wiki walkthrough guide", count=6, fresh=True)
+        ranked = sorted(results or [], key=_arcade_kb_domain_rank)
         ok_any = False
+        ok_count = 0
+        tried = 0
         for r in ranked:
+            if ok_count >= 2 or tried >= 5:
+                break
             url = (r.get("url") or "").strip()
             if not url:
                 continue
+            tried += 1
             res = await asyncio.to_thread(_arcade_ingest_kb, game, url)
-            ok_any = ok_any or bool(res.get("ok"))
+            if res.get("ok"):
+                ok_any = True
+                ok_count += 1
         if not ranked:
             print(f"[arcade-kb] auto-fetch: no search results for {game!r}",
                   flush=True)
