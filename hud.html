@@ -2567,7 +2567,7 @@
       this.setStatus('STANDBY');
     },
 
-    // Fallback: if no boot signal arrives within 60s of HUD load, fade the
+    // Fallback: if no boot signal arrives within 150s of HUD load, fade the
     // splash so the user isn't stuck. The window is generous because a
     // PyInstaller-frozen build needs more time to import jarvis, enumerate
     // audio devices, load the wake model, and reach _play_boot_chime. In
@@ -2575,17 +2575,21 @@
     // be 8-15s on first run before the OS file cache is warm. Bumped from
     // 20s to 60s on 2026-05-12 after observing real-world startups that
     // overran the 20s window (wake-model load + venv warm-up + ollama
-    // contention from the parallel wiki_watcher). The backend now also
+    // contention from the parallel wiki_watcher), then 60s to 150s on
+    // 2026-09-09 after backend.log showed a real startup overrunning 60s
+    // too (fallback fired, then "playing boot sound from file" logged
+    // afterward) -- startup has grown slower as more init-time checks
+    // (env registry, arcade KB, etc.) were added. The backend now also
     // caches the boot signals so a HUD reload mid-init still receives
-    // them — but the 60s window covers the same-client slow-init path
-    // where the cache doesn't help.
+    // them — but the fallback window covers the same-client slow-init
+    // path where the cache doesn't help.
     armFallback() {
       this._fallbackTimer = setTimeout(() => {
         if (!this._hidden) {
           console.log('[splash] no boot signal — fading via fallback');
           this.hide();
         }
-      }, 60000);
+      }, 150000);
     },
   };
   // Splash is visible by default; arm the fallback timer at script load.
