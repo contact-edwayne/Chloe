@@ -27,6 +27,7 @@ returns a "not supported" stub off Windows.
 import base64
 import io
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -380,8 +381,15 @@ def describe_screen(image_bytes: bytes, prompt: str = "", try_local: bool = True
             }],
             max_tokens=900,
             temperature=0.4,
+            extra_body={"reasoning_format": "hidden"},
         )
         text = (resp.choices[0].message.content or "").strip()
+        # Belt-and-suspenders: qwen3 is a reasoning model and reasoning_format
+        # "hidden" should already strip <think> blocks server-side, but if a
+        # stray one ever slips through, don't let Chloe say her own scratch
+        # work out loud -- drop it rather than truncate mid-thought.
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = re.sub(r"^<think>.*", "", text, flags=re.DOTALL).strip()
         return {"ok": True, "text": text, "model": MODEL_VISION}
     except Exception as e:
         return {"ok": False, "error": f"vision call failed: {type(e).__name__}: {e}",
