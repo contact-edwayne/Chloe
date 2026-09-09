@@ -5741,6 +5741,21 @@ def _ptt_record_phase(sd, device):
     print(f"[voice] PTT heard: {transcript!r}", flush=True)
     _broadcast_heard(transcript)
 
+    # Mirror of the chat-path arcade nudge (2026-09-09) -- talking to her
+    # mid-game should pull her next screen reaction forward and count as a
+    # ground-truth note about what's on screen, same as typing does.
+    try:
+        if (_arcade_watch.get("on") and _arcade_kick is not None
+                and hud_server.server_loop):
+            hud_server.server_loop.call_soon_threadsafe(_arcade_kick.set)
+        if _arcade_watch.get("on") and transcript:
+            _notes = _arcade_watch.setdefault("ed_notes", [])
+            _notes.append(transcript[:200])
+            del _notes[:-12]
+            _arcade_record_ed_note(_arcade_watch.get("game") or "", transcript[:200])
+    except Exception:
+        pass
+
     # "remember: <fact>" short-circuit — same as in _handle_wake.
     ack = _try_handle_remember(transcript)
     if ack is not None:
@@ -6320,6 +6335,21 @@ def _process_voice_turn(audio, peak_rms, sd, device) -> bool:
         return False
     print(f"[voice] heard: {transcript!r}", flush=True)
     _broadcast_heard(transcript)
+
+    # Mirror of the chat-path arcade nudge (2026-09-09) -- talking to her
+    # mid-game should pull her next screen reaction forward and count as a
+    # ground-truth note about what's on screen, same as typing does.
+    try:
+        if (_arcade_watch.get("on") and _arcade_kick is not None
+                and hud_server.server_loop):
+            hud_server.server_loop.call_soon_threadsafe(_arcade_kick.set)
+        if _arcade_watch.get("on") and transcript:
+            _notes = _arcade_watch.setdefault("ed_notes", [])
+            _notes.append(transcript[:200])
+            del _notes[:-12]
+            _arcade_record_ed_note(_arcade_watch.get("game") or "", transcript[:200])
+    except Exception:
+        pass
 
     # "remember: <fact>" short-circuits the LLM path entirely.
     ack = _try_handle_remember(transcript)
