@@ -11886,7 +11886,18 @@ async def handle_game_resign(data, websocket):
 # Desktop only (it reads the PC screen, not the phone's).
 _arcade_watch = {"on": False, "game": "", "count": 0,
                  "started_at": 0.0, "session_comments": [],
-                 "facts_block": "", "opener_seed": ""}
+                 "facts_block": "", "opener_seed": "",
+                 # Game Knowledge Context additions (2026-09-09): a coarse,
+                 # periodically-refreshed read of where Ed currently is in
+                 # the game (location/objective/notable), used to (a) show
+                 # up in the prompt as its own CURRENT GAME STATE layer and
+                 # (b) narrow which ingested KB sections get pulled into
+                 # context -- see _arcade_refresh_game_state /
+                 # _arcade_load_game_kb_dynamic. coach_level is a simple
+                 # adaptive-coaching-depth signal set by _arcade_record_ed_note
+                 # when Ed's own messages read as help-seeking.
+                 "game_state": {}, "state_updating": False,
+                 "coach_level": "light", "coach_level_set_at": 0.0}
 _arcade_kick: "asyncio.Event | None" = None  # set by chat handler to nudge a tick
 
 # Latest in-game canvas frame uploaded by the arcade panel (raw PNG bytes).
@@ -12420,7 +12431,7 @@ def _arcade_watch_context_block() -> str:
 
 def _arcade_comment_once(game: str, recent_str: str,
                          last_comments: list, linger: int,
-                         facts_block: str = ""):
+                         facts_block: str = "", game_state: dict = None):
     """Conversation-aware screen capture + ONE in-character reaction.
     Returns (text, png_hash). text is '' on failure; png_hash is None on
     capture failure so the caller doesn't update its linger state.
@@ -12475,6 +12486,38 @@ def _arcade_comment_once(game: str, recent_str: str,
             "or ignore them (e.g. if he says there are no rocks, do not mention "
             "rocks):\n" + "\n".join(f"  - {n}" for n in ed_notes)
         ) if ed_notes else ""
+        # CURRENT GAME STATE layer -- your own running read (from
+        # _arcade_refresh_game_state), may be a beat behind the screenshot.
+        gs = game_state or {}
+        gs_loc = (gs.get("location") or "").strip()
+        gs_obj = (gs.get("objective") or "").strip()
+        gs_note = (gs.get("notable") or "").strip()
+        gs_lines = []
+        if gs_loc:
+            gs_lines.append(f"  - Location/area: {gs_loc}")
+        if gs_obj:
+            gs_lines.append(f"  - Current objective: {gs_obj}")
+        if gs_note:
+            gs_lines.append(f"  - Notable: {gs_note}")
+        state_block = (
+            "\n\nCURRENT GAME STATE (your own running read -- trust the "
+            "screenshot over this if they conflict):\n" + "\n".join(gs_lines)
+        ) if gs_lines else ""
+        # Adaptive coaching depth -- decays back to light-touch ~6min after
+        # the last help-seeking message (see _arcade_record_ed_note).
+        try:
+            if _arcade_watch.get("coach_level") == "active" and \
+                    time.time() - float(_arcade_watch.get("coach_level_set_at")
+                                        or 0) > 360:
+                _arcade_watch["coach_level"] = "light"
+        except Exception:
+            pass
+        coach_block = (
+            "\n\nEd's been asking for help recently -- lean in a little "
+            "more than usual: when a concrete tip or read on what to try "
+            "next fits naturally, offer it. Still conversational, not a "
+            "strategy guide."
+        ) if _arcade_watch.get("coach_level") == "active" else ""
         prompt = (
             "You are Chloe -- not a narrator, a companion sitting beside "
             "Ed while he plays. You're bubbly, warm, curious, playful, "
@@ -12504,6 +12547,10 @@ def _arcade_comment_once(game: str, recent_str: str,
             "reflective for story-driven games.\n"
             "- Default to NO spoilers -- if BACKGROUND tells you something "
             "major is coming, don't reveal it unprompted.\n"
+            "- LIVE ANALYSIS: if you spot a clear misplay or a genuinely "
+            "smart play, you can name what happened and why it mattered -- "
+            "but only for real moments, not every beat, and keep it a "
+            "passing comment, not a lecture.\n"
             "GROUNDING RULES (still important):\n"
             "- React to what is clearly visible in THIS screenshot right "
             "now — don't assert something IS on screen unless you can "
@@ -12516,7 +12563,8 @@ def _arcade_comment_once(game: str, recent_str: str,
             "never guess.\n"
             "- No preamble, no quotes, no stage directions."
             f"\n\n{game_hint}"
-            + ed_inj + facts_inj + recent_block + comments_block + linger_block
+            + state_block + ed_inj + facts_inj + coach_block + recent_block
+            + comments_block + linger_block
         )
         # try_local=False: local Ollama vision has a 100% timeout rate while
         # a game is actually running (GPU contention) -- see
@@ -12688,7 +12736,22 @@ def _arcade_append_session(game: str, started_at: float,
 def _arcade_record_ed_note(game: str, note: str):
     """Persist something Ed said while watching into the per-game page so it
     survives the session and reloads into facts_block next time (via
-    _arcade_load_game_facts). Best-effort."""
+    _arcade_load_game_facts). Best-effort.
+
+    Also doubles as the adaptive-coaching-depth signal: if what he said
+    reads like he's asking for help, bump coach_level to 'active' for a
+    while (decay check lives in _arcade_comment_once) so Chloe leans in
+    with concrete tips instead of staying purely conversational.
+    """
+    try:
+        low = (note or "").lower().strip()
+        help_cues = ("help", "hint", "what should i", "what do i", "stuck",
+                    "any tip", "should i", "how do i", "how do you")
+        if low and (any(c in low for c in help_cues) or low.endswith("?")):
+            _arcade_watch["coach_level"] = "active"
+            _arcade_watch["coach_level_set_at"] = time.time()
+    except Exception:
+        pass
     try:
         p = _arcade_game_page_path(game)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -12712,7 +12775,9 @@ def _arcade_game_kb_path(game: str):
 
 def _arcade_load_game_kb(game: str) -> str:
     """Read the per-game KB file, capped to ~1800 chars for prompt budget.
-    Empty string if absent/unreadable."""
+    Empty string if absent/unreadable. This is the OLD blind-tail-truncate
+    behavior -- kept as the fallback for _arcade_load_game_kb_dynamic when
+    there's no query signal yet or the file predates chunked ingestion."""
     try:
         p = _arcade_game_kb_path(game)
         if not p.exists() or not p.is_file():
@@ -12724,6 +12789,82 @@ def _arcade_load_game_kb(game: str) -> str:
         return "\n".join(lines).strip()[-1800:]
     except Exception:
         return ""
+
+
+def _arcade_kb_chunks(game: str) -> list:
+    """Split the raw per-game KB file into its ingested source sections
+    (each '## Source ...' block written by _arcade_ingest_kb), oldest
+    first. [] if the file doesn't exist or predates chunked ingestion."""
+    try:
+        p = _arcade_game_kb_path(game)
+        if not p.exists() or not p.is_file():
+            return []
+        body = p.read_text(encoding="utf-8", errors="replace")
+        parts = body.split("\n## ")
+        chunks = []
+        for i, part in enumerate(parts):
+            part = part.strip()
+            if not part or i == 0:
+                # part 0 is the "# Title\n\n..." preamble before the first
+                # source header -- not a scored chunk.
+                continue
+            chunks.append("## " + part)
+        return chunks
+    except Exception:
+        return []
+
+
+_ARCADE_STOPWORDS = frozenset(
+    "the a an and or of to in on at for with is are was were be been being "
+    "you your ed chloe he she it this that these those his her its game"
+    .split()
+)
+
+
+def _arcade_tokenize(text: str) -> list:
+    """Lowercase word tokens, len>=3, stopwords dropped -- cheap lexical
+    matching (no embeddings needed) for picking which ingested KB section
+    is relevant to a short location/objective phrase."""
+    import re
+    words = re.findall(r"[a-z0-9']+", (text or "").lower())
+    return [w for w in words if len(w) >= 3 and w not in _ARCADE_STOPWORDS]
+
+
+def _arcade_load_game_kb_dynamic(game: str, query_text: str,
+                                 budget_chars: int = 1800) -> str:
+    """The 'don't keep the whole wiki loaded' piece: score each ingested KB
+    section against query_text (current location/objective/notable, or
+    recent commentary) and keep only the relevant ones, up to budget_chars,
+    instead of blindly tail-truncating the whole file. Falls back to
+    _arcade_load_game_kb (old behavior) when there's no chunk structure or
+    no query signal to score against."""
+    chunks = _arcade_kb_chunks(game)
+    if not chunks:
+        return _arcade_load_game_kb(game)
+    terms = _arcade_tokenize(query_text)
+    if not terms:
+        return _arcade_load_game_kb(game)
+    from collections import Counter
+    scored = []
+    for idx, chunk in enumerate(chunks):
+        counts = Counter(_arcade_tokenize(chunk))
+        score = sum(counts.get(t, 0) for t in terms)
+        scored.append((score, idx, chunk))
+    if max(s for s, _, _ in scored) <= 0:
+        # nothing matched -- fall back to most-recently-ingested chunks
+        # rather than an empty block.
+        picked = [c for _, _, c in
+                 sorted(scored, key=lambda t: t[1], reverse=True)]
+    else:
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        picked = [c for s, _, c in scored if s > 0]
+    out, total = [], 0
+    for c in picked:
+        if total >= budget_chars:
+            break
+        out.append(c)
+        total += len(c)
+    return "\n\n".join(out).strip()[:budget_chars]
 
 
 def _arcade_journal_path():
@@ -12780,14 +12921,16 @@ def _arcade_append_journal(entry: str):
               flush=True)
 
 
-def _arcade_build_facts_block(game: str) -> str:
+def _arcade_build_facts_block(game: str, query_text: str = "") -> str:
     """Combine cross-game relationship memory, the per-game KB (reference
     knowledge from walkthroughs/wikis), and cumulative session notes into
     the single block injected into the watch prompt. Journal first (who Ed
-    is as a player), then KB (naming/lore grounding), then this game's own
-    history."""
+    is as a player), then KB (naming/lore grounding -- dynamically narrowed
+    to query_text, e.g. the current game-state read, when given; otherwise
+    the old tail-truncated blob), then this game's own history."""
     journal = _arcade_load_journal()
-    kb = _arcade_load_game_kb(game)
+    kb = (_arcade_load_game_kb_dynamic(game, query_text)
+          if (query_text or "").strip() else _arcade_load_game_kb(game))
     notes = _arcade_load_game_facts(game)
     out = []
     if journal:
@@ -12913,6 +13056,101 @@ async def handle_game_kb_ingest(data, websocket):
     await _ws_send(websocket, {"type": "kb_ingest_result", **res})
 
 
+def _arcade_extract_game_state(game: str, comments_text: str,
+                               recent_str: str) -> dict:
+    """Best-effort, cheap local extraction of a coarse 'where things stand'
+    snapshot (location / objective / notable detail) from recent watch
+    commentary + shared conversation. Runs on the local model (_light_call)
+    since it's non-urgent -- see _arcade_refresh_game_state for why this is
+    fired off as a background task rather than awaited in the main loop.
+    Returns {} on failure/timeout/unparseable output; caller keeps the
+    previous state rather than clearing it."""
+    try:
+        from brain_wiring import _light_call
+        import json as _json
+        blob = (comments_text or "").strip()
+        if recent_str:
+            blob = (blob + "\n" + recent_str).strip()
+        if not blob:
+            return {}
+        prompt = (
+            "Below is an AI companion's recent commentary while watching "
+            f"someone play '{game or 'a video game'}', plus recent shared "
+            "chat. Infer a coarse READ of where things currently stand.\n\n"
+            "Reply with ONLY a single-line JSON object, no prose, no code "
+            "fence:\n"
+            '{"location": "<area/room/level, or empty if unclear>", '
+            '"objective": "<what they seem to be trying to do right now, '
+            'or empty if unclear>", "notable": "<one short notable detail, '
+            'or empty>"}\n\n'
+            "If you can't tell, use empty strings -- do not guess.\n\n"
+            f"COMMENTARY + CHAT:\n{blob[-2000:]}\n"
+        )
+        raw = (_light_call(prompt, num_predict=150) or "").strip()
+        if not raw:
+            return {}
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return {}
+        obj = _json.loads(raw[start:end + 1])
+        out = {}
+        if isinstance(obj, dict):
+            for k in ("location", "objective", "notable"):
+                v = (obj.get(k) or "").strip()
+                if v and v.lower() not in ("unclear", "unknown", "n/a", "none"):
+                    out[k] = v[:120]
+        return out
+    except Exception as e:
+        print(f"[arcade-state] extract failed: {type(e).__name__}: {e}",
+              flush=True)
+        return {}
+
+
+async def _arcade_refresh_game_state():
+    """Fire-and-forget background refresh of _arcade_watch['game_state'].
+    Guarded by 'state_updating' so overlapping ticks don't stack up local-
+    model calls -- local inference can be slow/unreliable while a game has
+    the GPU busy (the same issue that hit local vision), so this must NEVER
+    be awaited from the main comment loop. Also rebuilds facts_block once
+    state lands, so the dynamic KB slice actually follows where Ed
+    currently is. Safe to call speculatively; no-ops if watch stopped or
+    switched games while this was in flight."""
+    game = (_arcade_watch.get("game") or "").strip()
+    if not game or _arcade_watch.get("state_updating"):
+        return
+    _arcade_watch["state_updating"] = True
+    try:
+        comments_text = "\n".join(
+            (_arcade_watch.get("session_comments") or [])[-6:])
+        recent_str = ""
+        try:
+            turns = await asyncio.to_thread(_memory.recent_turns, 12)
+            recent_str = _arcade_fmt_recent(turns)
+        except Exception:
+            pass
+        state = await asyncio.to_thread(
+            _arcade_extract_game_state, game, comments_text, recent_str)
+        if not _arcade_watch.get("on") or \
+                (_arcade_watch.get("game") or "").strip() != game:
+            return  # watch stopped or switched games while we worked
+        if state:
+            _arcade_watch["game_state"] = state
+            print(f"[arcade-state] {game!r} -> {state}", flush=True)
+            query_text = " ".join(
+                v for v in (state.get("location"), state.get("objective"),
+                           state.get("notable")) if v)
+            try:
+                _arcade_watch["facts_block"] = await asyncio.to_thread(
+                    _arcade_build_facts_block, game, query_text)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[arcade-state] refresh crashed: {type(e).__name__}: {e}",
+              flush=True)
+    finally:
+        _arcade_watch["state_updating"] = False
+
+
 async def _arcade_watch_loop():
     """Throttled, conversation-aware watch loop. Pulls recent shared memory so
     she sees her own past comments + the typed chat; perceptual-hashes the
@@ -12961,7 +13199,8 @@ async def _arcade_watch_loop():
         facts_block = _arcade_watch.get("facts_block") or ""
         text, h = await asyncio.to_thread(
             _arcade_comment_once, _arcade_watch["game"], recent_str,
-            list(last_comments), linger, facts_block)
+            list(last_comments), linger, facts_block,
+            _arcade_watch.get("game_state"))
         if not _arcade_watch["on"]:
             break
         # ---- perceptual delta → linger + adaptive interval ----
@@ -12989,6 +13228,9 @@ async def _arcade_watch_loop():
             last_comments.append(text)
             last_comments = last_comments[-6:]
             _arcade_watch["session_comments"] = list(last_comments)
+            if _arcade_watch["count"] % 5 == 0 and \
+                    not _arcade_watch.get("state_updating"):
+                asyncio.create_task(_arcade_refresh_game_state())
             print(f"[arcade-watch] says: {text}", flush=True)
             try:
                 await asyncio.to_thread(_memory.append_turn, "assistant",
@@ -13097,6 +13339,10 @@ async def handle_game_watch_start(data, websocket):
         _arcade_watch["started_at"] = time.time()
         _arcade_watch["session_comments"] = []
         _arcade_watch["ed_notes"] = []
+        _arcade_watch["game_state"] = {}
+        _arcade_watch["state_updating"] = False
+        _arcade_watch["coach_level"] = "light"
+        _arcade_watch["coach_level_set_at"] = 0.0
         # Cumulative facts + last-session opener seed for cross-session memory.
         try:
             _arcade_watch["facts_block"] = await asyncio.to_thread(
@@ -13134,6 +13380,10 @@ async def handle_game_watch_stop(data, websocket):
     _arcade_watch["count"] = 0
     _arcade_watch["facts_block"] = ""
     _arcade_watch["opener_seed"] = ""
+    _arcade_watch["game_state"] = {}
+    _arcade_watch["state_updating"] = False
+    _arcade_watch["coach_level"] = "light"
+    _arcade_watch["coach_level_set_at"] = 0.0
     if not was_on and not comments and not kept:
         # Nothing to flush -- either watch wasn't on, or an earlier stop in
         # this same burst already flushed it. Duplicate/no-op stop.
