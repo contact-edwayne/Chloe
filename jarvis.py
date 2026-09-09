@@ -163,8 +163,12 @@ USE_ELEVENLABS = os.environ.get("USE_ELEVENLABS", "").strip().lower() in ("1", "
 # MODEL_SEARCH are kept as route-identifier constants only (compared
 # against, never passed to a live Groq call) since renaming/removing the
 # route strings themselves is a separate, later "routing collapse" pass.
-# MODEL_VISION is NOT retired -- not reported broken, still used for the
-# Groq vision fallback when local Ollama vision is unavailable/fails.
+# MODEL_VISION is NOT retired -- still used for the Groq vision fallback
+# when local Ollama vision is unavailable/fails. Groq deprecated
+# meta-llama/llama-4-scout-17b-16e-instruct (2026-09-09: every arcade-watch
+# vision call started 404'ing with "model_not_found") -- swapped to
+# qwen/qwen3.6-27b, Groq's current vision-capable model (5 images/request,
+# same image_url message format, no other code changes needed).
 #
 # 2026-09-01 (routing collapse, stage d): USE_COMPOUND, OLLAMA_PRIMARY, and
 # OLLAMA_FALLBACK_ENABLED are gone. All three were a cloud-vs-local CHOICE
@@ -179,7 +183,7 @@ USE_ELEVENLABS = os.environ.get("USE_ELEVENLABS", "").strip().lower() in ("1", "
 # 'local_chat'/'local_search' for the same reason -- see _pick_route.
 MODEL_TEXT      = "openai/gpt-oss-20b"             # retired; route-identifier only, see note above
 MODEL_SEARCH    = "groq/compound-mini"             # retired; route-identifier only, see note above
-MODEL_VISION    = "meta-llama/llama-4-scout-17b-16e-instruct"
+MODEL_VISION    = "qwen/qwen3.6-27b"
 MODEL_STT       = "whisper-large-v3-turbo"         # retired; _transcribe_groq is now dead code
 
 # ─── LOCAL LLM (Ollama) ───────────────────────────────────────────────────────

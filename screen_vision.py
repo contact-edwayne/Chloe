@@ -53,7 +53,11 @@ try:
 except ImportError:
     Groq = None  # type: ignore[assignment]
 
-MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Groq deprecated meta-llama/llama-4-scout-17b-16e-instruct (2026-09-09:
+# every arcade-watch vision call started 404'ing with "model_not_found").
+# qwen/qwen3.6-27b is Groq's current vision-capable model -- same
+# image_url message format below, no other changes needed.
+MODEL_VISION = "qwen/qwen3.6-27b"
 
 _groq = None
 _groq_attempted = False
