@@ -12836,6 +12836,7 @@ async def _arcade_watch_loop():
             last_comments.append(text)
             last_comments = last_comments[-6:]
             _arcade_watch["session_comments"] = list(last_comments)
+            print(f"[arcade-watch] says: {text}", flush=True)
             await _ws_broadcast({"type": "game_comment", "text": text})
             # 2026-08-27: intentionally NOT pushed to _voice_history anymore --
             # see comment above. Game commentary already has its own context
