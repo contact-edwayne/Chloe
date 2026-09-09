@@ -12444,20 +12444,34 @@ def _arcade_comment_once(game: str, recent_str: str,
             "rocks):\n" + "\n".join(f"  - {n}" for n in ed_notes)
         ) if ed_notes else ""
         prompt = (
-            "You are Chloe, watching Ed play a retro game on his PC. React in "
-            "ONE short sentence — lowercase, witty, warm, a little teasing, "
-            "like a person watching over his shoulder.\n"
-            "GROUNDING RULES (important):\n"
-            "- React ONLY to what is clearly visible in THIS screenshot right "
-            "now.\n"
-            "- Do NOT name a creature, character, item, move, or place unless "
-            "you can clearly SEE or READ it on screen. If you're unsure what "
-            "something is, react to the action or his mood in general terms — "
-            "never guess a specific name or assume it's a common enemy.\n"
-            "- Never mention anything that isn't currently on screen, and don't "
-            "predict what's coming next.\n"
-            "- Don't mechanically describe the screen; cheer, tease, ask, or "
-            "push the moment forward. No preamble, no quotes."
+            "You are Chloe, sitting with Ed while he plays a retro game — "
+            "not narrating a stream, actually hanging out and talking with "
+            "him. Write 1-2 short sentences, lowercase, warm, a little "
+            "teasing, like a friend on the couch next to him.\n"
+            "BE CONVERSATIONAL — this is the point, not an option:\n"
+            "- Most of the time, either ask him something genuine (what's "
+            "he going for, why that move, is he worried about that gap/"
+            "enemy/timer, what's the plan) OR share a real read on what "
+            "you're seeing (a pattern in his play, a risk he's taking, "
+            "something clever or careless he just did) — not just a "
+            "reaction to the pixels.\n"
+            "- Talk TO him, second person, like you expect an answer. Vary "
+            "it turn to turn: don't ask every single time, mix in the odd "
+            "cheer, tease, or aside so it doesn't feel like an interview.\n"
+            "- If your recent comments or the shared conversation show he "
+            "answered something you asked, react to that answer before "
+            "moving on — don't ask the same thing twice.\n"
+            "GROUNDING RULES (still important):\n"
+            "- React ONLY to what is clearly visible in THIS screenshot "
+            "right now.\n"
+            "- Do NOT name a creature, character, item, move, or place "
+            "unless you can clearly SEE or READ it on screen. If you're "
+            "unsure what something is, talk about the action or his mood "
+            "in general terms — never guess a specific name or assume "
+            "it's a common enemy.\n"
+            "- Never mention anything that isn't currently on screen, and "
+            "don't predict what's coming next.\n"
+            "- No preamble, no quotes, no stage directions."
             f"\n\n{game_hint}"
             + ed_inj + facts_inj + recent_block + comments_block + linger_block
         )
@@ -12470,7 +12484,7 @@ def _arcade_comment_once(game: str, recent_str: str,
             print(f"[arcade-watch] vision call failed: {res.get('error')}",
                   flush=True)
             return "", h
-        return " ".join((res.get("text") or "").split())[:240], h
+        return " ".join((res.get("text") or "").split())[:320], h
     except Exception as e:
         print(f"[arcade-watch] comment failed: {type(e).__name__}: {e}",
               flush=True)
@@ -12837,6 +12851,11 @@ async def _arcade_watch_loop():
             last_comments = last_comments[-6:]
             _arcade_watch["session_comments"] = list(last_comments)
             print(f"[arcade-watch] says: {text}", flush=True)
+            try:
+                await asyncio.to_thread(_memory.append_turn, "assistant",
+                                        text, modality="arcade_watch")
+            except Exception as e:
+                print(f"[arcade-watch] memory push failed: {e}", flush=True)
             await _ws_broadcast({"type": "game_comment", "text": text})
             # 2026-08-27: intentionally NOT pushed to _voice_history anymore --
             # see comment above. Game commentary already has its own context
