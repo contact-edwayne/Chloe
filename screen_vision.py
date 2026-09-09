@@ -381,7 +381,8 @@ def describe_screen(image_bytes: bytes, prompt: str = "", try_local: bool = True
             }],
             max_tokens=900,
             temperature=0.4,
-            extra_body={"reasoning_format": "hidden"},
+            extra_body={"reasoning_effort": "none",
+                        "reasoning_format": "hidden"},
         )
         text = (resp.choices[0].message.content or "").strip()
         # Belt-and-suspenders: qwen3 is a reasoning model and reasoning_format
