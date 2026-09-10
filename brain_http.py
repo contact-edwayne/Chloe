@@ -304,6 +304,33 @@ def _rom_system_for(p: Path):
     return system
 
 
+# PS3 games are sometimes shipped as an extracted disc dump (a folder tree
+# with PS3_GAME/USRDIR/EBOOT.BIN) instead of a single .ps3iso -- RPCS3 boots
+# this layout natively (see jarvis.py's _play_game, which already launches
+# these by voice). Those dumps live under CHLOE_ROMS_DIR_EXTRA, outside
+# CHLOE_ROMS_DIR entirely, so _list_roms's flat iterdir() scan can't see
+# them -- this walks CHLOE_ROMS_DIR_EXTRA looking for the same layout so
+# the Arcade library grid can show them as tiles too.
+def _scan_ps3_folder_dumps():
+    """Yield (game_folder, eboot_path) for every folder-based PS3 disc dump
+    found under CHLOE_ROMS_DIR_EXTRA. No-ops if the env var is unset or the
+    folder doesn't exist."""
+    raw = os.environ.get("CHLOE_ROMS_DIR_EXTRA", "").strip()
+    if not raw:
+        return
+    root = Path(raw)
+    if not root.exists():
+        return
+    try:
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.name.upper() == "EBOOT.BIN" and _rom_system_for(p) == "ps3":
+                yield (p.parent.parent.parent, p)
+    except Exception:
+        return
+
+
 # 2026-09-08: bundled at tools/chdman.exe (MAME's CHD tool, pulled from
 # the official mame0289 Windows release) so multi-track PS1 .cue+.bin
 # uploads can be packed into one .chd automatically -- see
@@ -931,7 +958,10 @@ class _GraphHandler(BaseHTTPRequestHandler):
 
     def _list_roms(self):
         """List ROM files in CHLOE_ROMS_DIR with the system inferred from the
-        extension. JSON: {roms:[{name,file,system,size}], dir}."""
+        extension, plus any folder-based PS3 disc dumps under
+        CHLOE_ROMS_DIR_EXTRA (see _scan_ps3_folder_dumps -- those don't live
+        as flat files, so the iterdir() scan below can't see them on its
+        own). JSON: {roms:[{name,file,system,size}], dir}."""
         d = _roms_dir()
         roms = []
         try:
@@ -944,6 +974,22 @@ class _GraphHandler(BaseHTTPRequestHandler):
                         continue
                     roms.append({"name": p.name, "file": p.name,
                                  "system": sysname, "size": p.stat().st_size})
+            for game_dir, eboot in _scan_ps3_folder_dumps():
+                try:
+                    size = eboot.stat().st_size
+                except Exception:
+                    size = 0
+                # "file" is the absolute EBOOT.BIN path rather than a bare
+                # filename -- jarvis._rpcs3_launch already resolves and
+                # containment-checks absolute paths against both
+                # CHLOE_ROMS_DIR and CHLOE_ROMS_DIR_EXTRA (see
+                # _native_path_under), so the launch flow needs no change.
+                # _serve_rom/_get_rom_art/_delete_rom still reject any name
+                # containing a slash, so these tiles get no cover art and
+                # can't be deleted from the UI -- deliberate: no accidental
+                # one-click delete of a multi-GB extracted dump.
+                roms.append({"name": game_dir.name, "file": str(eboot),
+                             "system": "ps3", "size": size})
         except Exception as e:
             self._json(500, {"error": str(e)})
             return
