@@ -7703,14 +7703,24 @@ def _play_game(name: str) -> dict:
                 launchable = {}
                 for p in native_files:
                     sysname = bh._rom_system_for(p)
-                    if sysname in ("ps2", "gc", "ps3"):
-                        launchable[p] = sysname
+                    if sysname not in ("ps2", "gc", "ps3"):
+                        continue
+                    if sysname == "ps3" and p.name.upper() == "EBOOT.BIN":
+                        # Folder-based PS3 dump (PS3_GAME/USRDIR/EBOOT.BIN,
+                        # RPCS3's native layout for an extracted disc) --
+                        # key by the human-readable game folder instead of
+                        # the literal "EBOOT.BIN" filename so
+                        # _resolve_rom_candidate can match it by title; the
+                        # actual launch still boots the EBOOT.BIN itself.
+                        launchable[p.parent.parent.parent] = (sysname, p)
+                    else:
+                        launchable[p] = (sysname, p)
                 candidate = _resolve_rom_candidate(name, list(launchable.keys()))
                 if candidate:
-                    sysname = launchable[candidate]
+                    sysname, launch_path = launchable[candidate]
                     launcher = {"ps2": _pcsx2_launch, "gc": _dolphin_launch,
                                 "ps3": _rpcs3_launch}[sysname]
-                    r = launcher(str(candidate))
+                    r = launcher(str(launch_path))
                     r["system"] = sysname
                     return r
                 # Browser-only (Arcade panel / EmulatorJS): brain_http.py's

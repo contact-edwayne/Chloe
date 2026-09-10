@@ -288,11 +288,19 @@ def _rom_system_for(p: Path):
         except Exception:
             pass
     elif ext == ".bin" and system:
-        try:
-            if p.stat().st_size >= _BIN_PSX_MIN_BYTES:
-                system = "psx"
-        except Exception:
-            pass
+        # A PS3 game shipped as an extracted disc dump (rather than a
+        # single .ps3iso) boots from PS3_GAME/USRDIR/EBOOT.BIN -- also a
+        # bare ".bin" file, so check for this specific, unambiguous layout
+        # before falling through to the Genesis/PS1 size heuristic below.
+        if p.name.upper() == "EBOOT.BIN" and p.parent.name.upper() == "USRDIR" \
+                and p.parent.parent.name.upper() == "PS3_GAME":
+            system = "ps3"
+        else:
+            try:
+                if p.stat().st_size >= _BIN_PSX_MIN_BYTES:
+                    system = "psx"
+            except Exception:
+                pass
     return system
 
 
