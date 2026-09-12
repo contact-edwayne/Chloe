@@ -375,6 +375,69 @@ def _roms_dir() -> Path:
     return Path(os.environ.get("CHLOE_ROMS_DIR", r"C:\Chloe\roms"))
 
 
+def _roms_extra_dir():
+    """Second ROM root -- CHLOE_ROMS_DIR_EXTRA -- for folder-based PS3 disc
+    dumps (see _scan_ps3_folder_dumps). None if unset or missing."""
+    raw = os.environ.get("CHLOE_ROMS_DIR_EXTRA", "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    return p if p.exists() else None
+
+
+def _rom_path_under(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_rom_ref(name: str):
+    """Turn a `name` segment from /api/roms/... into a (path, art_key) pair,
+    or (None, None) if it's not a legitimate ROM reference.
+
+    Two shapes reach here:
+      - a bare filename (no slash) -- an ordinary ROM directly inside
+        CHLOE_ROMS_DIR, same as always.
+      - an absolute path -- folder-based PS3 disc dumps under
+        CHLOE_ROMS_DIR_EXTRA are keyed by their full EBOOT.BIN path
+        (_list_roms/_scan_ps3_folder_dumps), since jarvis._rpcs3_launch
+        already needs the absolute path to launch them and there's no
+        flat filename to use instead. Must resolve inside CHLOE_ROMS_DIR
+        or CHLOE_ROMS_DIR_EXTRA -- this is the same containment check
+        jarvis.py's _native_path_under uses for the launch path, applied
+        here so art lookup/upload can trust an absolute path too.
+
+    art_key is what rom_art.py's stem-based cache keys off of. For a
+    folder dump this is the game folder's own name (e.g. "God of War III"),
+    not "EBOOT" -- every folder dump's EBOOT.BIN shares that filename, so
+    keying off the path's bare stem would collide all of them onto one
+    cache slot.
+    """
+    if not name or ".." in name:
+        return None, None
+    if "/" not in name and "\\" not in name and not Path(name).is_absolute():
+        p = (_roms_dir() / name).resolve()
+        if not _rom_path_under(p, _roms_dir().resolve()):
+            return None, None
+        return p, name
+    if not Path(name).is_absolute():
+        return None, None
+    p = Path(name).resolve()
+    roots = [_roms_dir().resolve()]
+    extra = _roms_extra_dir()
+    if extra:
+        roots.append(extra.resolve())
+    if not any(_rom_path_under(p, r) for r in roots):
+        return None, None
+    art_key = name
+    if p.name.upper() == "EBOOT.BIN" and p.parent.name.upper() == "USRDIR" \
+            and p.parent.parent.name.upper() == "PS3_GAME":
+        art_key = p.parent.parent.parent.name
+    return p, art_key
+
+
 def _savestates_dir() -> Path:
     return Path(os.environ.get("CHLOE_SAVESTATES_DIR", r"C:\Chloe\savestates"))
 
@@ -984,9 +1047,11 @@ class _GraphHandler(BaseHTTPRequestHandler):
                 # containment-checks absolute paths against both
                 # CHLOE_ROMS_DIR and CHLOE_ROMS_DIR_EXTRA (see
                 # _native_path_under), so the launch flow needs no change.
-                # _serve_rom/_get_rom_art/_delete_rom still reject any name
-                # containing a slash, so these tiles get no cover art and
-                # can't be deleted from the UI -- deliberate: no accidental
+                # _get_rom_art / the "+ ADD ART" upload now accept this
+                # absolute path (see _resolve_rom_ref) -- but _serve_rom and
+                # _delete_rom still reject any name containing a slash, so
+                # these tiles still can't be streamed or deleted from the UI.
+                # The delete restriction is deliberate: no accidental
                 # one-click delete of a multi-GB extracted dump.
                 roms.append({"name": game_dir.name, "file": str(eboot),
                              "system": "ps3", "size": size})
@@ -1009,16 +1074,17 @@ class _GraphHandler(BaseHTTPRequestHandler):
         self._file(200, p, "application/octet-stream")
 
     def _get_rom_art(self, name: str):
-        """Serve best-effort box art for a ROM (see rom_art.py). 404 with no
-        body content worth showing the user just means 'no art' -- the
-        library grid's <img> just hides itself on a failed load, so this
-        never breaks the page, it only ever adds a picture when one is
-        confidently found."""
+        """Serve best-effort box art for a ROM (see rom_art.py), including
+        folder-dump PS3 games addressed by an absolute EBOOT.BIN path (see
+        _resolve_rom_ref). 404 with no body content worth showing the user
+        just means 'no art' -- the library grid's <img> just hides itself
+        on a failed load, so this never breaks the page, it only ever adds
+        a picture when one is confidently found."""
         name = unquote(name or "")
-        if not name or "/" in name or "\\" in name or ".." in name:
+        p, art_key = _resolve_rom_ref(name)
+        if p is None:
             self._json(400, {"error": "invalid rom name"})
             return
-        p = _roms_dir() / name
         if not p.exists() or not p.is_file():
             self._text(404, "rom not found")
             return
@@ -1028,7 +1094,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
             return
         try:
             import rom_art
-            art = rom_art.get_art_path(system, name)
+            art = rom_art.get_art_path(system, art_key)
         except Exception:
             art = None
         if not art or not art.exists():
@@ -1039,16 +1105,18 @@ class _GraphHandler(BaseHTTPRequestHandler):
     def _post_rom_art_upload(self, name: str):
         """Save a user-supplied cover image for a ROM -- the manual fallback
         offered on the Arcade tile when the automatic libretro-thumbnails
-        lookup didn't find a confident match. Body is the raw image bytes
-        in whatever format the browser sent; rom_art.save_custom_art
-        normalizes it to PNG and it's served back immediately by
-        _get_rom_art above (same cache slot)."""
+        lookup didn't find a confident match (the *only* path PS3 folder-dump
+        games ever get art through -- libretro-thumbnails has no PS3 repo,
+        see rom_art.py's _REPO_BY_SYSTEM). Body is the raw image bytes in
+        whatever format the browser sent; rom_art.save_custom_art normalizes
+        it to PNG and it's served back immediately by _get_rom_art above
+        (same cache slot, via the same art_key)."""
         try:
             name = unquote(name or "")
-            if not name or "/" in name or "\\" in name or ".." in name:
+            p, art_key = _resolve_rom_ref(name)
+            if p is None:
                 self._json(400, {"error": "invalid rom name"})
                 return
-            p = _roms_dir() / name
             if not p.exists() or not p.is_file():
                 self._text(404, "rom not found")
                 return
@@ -1063,7 +1131,7 @@ class _GraphHandler(BaseHTTPRequestHandler):
                 return
             data = self.rfile.read(length)
             import rom_art
-            rom_art.save_custom_art(system, name, data)
+            rom_art.save_custom_art(system, art_key, data)
             self._json(200, {"ok": True})
         except Exception as e:
             self._json(500, {"error": f"{type(e).__name__}: {e}"})
