@@ -9729,7 +9729,17 @@ def _speak(text: str) -> None:
     and routes to a matching voice -- ElevenLabs' eleven_turbo_v2_5 is
     already multilingual on its own (no change needed there); Kokoro and
     edge-tts get an explicit voice override when one's available, and
-    Kokoro hands off to edge-tts for a language it has no voice pack for."""
+    Kokoro hands off to edge-tts for a language it has no voice pack for.
+
+    Mute (2026-09-12): _listening_muted (the HUD's mute pill) used to only
+    pause wake-word listening -- it never stopped Chloe's own speech, so
+    anything that talks on its own timer (arcade-watch commentary, error
+    speech, scheduled voice announcements) kept right on talking while
+    "muted." Ed confirmed he wants mute to mean full silence, not just
+    "stop listening to me," so this is now the single choke point: every
+    caller of _speak() goes quiet while muted, with no per-caller opt-out."""
+    if _listening_muted.is_set():
+        return
     text = _clean_for_tts(text)
     text = chloe_tone_guard.strip_mood_opener(text)
     if not text:
