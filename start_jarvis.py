@@ -40,6 +40,54 @@ else:
 # against the cwd in jarvis.py, so we set cwd = app_dir.
 os.chdir(app_dir)
 
+# ─── SINGLE-INSTANCE LOCK ───────────────────────────────────────────────────────────────────
+# 2026-09-12: nothing enforced only-one-Chloe-at-a-time. If the app gets
+# launched twice (a stuck/zombie process left over from a bad exit, a
+# shortcut double-clicked again, a scheduled relaunch racing a manual one)
+# each copy runs its own independent voice loop -- two live wake-word
+# listeners, two TTS outputs -- which is exactly what "two Chloe voices"
+# sounds like. Only one process can end up bound to the HUD's
+# ws:6789/http:6790 ports, but the OTHER copy's voice thread (started on
+# its own daemon thread in run_jarvis(), further down) doesn't depend on
+# that bind succeeding, so it happily keeps listening and speaking anyway.
+#
+# Fix: take an exclusive OS-level byte-range lock on a lockfile next to the
+# app, before anything else starts. msvcrt.locking is held for the life of
+# the process and released automatically by Windows even on a hard
+# crash/kill -- so a genuinely-dead prior instance never blocks a new
+# launch, but a second concurrent launch is refused immediately instead of
+# silently running alongside the first.
+_SINGLE_INSTANCE_LOCK_FH = None
+
+
+def _acquire_single_instance_lock() -> None:
+    global _SINGLE_INSTANCE_LOCK_FH
+    if os.name != "nt":
+        return  # dev/non-Windows: skip, no msvcrt
+    import msvcrt
+    lock_path = app_dir / "chloe.instance.lock"
+    try:
+        fh = open(lock_path, "a+b")
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        print("[chloe] another Chloe instance already holds "
+              f"{lock_path} -- refusing to start a second one. If you're "
+              "sure no other Chloe is running, delete that file and "
+              "retry.", flush=True)
+        sys.exit(1)
+    except Exception as e:
+        # Never let the guard itself be the reason Chloe won't start.
+        print(f"[chloe] single-instance lock check failed (non-fatal, "
+              f"continuing): {e}", flush=True)
+        return
+    _SINGLE_INSTANCE_LOCK_FH = fh  # keep open (and thus locked) for the
+    # life of the process; deliberately never closed here.
+
+
+_acquire_single_instance_lock()
+
+
 # ─── LOG REDIRECT (frozen / no-console mode) ─────────────────────────────────
 # With console=False in the .spec, prints have nowhere to go and a
 # crash-on-import would leave the user staring at a closed window.
