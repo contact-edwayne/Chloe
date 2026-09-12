@@ -12397,6 +12397,56 @@ def _arcade_png_hash(b: bytes) -> str:
         return hashlib.sha1(b[:65536]).hexdigest()
 
 
+# 2026-09-12: watch-mode was calling the vision LLM on loading-screen /
+# whiteout frames and getting genuinely-confused-sounding reactions ("i
+# literally cannot see a thing") twice in a row across consecutive cycles,
+# since the frame doesn't change between them. Catching this cheaply BEFORE
+# the vision call means we just stay quiet through a transition instead of
+# narrating our own confusion about it, and saves a wasted Groq call.
+_ARCADE_TRANSITION_STDDEV = 4.0
+
+
+def _arcade_frame_is_transition(png: bytes) -> bool:
+    """True if `png` is close enough to a single flat color (solid white/
+    black loading screen, fade transition) that there's nothing worth
+    reacting to. Cheap grayscale stddev on a small thumbnail -- no vision
+    call needed to tell 'blank' from 'game is on screen'."""
+    if not png:
+        return False
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(png)).convert("L").resize((32, 18))
+        arr = np.asarray(im, dtype=np.float32)
+        return float(arr.std()) < _ARCADE_TRANSITION_STDDEV
+    except Exception:
+        return False
+
+
+_ARCADE_DUP_RATIO = 0.62
+
+
+def _arcade_is_near_duplicate(text: str, last_comments: list) -> bool:
+    """Hard backstop against restating a recent comment. The prompt already
+    tells the model 'don't repeat yourself' (see comments_block below), but
+    that's advisory and the local model doesn't always follow it over a
+    short window -- this catches it after the fact so a near-identical line
+    never actually gets spoken twice."""
+    if not text:
+        return False
+    import difflib
+    norm = _re.sub(r"[^a-z0-9 ]+", "", text.lower()).strip()
+    if not norm:
+        return False
+    for c in (last_comments or [])[-6:]:
+        cn = _re.sub(r"[^a-z0-9 ]+", "", (c or "").lower()).strip()
+        if not cn:
+            continue
+        if difflib.SequenceMatcher(None, norm, cn).ratio() >= _ARCADE_DUP_RATIO:
+            return True
+    return False
+
+
 def _arcade_hash_dist(a: str, b: str) -> int:
     """Hamming distance between two dHash hex strings (lower = more similar).
     Returns 64 (max) on mismatched/empty inputs."""
@@ -12443,8 +12493,17 @@ def _arcade_comment_once(game: str, recent_str: str,
                          last_comments: list, linger: int,
                          facts_block: str = "", game_state: dict = None):
     """Conversation-aware screen capture + ONE in-character reaction.
-    Returns (text, png_hash). text is '' on failure; png_hash is None on
-    capture failure so the caller doesn't update its linger state.
+    Returns (text, png_hash):
+      - text is a real comment on success.
+      - text is '' on a genuine failure (capture or vision call) —
+        png_hash is None too in the capture-failure case, so the caller
+        doesn't update its linger state; the caller surfaces this to Ed
+        after a few misses in a row.
+      - text is None when there's deliberately nothing to say this cycle
+        (a detected loading/whiteout frame, or a near-duplicate of a
+        recent comment) — png_hash is still a real hash so linger/
+        interval tracking keeps working. Not a failure; the caller stays
+        silent and doesn't count it against fail_streak.
 
     `facts_block` is an optional per-game knowledge block (cumulative obs
     from prior sessions of this game) — see _arcade_load_game_facts.
@@ -12463,19 +12522,25 @@ def _arcade_comment_once(game: str, recent_str: str,
             if not cap.get("ok") or not cap.get("png"):
                 return "", None
             png = cap["png"]
+        h = _arcade_png_hash(png)
+        if _arcade_frame_is_transition(png):
+            # Deliberately silent -- not a failure (h still updates linger/
+            # interval tracking normally), just nothing worth saying about a
+            # loading/whiteout frame. See _arcade_frame_is_transition.
+            return None, h
         game_hint = (f"Ed told you the game is '{game}'." if game else
                      "Identify what game this is from what's on screen.")
         recent_block = (
             f"\n\nRecent shared conversation between you (Chloe) and Ed:\n{recent_str}"
             if recent_str else "")
-        cm = "\n".join(f"  - {c}" for c in (last_comments or [])[-4:])
+        cm = "\n".join(f"  - {c}" for c in (last_comments or [])[-6:])
         comments_block = (
             f"\n\nYour LAST few watch comments are below. Do NOT repeat their "
             f"subject OR sentence shape — if they fixate on one thing (an enemy, "
             f"rocks, a place), deliberately pick something ELSE that's on "
             f"screen:\n{cm}") if cm else ""
         linger_block = ""
-        if linger >= 2:
+        if linger >= 1:
             linger_block = (
                 "\n\nEd has been on this same screen for a while now. If he "
                 "looks stuck, hesitating, or reading slowly, react to THAT — "
@@ -12580,7 +12645,6 @@ def _arcade_comment_once(game: str, recent_str: str,
         # a game is actually running (GPU contention) -- see
         # screen_vision.describe_screen's docstring. Go straight to Groq.
         res = screen_vision.describe_screen(png, prompt=prompt, try_local=False)
-        h = _arcade_png_hash(png)
         if not res.get("ok"):
             print(f"[arcade-watch] vision call failed: {res.get('error')}",
                   flush=True)
@@ -13232,6 +13296,11 @@ async def _arcade_watch_loop():
             frac = (delta - 4) / 25.0
             interval = int(ival_max - (ival_max - ival_min) * frac)
             interval = max(ival_min, min(ival_max, interval))
+        if text and _arcade_is_near_duplicate(text, last_comments):
+            print(f"[arcade-watch] suppressed near-duplicate: {text!r}",
+                  flush=True)
+            text = None
+
         if text:
             fail_streak = 0
             _arcade_watch["count"] += 1
@@ -13255,6 +13324,13 @@ async def _arcade_watch_loop():
                 await asyncio.to_thread(_speak, text)
             except Exception as e:
                 print(f"[arcade-watch] speak failed: {e}", flush=True)
+        elif text is None:
+            # Deliberately silent this cycle -- a detected transition frame
+            # (_arcade_frame_is_transition) or a suppressed near-duplicate
+            # (_arcade_is_near_duplicate). Neither is a vision failure, so
+            # don't touch fail_streak or surface the "having trouble seeing"
+            # message for either.
+            pass
         elif h is not None:
             # h is not None means capture+vision were attempted but produced
             # nothing usable (vision call failed) -- see the log line in
