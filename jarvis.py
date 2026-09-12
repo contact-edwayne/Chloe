@@ -5092,6 +5092,29 @@ def _resolve_mic_device(sd):
     return None  # fall back to OS default
 
 
+# Hot-plug recovery (2026-09-12): PortAudio scans the system's audio devices
+# once at init and caches the list -- if Chloe starts before the mic is
+# plugged in, _resolve_mic_device's pick is baked in from that stale list,
+# and _wake_detect_phase's InputStream.read() loop never errors just
+# because no one's talking, so it can sit "listening" to the wrong (or a
+# nonexistent) device forever with no crash to trigger the existing
+# fallback/backoff logic. _wake_detect_phase calls this periodically to
+# force a re-scan and re-pick.
+def _resolve_mic_device_after_refresh(sd):
+    """Force PortAudio to re-enumerate audio devices, then re-run
+    _resolve_mic_device against the fresh list. sd._terminate()/_initialize()
+    are private sounddevice APIs (the documented workaround for hot-plug
+    detection, since PortAudio has no public rescan call) -- best-effort,
+    so a failure here just means we fall back to re-resolving against
+    whatever device list was already cached."""
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception as e:
+        print(f"[voice] device list refresh failed (non-fatal): {e}", flush=True)
+    return _resolve_mic_device(sd)
+
+
 def _resample_to_16k(chunk_np: np.ndarray, src_rate: int) -> np.ndarray:
     """Resample int16 audio from src_rate down to 16000 Hz. Uses scipy if available
     (better quality), falls back to simple linear interpolation. Always returns
@@ -6087,7 +6110,8 @@ def _voice_loop():
                 _ptt_mode.clear()
                 _ptt_stop_signal.clear()
             else:
-                _wake_detect_phase(sd, device, wake)
+                device = _wake_detect_phase(sd, device, wake)
+                _voice_device_global = device
             consecutive_failures = 0  # successful run resets the back-off
         except Exception as e:
             consecutive_failures += 1
@@ -6138,11 +6162,18 @@ def _voice_loop():
                 time.sleep(backoff)
 
 
+_MIC_RECHECK_INTERVAL_S = 15.0  # balance: responsive enough that a hot-plugged mic
+# doesn't need an app restart, infrequent enough that the terminate/reinit
+# below (which briefly invalidates the currently-open stream too, even when
+# nothing changed) isn't disruptive.
+
+
 def _wake_detect_phase(sd, device, wake):
     """Open an InputStream sized to the detector's frame length, listen for the
-    wake word, close + transition to recording when it fires. Returns when
-    handle_wake completes (or on error). Works with both Porcupine (frame≈512)
-    and openwakeword (frame=1280)."""
+    wake word, close + transition to recording when it fires. Returns the
+    device that should be used from here on (usually unchanged; see the
+    hot-plug recheck below) when handle_wake completes or on error. Works
+    with both Porcupine (frame≈512) and openwakeword (frame=1280)."""
     if wake['engine'] == 'openwakeword':
         wake['handle'].reset()  # Porcupine has no reset
 
@@ -6152,18 +6183,53 @@ def _wake_detect_phase(sd, device, wake):
     )
     needs_resample = (native_rate != SAMPLE_RATE)
     src_block = stream.blocksize or frame_length
+    last_recheck = time.monotonic()
+    # A numeric CHLOE_MIC override pins an exact device index -- re-resolving
+    # it would just return the same index, so only bother rechecking when
+    # there's no override or it's a name/substring match (the case that can
+    # actually differ once the mic is plugged in).
+    recheck_enabled = not (MIC_DEVICE_OVERRIDE is not None
+                            and MIC_DEVICE_OVERRIDE.isdigit())
 
     with stream:
         while True:
             # Bail out promptly if HUD just requested PTT — outer loop will
             # then enter _ptt_record_phase with a fresh stream.
             if _ptt_mode.is_set():
-                return
+                return device
             try:
                 audio_data, overflow = stream.read(src_block)
             except Exception as e:
                 print(f"[voice] read error in wake phase: {e}")
-                return  # let outer loop reopen
+                return device  # let outer loop reopen
+
+            # Hot-plug recovery: this stream may be listening to a stale or
+            # wrong device (e.g. the mic wasn't plugged in when Chloe
+            # started) and stream.read() above never errors just because
+            # no one's talking -- so without this check we'd sit here
+            # "listening" forever with no way to notice a mic that showed
+            # up after boot. Cheap enough to run every _MIC_RECHECK_INTERVAL_S
+            # since it's only hit once per interval, not per audio block.
+            if recheck_enabled:
+                now = time.monotonic()
+                if now - last_recheck >= _MIC_RECHECK_INTERVAL_S:
+                    last_recheck = now
+                    # sd._terminate()/_initialize() tear down and rebuild
+                    # PortAudio's ENTIRE device/stream state -- per PortAudio's
+                    # own docs, Pa_Terminate() closes every open stream, not
+                    # just this one. Skip this cycle if Chloe is mid-speech
+                    # (a separate OutputStream elsewhere) so we don't cut off
+                    # her own audio; we'll just try again next interval.
+                    if _speaking.is_set():
+                        print("[voice] mic recheck skipped -- Chloe is "
+                              "speaking, trying again next interval",
+                              flush=True)
+                    else:
+                        fresh = _resolve_mic_device_after_refresh(sd)
+                        if fresh != device:
+                            print(f"[voice] mic device changed ({device} -> "
+                                  f"{fresh}) -- reopening stream", flush=True)
+                            return fresh
 
             if _listening_muted.is_set():
                 # Muted -- keep draining the input stream (so it doesn't
@@ -6193,6 +6259,7 @@ def _wake_detect_phase(sd, device, wake):
                 break
 
     _handle_wake(sd, device)
+    return device
 
 
 CHIRP_ON_WAKE = os.environ.get("CHLOE_WAKE_CHIRP", "1").strip() != "0"
