@@ -191,13 +191,35 @@ _H2_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 def _extract_sections(body: str) -> dict[str, str]:
     """Split a markdown body by `## Heading` into a dict keyed by lowercased
     heading text. Section values include only the body between this heading
-    and the next H2 (or EOF), with surrounding whitespace stripped."""
-    headings = list(_H2_RE.finditer(body))
+    and the next H2 (or EOF), with surrounding whitespace stripped.
+
+    Fence-aware: `## ` lines inside a fenced code block (e.g. a kind=full
+    proposal whose payload is itself a markdown file with its own H2s) are
+    not section boundaries. A fence closes only on a run of the same char at
+    least as long as the opener (CommonMark), so a 4-backtick outer fence
+    can safely contain 3-backtick inner blocks."""
+    headings = []
+    fence = None  # (char, length) while inside a fenced block
+    pos = 0
+    for line in body.splitlines(keepends=True):
+        stripped = line.strip()
+        fm = re.match(r"(`{3,}|~{3,})", stripped)
+        if fence is None:
+            if fm:
+                fence = (fm.group(1)[0], len(fm.group(1)))
+            else:
+                hm = _H2_RE.match(line.rstrip("\r\n"))
+                if hm:
+                    headings.append((hm, pos))
+        elif (fm and fm.group(1)[0] == fence[0] and len(fm.group(1)) >= fence[1]
+              and stripped.strip(fence[0]) == ""):
+            fence = None
+        pos += len(line)
     sections: dict[str, str] = {}
-    for i, m in enumerate(headings):
+    for i, (m, hpos) in enumerate(headings):
         key = m.group(1).strip().lower()
-        start = m.end()
-        end = headings[i + 1].start() if i + 1 < len(headings) else len(body)
+        start = hpos + m.end()
+        end = headings[i + 1][1] if i + 1 < len(headings) else len(body)
         sections[key] = body[start:end].strip()
     return sections
 
@@ -207,12 +229,12 @@ def _strip_fenced_code(text: str, lang_hint: str = "") -> str:
     optional language hint and trailing newlines."""
     t = text.strip()
     fence_re = re.compile(
-        r"\A```(?:" + re.escape(lang_hint) + r"|\w*)\s*\n(.*?)\n```\s*\Z",
+        r"\A(`{3,})(?:" + re.escape(lang_hint) + r"|\w*)\s*\n(.*?)\n\1\s*\Z",
         re.DOTALL,
     )
     m = fence_re.match(t)
     if m:
-        return m.group(1)
+        return m.group(2)
     return t
 
 
@@ -704,10 +726,12 @@ def create_proposal(
     body_stripped = body.strip("\n")
     rollback_text = rollback.strip() or f"`/revert_proposal {slug}`"
 
+    _longest = max((len(r) for r in re.findall(r"`+", body_stripped)), default=0)
+    fence = "`" * max(3, _longest + 1)
     md = (
         f"# {title or slug.replace('_', ' ')}\n\n"
         f"## Rationale\n\n{rationale.strip()}\n\n"
-        f"## {section_name}\n\n```{fence_lang}\n{body_stripped}\n```\n\n"
+        f"## {section_name}\n\n{fence}{fence_lang}\n{body_stripped}\n{fence}\n\n"
         f"## Test plan\n\n{test_plan.strip()}\n\n"
         f"## Rollback\n\n{rollback_text}\n"
     )
