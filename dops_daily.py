@@ -59,6 +59,8 @@ DEFAULTS = {
     "footer_otd": "On time delivery (OTD)",
     "meeting_note": "",          # e.g. "Meeting in Break room @7:15AM Sharp"
     "name_overrides": {},        # {"Full Name From Cortex": "Display"}
+    "google_sheet_id": "",       # spreadsheet id of the HOM1 Daily Sheet (dops_sheet.py)
+    "template_tab": "Template",  # tab duplicated for a new day; falls back to the newest tab
 }
 
 
@@ -217,11 +219,11 @@ def _merge(ws, rng: str, value=None, **kw):
     return _put(ws, first, value, **kw)
 
 
-def build(dops: dict, roster: list[tuple[str, str]], day: dt.date, cfg: dict, out_path: Path) -> list[str]:
+def match_roster(dops: dict, roster: list[tuple[str, str]], cfg: dict):
+    """-> (assigned route->full name, display names route->name, flags)"""
     flags: list[str] = []
     routes = dops["routes"]
     dops_codes = {r["route"] for r in routes}
-
     # route -> full name from Cortex
     by_route: dict[str, str] = {}
     for full, route in roster:
@@ -241,6 +243,13 @@ def build(dops: dict, roster: list[tuple[str, str]], day: dt.date, cfg: dict, ou
         if n != assigned[route].split()[0] and not cfg["name_overrides"].get(assigned[route]):
             flags.append(f"Two drivers share first name {assigned[route].split()[0]!r}; shown as {n!r}")
 
+    return assigned, names, flags
+
+
+def build(dops: dict, roster: list[tuple[str, str]], day: dt.date, cfg: dict, out_path: Path) -> list[str]:
+    routes = dops["routes"]
+    dops_codes = {r["route"] for r in routes}
+    assigned, names, flags = match_roster(dops, roster, cfg)
     def who(route: str) -> str:
         return names.get(route, route)
 
