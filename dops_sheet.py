@@ -256,10 +256,17 @@ def run(a) -> int:
     import gspread
     ss = _client().open_by_key(sheet_id)
     extra: list[str] = []
+    existed = True
     try:
         ws = ss.worksheet(title)
         print(f"tab {title!r} exists -- overwriting the automated cells")
+        if not a.dispatcher:                       # re-run: keep whoever is already named on the tab
+            cur = ((ws.get("B2") or [[""]])[0] or [""])[0]
+            m = re.search(r"Dispatch:\s*(.+)$", cur)
+            if m and m.group(1).strip():
+                dispatcher = m.group(1).strip()
     except gspread.WorksheetNotFound:
+        existed = False
         try:
             src = ss.worksheet(cfg["template_tab"])
         except gspread.WorksheetNotFound:
