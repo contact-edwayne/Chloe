@@ -8392,6 +8392,32 @@ class _OllamaToolCallNeeded(Exception):
 
 
 async def _ollama_chat_stream(messages: list, max_tokens: int = 400):
+    """Default-local stream with optional Claude escalation (chloe_claude).
+    Local qwen handles every turn unless pick_tier() matches (planning/debug/
+    analysis language, or "think hard"). Claude is tried first only for those;
+    if it yields nothing before the first token, falls through to local so the
+    caller never sees a difference. Skipped in /nsfw mode."""
+    _tier = None
+    try:
+        import chloe_claude as _cc
+        if _cc.ENABLED and not nsfw_mode.is_enabled():
+            _tier = _cc.pick_tier(_last_user_text(messages))
+    except Exception:
+        _tier = None
+    if _tier:
+        print(f"[chloe] escalating to Claude ({_tier})", flush=True)
+        _got = False
+        async for _d in _cc.stream(messages, _tier, max_tokens):
+            _got = True
+            yield _d
+        if _got:
+            return
+        print("[chloe] Claude yielded nothing -- falling back to local", flush=True)
+    async for _d in _ollama_chat_stream_local(messages, max_tokens):
+        yield _d
+
+
+async def _ollama_chat_stream_local(messages: list, max_tokens: int = 400):
     """Async generator: stream a chat completion from local Ollama, yielding
     content deltas as they arrive.
 
