@@ -118,3 +118,7 @@ JarvisFace/
 
 # Deliverable docs dropped by a Claude Code session, not part of the app.
 Claude outputs/
+
+# DOPS daily (driver data + PIN/lock-box text stay local)
+dops_config.json
+dops_out/
