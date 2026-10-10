@@ -22,8 +22,44 @@ import os
 import re
 from typing import AsyncIterator, Optional
 
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-ENABLED = bool(API_KEY) and os.environ.get("CHLOE_CLAUDE_ESCALATE", "1").strip().lower() not in ("0", "false", "no", "off")
+_env_loaded = False
+
+
+def _load_env_once():
+    """Import order must not matter: if jarvis.py imports this before it loads
+    .env, read the key from .env next to this file ourselves."""
+    global _env_loaded
+    if _env_loaded:
+        return
+    _env_loaded = True
+    try:
+        from pathlib import Path
+        from dotenv import load_dotenv
+        load_dotenv(Path(__file__).parent / ".env")  # never overrides existing env
+    except Exception:
+        pass
+
+
+def api_key() -> str:
+    k = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not k:
+        _load_env_once()
+        k = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    return k
+
+
+def enabled() -> bool:
+    return bool(api_key()) and os.environ.get("CHLOE_CLAUDE_ESCALATE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def __getattr__(name):  # PEP 562: _cc.ENABLED stays valid but is evaluated live
+    if name == "ENABLED":
+        return enabled()
+    if name == "API_KEY":
+        return api_key()
+    raise AttributeError(name)
+
+
 FIRST_TOKEN_TIMEOUT = float(os.environ.get("CHLOE_CLAUDE_FIRST_TOKEN_TIMEOUT", "6"))
 
 MODELS = {
@@ -51,13 +87,13 @@ def _get_client():
     global _client
     if _client is None:
         import anthropic
-        _client = anthropic.AsyncAnthropic(api_key=API_KEY, timeout=30.0, max_retries=0)
+        _client = anthropic.AsyncAnthropic(api_key=api_key(), timeout=30.0, max_retries=0)
     return _client
 
 
 def pick_tier(user_text: str) -> Optional[str]:
     """'sonnet' | 'opus' | None (stay local). Pure regex, microseconds."""
-    if not ENABLED or not user_text:
+    if not enabled() or not user_text:
         return None
     if _NEVER_RE.search(user_text):
         return None
@@ -95,6 +131,7 @@ async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) ->
         system, msgs = _to_anthropic(messages)
         if not msgs:
             return
+        print(f"[claude] escalating -> {tier} ({MODELS[tier]})", flush=True)
         cm = _get_client().messages.stream(
             model=MODELS[tier],
             max_tokens=min(max_tokens or MAX_TOKENS[tier], MAX_TOKENS[tier]),
