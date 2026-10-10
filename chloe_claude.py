@@ -91,16 +91,30 @@ def _get_client():
     return _client
 
 
+def _dbg(msg: str) -> None:
+    if os.environ.get("CHLOE_CLAUDE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
+        print(f"[claude:debug] {msg}", flush=True)
+
+
 def pick_tier(user_text: str) -> Optional[str]:
     """'sonnet' | 'opus' | None (stay local). Pure regex, microseconds."""
-    if not enabled() or not user_text:
+    if not enabled():
+        _dbg(f"disabled (key set={bool(api_key())}, ESCALATE={os.environ.get('CHLOE_CLAUDE_ESCALATE')!r})")
         return None
-    if _NEVER_RE.search(user_text):
+    if not user_text:
+        _dbg("empty user text")
+        return None
+    m = _NEVER_RE.search(user_text)
+    if m:
+        _dbg(f"blocked by never-list word {m.group(0)!r} in {user_text[:80]!r}")
         return None
     if _OPUS_RE.search(user_text):
+        _dbg("-> opus")
         return "opus"
     if _SONNET_RE.search(user_text) or len(user_text) > 600:
+        _dbg("-> sonnet")
         return "sonnet"
+    _dbg(f"no trigger in {user_text[:80]!r} (len={len(user_text)})")
     return None
 
 
