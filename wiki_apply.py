@@ -8,6 +8,8 @@ For each pending proposal (filed by wiki_maintain.py, already validated):
   1. apply it via chloe_proposals (keeper page overwritten; .bak made as usual)
   2. rewrite [[dupe]] / [[dupe|x]] / [[dupe#h]] links wiki-wide to point at the keeper
   3. MOVE (not delete) the duplicate pages into brain/wiki_merge_backup/<stamp>/
+Duplicates whose page name also exists elsewhere (e.g. concepts/greeks vs entities/greeks)
+stay put until the twin is merged too; every run also sweeps those leftovers.
 Every touched file is copied there first and a manifest.json is written, so
 --revert restores everything, including the proposals' own backups.
 Env: CHLOE_BRAIN_ROOT (default C:\\Chloe\\brain)
@@ -49,15 +51,47 @@ def _wiki_md(skip: Path | None = None):
         yield p
 
 
-def _stem_count(stem: str) -> int:
-    return sum(1 for p in WIKI.rglob("*.md") if p.stem == stem)
+def _keeper_of(prop) -> str:
+    return prop.target.replace("\\", "/").split("brain/wiki/", 1)[-1]
+
+
+def _leftovers(extra: dict | None = None) -> dict:
+    """{dupe_rel: keeper_rel} for dupes of APPLIED wikimerge proposals still on disk."""
+    out = dict(extra or {})
+    for row in cp.list_proposals("applied"):
+        if not row["slug"].startswith("wikimerge_"):
+            continue
+        prop = cp.load_proposal(row["slug"])
+        keeper = _keeper_of(prop)
+        for d in _DUPE_RE.findall(prop.raw_body):
+            if (WIKI / d).exists() and (WIKI / keeper).exists():
+                out[d] = keeper
+    return out
+
+
+def _plan(pairs: dict):
+    """Decide which dupes can be moved + links rewritten without ambiguity.
+    A bare [[stem]] is safe if every existing page with that stem is itself a
+    dupe that maps to the same keeper stem."""
+    by_stem: dict = {}
+    for f in WIKI.rglob("*.md"):
+        by_stem.setdefault(f.stem, []).append(str(f.relative_to(WIKI)).replace("\\", "/"))
+    move, keep = {}, []
+    for d, k in pairs.items():
+        ds, ks = Path(d).stem, Path(k).stem
+        peers = by_stem.get(ds, [])
+        ok = ds != ks and all(
+            peer == d or (peer in pairs and Path(pairs[peer]).stem == ks) for peer in peers)
+        if ok:
+            move[d] = ks
+        else:
+            keep.append(d)
+    return move, keep
 
 
 def dry_run() -> int:
     items = _pending()
-    if not items:
-        print("no pending wikimerge_ proposals")
-        return 0
+    extra = {}
     bad = 0
     for it in items:
         r = cp.apply_proposal(it["slug"], dry_run=True)
@@ -65,70 +99,81 @@ def dry_run() -> int:
         bad += not ok
         print(f"{'OK ' if ok else 'ERR'} {it['keeper']}  <-  {', '.join(it['dupes']) or '(no dupes listed)'}")
         print(f"      {r.get('summary') or r.get('error')}")
-    print(f"\n{len(items)} proposals, {bad} would fail. Run with --apply to do it.")
+        for d in it["dupes"]:
+            if (WIKI / d).exists():
+                extra[d] = it["keeper"]
+    pairs = _leftovers(extra)
+    move, keep = _plan(pairs)
+    print(f"\n{len(items)} pending proposals, {bad} would fail.")
+    print(f"duplicates to move + relink: {len(move)}")
+    for d in keep:
+        print(f"  would keep {d} (same page name exists elsewhere that is not yet merged)")
+    if not items and not move:
+        print("nothing to do")
+    else:
+        print("Run with --apply to do it.")
     return 0
 
 
 def apply_all() -> int:
     items = _pending()
-    if not items:
-        print("no pending wikimerge_ proposals")
-        return 0
     stash = BACKUP_ROOT / dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    (stash / "touched").mkdir(parents=True)
-    (stash / "dupes").mkdir()
+    _n = 1
+    while stash.exists():
+        _n += 1
+        stash = BACKUP_ROOT / (dt.datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{_n}")
     manifest = {"applied": [], "moved": [], "touched": [], "skipped": []}
 
-    applied = []
     for it in items:
         cp._applied_this_session = 0  # per-proposal cap is a Chloe-session guard, not relevant here
         r = cp.apply_proposal(it["slug"])
         if r.get("ok"):
             print(f"applied {it['slug']} -> {it['keeper']}")
             manifest["applied"].append(it["slug"])
-            applied.append(it)
         else:
             print(f"SKIP  {it['slug']}: {r.get('error')}")
             manifest["skipped"].append({"slug": it["slug"], "error": r.get("error")})
 
-    # link rewrite map: dupe stem -> keeper stem (only unambiguous stems)
-    mapping = {}
-    for it in applied:
-        kstem = Path(it["keeper"]).stem
-        for d in it["dupes"]:
-            dstem = Path(d).stem
-            if dstem == kstem or _stem_count(dstem) != 1 or not (WIKI / d).exists():
-                print(f"  keep {d} in place (ambiguous or missing); links to it untouched")
-                continue
-            mapping[dstem] = (kstem, d)
+    move, keep = _plan(_leftovers())
+    for d in keep:
+        print(f"  keep {d} in place for now (same page name exists elsewhere, not yet merged)")
+    if not manifest["applied"] and not move:
+        print("nothing to do")
+        return 0
 
-    if mapping:
-        pats = {s: re.compile(r"\[\[((?:(?:concepts|entities)/)?)" + re.escape(s) + r"(?=[\]|#])")
-                for s in mapping}
+    (stash / "touched").mkdir(parents=True)
+    (stash / "dupes").mkdir()
+    pairs = _leftovers()
+    if move:
+        by_stem = {}
+        for d, ks in move.items():
+            by_stem[Path(d).stem] = ks
+        pats = {s_: re.compile(r"\[\[((?:(?:concepts|entities)/)?)" + re.escape(s_) + r"(?=[\]|#])")
+                for s_ in by_stem}
+        moving = set(move)
         n_files = 0
-        for f in list(_wiki_md(skip=BACKUP_ROOT)):
-            rel = f.relative_to(WIKI)
-            if any(str(rel).replace("\\", "/") == d for _, d in mapping.values()):
+        for f in list(_wiki_md()):
+            rel = str(f.relative_to(WIKI)).replace("\\", "/")
+            if rel in moving:
                 continue  # duplicates are being moved, not edited
             text = f.read_text(encoding="utf-8", errors="replace")
             new = text
-            for s, pat in pats.items():
-                new = pat.sub(lambda m, k=mapping[s][0]: f"[[{m.group(1)}{k}", new)
+            for s_, pat in pats.items():
+                new = pat.sub(lambda m, k=by_stem[s_]: f"[[{m.group(1)}{k}", new)
             if new != text:
                 dest = stash / "touched" / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(f, dest)
                 f.write_text(new, encoding="utf-8")
-                manifest["touched"].append(str(rel).replace("\\", "/"))
+                manifest["touched"].append(rel)
                 n_files += 1
         print(f"rewrote links in {n_files} page(s)")
-        for s, (k, d) in mapping.items():
-            src = WIKI / d
+        for d in move:
             dest = stash / "dupes" / d
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dest))
+            shutil.move(str(WIKI / d), str(dest))
             manifest["moved"].append(d)
-        print(f"moved {len(mapping)} duplicate page(s) to {stash / 'dupes'}")
+        print(f"moved {len(move)} duplicate page(s) to {stash / 'dupes'}")
 
     (stash / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"\ndone. undo with: py -3 wiki_apply.py --revert \"{stash}\"")
