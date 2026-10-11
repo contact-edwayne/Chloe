@@ -54,7 +54,9 @@ def enabled() -> bool:
 
 def __getattr__(name):  # PEP 562: _cc.ENABLED stays valid but is evaluated live
     if name == "ENABLED":
-        return enabled()
+        _e = enabled()
+        _dbg(f"ENABLED checked -> {_e}")
+        return _e
     if name == "API_KEY":
         return api_key()
     raise AttributeError(name)
@@ -94,6 +96,13 @@ def _get_client():
 def _dbg(msg: str) -> None:
     if os.environ.get("CHLOE_CLAUDE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
         print(f"[claude:debug] {msg}", flush=True)
+        try:
+            import time
+            from pathlib import Path
+            with open(Path(__file__).parent / "claude_escalation.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}\n")
+        except Exception:
+            pass
 
 
 def pick_tier(user_text: str) -> Optional[str]:
