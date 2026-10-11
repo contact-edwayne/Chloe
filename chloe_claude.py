@@ -62,7 +62,9 @@ def __getattr__(name):  # PEP 562: _cc.ENABLED stays valid but is evaluated live
     raise AttributeError(name)
 
 
-HISTORY_MSGS = int(os.environ.get("CHLOE_CLAUDE_HISTORY", "8"))
+HISTORY_MSGS = int(os.environ.get("CHLOE_CLAUDE_HISTORY", "6"))
+_FOCUS = ("\n\nAnswer the user's LATEST message directly, on its own topic. Earlier turns are background "
+          "only: do not resume, redo, or finish an earlier topic unless the latest message asks you to.")
 FIRST_TOKEN_TIMEOUT = float(os.environ.get("CHLOE_CLAUDE_FIRST_TOKEN_TIMEOUT", "6"))
 
 MODELS = {
@@ -148,7 +150,10 @@ def _to_anthropic(messages: list):
         out = out[-keep:]
     while out and out[0]["role"] != "user":
         out.pop(0)
-    return "\n\n".join(system_parts), out
+    system = "\n\n".join(system_parts)
+    if os.environ.get("CHLOE_CLAUDE_FOCUS", "1").strip().lower() not in ("0", "false", "no", "off"):
+        system += _FOCUS
+    return system, out
 
 
 # ---- prompt caching -------------------------------------------------------
