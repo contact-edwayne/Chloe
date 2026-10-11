@@ -13,6 +13,7 @@ Batches can take up to 24h, so the job is two-phase and idempotent:
     python wiki_maintain.py submit [--limit 25] [--dry-run]
     python wiki_maintain.py collect
     python wiki_maintain.py run        # collect pending, then submit (nightly)
+    python wiki_maintain.py retry [--ids a,b,c] [--dry-run]   # resubmit rejected clusters
 
 Env: ANTHROPIC_API_KEY, CHLOE_BRAIN_ROOT (default C:\\Chloe\\brain),
      CHLOE_WIKI_MAINTAIN_MODEL (default claude-sonnet-5-5)
@@ -52,6 +53,7 @@ _VERSION_RE = re.compile(r"^(.*)_v\d+$")
 SYSTEM = """You merge duplicate pages of a personal markdown wiki into ONE page.
 Rules:
 - Keep every distinct fact, date, number, source citation and [[wikilink]]. Drop only true repetition.
+- EVERY [[wikilink]] that appears in any source page MUST appear in the merged page. If one does not fit the prose, list it under a final "## Related" section.
 - Never invent anything. If pages conflict, keep both claims and mark the conflict inline as "(conflict: ...)".
 - Keep the keeper page's YAML frontmatter shape (--- ... --- with title:), updating nothing but what the merge requires.
 - Keep dated sections/revision history in chronological order.
@@ -132,12 +134,24 @@ def _user_prompt(pages: dict[str, str]) -> str:
     return "\n".join(parts)
 
 
-def submit(limit: int, dry_run: bool) -> None:
+def submit(limit: int, dry_run: bool, retry_ids: list[str] | None = None) -> None:
     state = _load_state()
+    clusters = find_clusters()
+    if retry_ids:
+        want = set(retry_ids)
+        clusters = [c for c in clusters if c["id"] in want]
+        missing = want - {c["id"] for c in clusters}
+        if missing:
+            print(f"not found (pages changed or already merged?): {', '.join(sorted(missing))}")
+        free = {p for c in clusters for p in c["paths"]}
+        state["done"] = [d for d in state["done"] if d not in want]
+        state["done_paths"] = [p for p in state.get("done_paths", []) if p not in free]
+        for cid in want:
+            state.get("rejected", {}).pop(cid, None)
     pending = {cid for b in state["batches"].values() for cid in b["clusters"]}
     busy = {p for b in state["batches"].values() for c in b["clusters"].values() for p in c["paths"]}
     busy |= {p for c in state.get("done_paths", []) for p in [c]}
-    todo = [c for c in find_clusters()
+    todo = [c for c in clusters
             if c["id"] not in state["done"] and c["id"] not in pending
             and not busy.intersection(c["paths"])]
     runnable, skipped = [], 0
@@ -180,6 +194,25 @@ def _extract_json(text: str) -> dict:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     return json.loads(text)
+
+
+def _lost_links(pages: dict[str, str], merged: str) -> list[str]:
+    src = {l for t in pages.values() for l in re.findall(r"\[\[([^\]|]+)", t)}
+    return sorted(l for l in src if f"[[{l}" not in merged)
+
+
+def repair(result: dict, pages: dict[str, str]) -> dict:
+    """If the model dropped wikilinks, append them under ## Related instead of rejecting."""
+    merged = result.get("merged_markdown")
+    if not isinstance(merged, str):
+        return result
+    lost = _lost_links(pages, merged)
+    if not lost:
+        return result
+    result = dict(result)
+    result["merged_markdown"] = merged.rstrip() + "\n\n## Related\n" + "\n".join(f"- [[{l}]]" for l in lost) + "\n"
+    result["notes"] = (result.get("notes", "") + f" (auto-appended {len(lost)} dropped link(s) under Related)").strip()
+    return result
 
 
 def validate(result: dict, cluster: dict, pages: dict[str, str]) -> str | None:
@@ -244,6 +277,7 @@ def collect() -> None:
             state.setdefault("done_paths", []).extend(cluster["paths"])
             if r.result.type != "succeeded":
                 print(f"  {cid}: {r.result.type}")
+                state.setdefault("rejected", {})[cid] = {"error": r.result.type, "paths": cluster["paths"]}
                 bad += 1
                 continue
             try:
@@ -251,13 +285,16 @@ def collect() -> None:
                 result = _extract_json(text)
                 pages = {p: (WIKI / p).read_text(encoding="utf-8", errors="replace")
                          for p in cluster["paths"][:MAX_PAGES_PER_CLUSTER]}
+                result = repair(result, pages)
                 err = validate(result, cluster, pages)
             except Exception as e:  # bad JSON, missing file, ...
                 err = f"{type(e).__name__}: {e}"
             if err:
                 print(f"  {cid}: REJECTED -- {err}")
+                state.setdefault("rejected", {})[cid] = {"error": err, "paths": cluster["paths"]}
                 bad += 1
                 continue
+            state.get("rejected", {}).pop(cid, None)
             path = _file_proposal(result, cluster)
             print(f"  {cid}: proposal -> {path.name}")
             ok += 1
@@ -267,7 +304,7 @@ def collect() -> None:
 
 
 def main(argv: list[str]) -> int:
-    if not argv or argv[0] not in ("submit", "collect", "run"):
+    if not argv or argv[0] not in ("submit", "collect", "run", "retry"):
         print(__doc__)
         return 2
     cmd = argv[0]
@@ -275,7 +312,13 @@ def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
     if cmd in ("collect", "run"):
         collect()
-    if cmd in ("submit", "run"):
+    if cmd == "retry":
+        ids = argv[argv.index("--ids") + 1].split(",") if "--ids" in argv else list(_load_state().get("rejected", {}))
+        if not ids:
+            print("nothing to retry (pass --ids a,b,c)")
+            return 1
+        submit(limit, dry, retry_ids=ids)
+    elif cmd in ("submit", "run"):
         submit(limit, dry)
     return 0
 
