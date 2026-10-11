@@ -62,6 +62,7 @@ def __getattr__(name):  # PEP 562: _cc.ENABLED stays valid but is evaluated live
     raise AttributeError(name)
 
 
+HISTORY_MSGS = int(os.environ.get("CHLOE_CLAUDE_HISTORY", "8"))
 FIRST_TOKEN_TIMEOUT = float(os.environ.get("CHLOE_CLAUDE_FIRST_TOKEN_TIMEOUT", "6"))
 
 MODELS = {
@@ -142,9 +143,47 @@ def _to_anthropic(messages: list):
                 out[-1]["content"] += "\n" + content
             else:
                 out.append({"role": role, "content": content})
+    keep = HISTORY_MSGS
+    if keep > 0 and len(out) > keep:
+        out = out[-keep:]
     while out and out[0]["role"] != "user":
         out.pop(0)
     return "\n\n".join(system_parts), out
+
+
+# ---- prompt caching -------------------------------------------------------
+# jarvis builds one big system string per turn: a stable base plus per-turn
+# blocks (time, recall...). Cache only the stable prefix: the longest common
+# prefix with the previous turn's system, rounded down and kept sticky so the
+# cache breakpoint lands on the same boundary every turn.
+_prev_system = ""
+_stable_len = 0
+_CACHE_ROUND = 1000
+_CACHE_MIN_CHARS = 4500   # ~1024 tokens, Sonnet's minimum cacheable prefix
+
+
+def _system_blocks(system: str):
+    global _prev_system, _stable_len
+    if os.environ.get("CHLOE_CLAUDE_CACHE", "1").strip().lower() in ("0", "false", "no", "off"):
+        return system
+    lcp = 0
+    n = min(len(system), len(_prev_system))
+    while lcp < n and system[lcp] == _prev_system[lcp]:
+        lcp += 1
+    _prev_system = system
+    cand = (lcp // _CACHE_ROUND) * _CACHE_ROUND
+    if _stable_len == 0:
+        _stable_len = cand
+    elif cand < _stable_len:
+        _stable_len = cand          # only shrink, so the boundary stays put
+    if _stable_len < _CACHE_MIN_CHARS or _stable_len >= len(system):
+        return system
+    head, tail = system[:_stable_len], system[_stable_len:]
+    _dbg(f"cache breakpoint at {_stable_len} of {len(system)} chars")
+    return [
+        {"type": "text", "text": head, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": tail},
+    ]
 
 
 async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) -> AsyncIterator[str]:
@@ -162,7 +201,7 @@ async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) ->
         cm = _get_client().messages.stream(
             model=MODELS[tier],
             max_tokens=min(max_tokens or MAX_TOKENS[tier], MAX_TOKENS[tier]),
-            system=system,
+            system=_system_blocks(system),
             messages=msgs,
         )
         async with cm as s:
@@ -179,6 +218,12 @@ async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) ->
             yield first
             async for t in it:
                 yield t
+            try:
+                u = (await s.get_final_message()).usage
+                _dbg(f"usage in={u.input_tokens} cache_read={getattr(u, 'cache_read_input_tokens', 0)} "
+                     f"cache_write={getattr(u, 'cache_creation_input_tokens', 0)} out={u.output_tokens}")
+            except Exception:
+                pass
         _dbg(f"stream complete in {time.time() - t0:.2f}s")
     except asyncio.CancelledError:
         raise
