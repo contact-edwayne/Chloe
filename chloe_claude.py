@@ -150,11 +150,15 @@ def _to_anthropic(messages: list):
 async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) -> AsyncIterator[str]:
     """Yield text deltas from Claude. Yields nothing (and never raises) if Claude
     is unreachable or slow to first token, so the caller can fall back to local."""
+    import time
     try:
         system, msgs = _to_anthropic(messages)
         if not msgs:
+            _dbg("stream: no user messages after conversion -> yielding nothing")
             return
         print(f"[claude] escalating -> {tier} ({MODELS[tier]})", flush=True)
+        _dbg(f"stream start tier={tier} model={MODELS[tier]} msgs={len(msgs)} system_chars={len(system)}")
+        t0 = time.time()
         cm = _get_client().messages.stream(
             model=MODELS[tier],
             max_tokens=min(max_tokens or MAX_TOKENS[tier], MAX_TOKENS[tier]),
@@ -165,13 +169,20 @@ async def stream(messages: list, tier: str, max_tokens: Optional[int] = None) ->
             it = s.text_stream.__aiter__()
             try:
                 first = await asyncio.wait_for(it.__anext__(), timeout=FIRST_TOKEN_TIMEOUT)
-            except (StopAsyncIteration, asyncio.TimeoutError):
+            except StopAsyncIteration:
+                _dbg("stream ended with no tokens")
                 return
+            except asyncio.TimeoutError:
+                _dbg(f"no first token within {FIRST_TOKEN_TIMEOUT}s -> falling back to local")
+                return
+            _dbg(f"first token after {time.time() - t0:.2f}s")
             yield first
             async for t in it:
                 yield t
+        _dbg(f"stream complete in {time.time() - t0:.2f}s")
     except asyncio.CancelledError:
         raise
     except Exception as e:  # network, auth, rate limit, etc.
         print(f"[claude] escalation failed: {type(e).__name__}: {e}", flush=True)
+        _dbg(f"FAILED {type(e).__name__}: {e}")
         return
