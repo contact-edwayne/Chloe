@@ -191,9 +191,13 @@ def revert(stash_arg: str | None) -> int:
         stash = runs[-1]
     m = json.loads((stash / "manifest.json").read_text(encoding="utf-8"))
     for rel in m["touched"]:
-        shutil.copy2(stash / "touched" / rel, WIKI / rel)
+        if (stash / "touched" / rel).exists():
+            shutil.copy2(stash / "touched" / rel, WIKI / rel)
     for d in m["moved"]:
         dest = WIKI / d
+        if not (stash / "dupes" / d).exists():
+            print(f"  already restored: {d}")
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(stash / "dupes" / d), str(dest))
     for slug in m["applied"]:
